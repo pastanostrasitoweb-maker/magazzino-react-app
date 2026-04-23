@@ -1,11 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Package,
   ClipboardList,
@@ -20,18 +13,23 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-const SHEETS_API_URL = "https://script.google.com/macros/s/AKfycbzMh4XDJmaIwEXfRbw015HRnXnbJJjcq7q2GIRIDhgOEorLENwG7eWsIUCIRVCHDorq/exec";
+const SHEETS_API_URL =
+  "https://script.google.com/macros/s/AKfycbzMh4XDJmaIwEXfRbw015HRnXnbJJjcq7q2GIRIDhgOEorLENwG7eWsIUCIRVCHDorq/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
-  { id: 1, code: "NFARMA 013", name: "Pici 250", uom: "pz" },
-  { id: 2, code: "NFARMA 007", name: "Tonnarelli 250", uom: "pz" },
+  { id: "1", code: "NFARMA 013", name: "Pici 250", uom: "pz" },
+  { id: "2", code: "NFARMA 007", name: "Tonnarelli 250", uom: "pz" },
 ];
 
 const fallbackLots = [
-  { id: 1, productId: 1, lot: "2604104", expiry: "2026-05-06", loadedQty: 34 },
-  { id: 2, productId: 2, lot: "2604108", expiry: "2026-05-08", loadedQty: 18 },
+  { id: "1", productId: "1", lot: "2604104", expiry: "2026-05-06", loadedQty: 34 },
+  { id: "2", productId: "2", lot: "2604108", expiry: "2026-05-08", loadedQty: 18 },
 ];
+
+function cx(...items) {
+  return items.filter(Boolean).join(" ");
+}
 
 function getField(row, keys) {
   for (const key of keys) {
@@ -47,13 +45,120 @@ function fmtDate(date) {
   return d.toLocaleDateString("it-IT");
 }
 
+function badgeStyle(kind = "outline") {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    borderRadius: 999,
+    padding: "6px 12px",
+    fontSize: 13,
+    fontWeight: 600,
+    border: kind === "outline" ? "1px solid #d8dee8" : "1px solid #dfeee3",
+    background: kind === "outline" ? "#fff" : "#effaf1",
+    color: "#243043",
+  };
+}
+
+function cardStyle(extra = {}) {
+  return {
+    background: "#fff",
+    border: "1px solid #e5e7eb",
+    borderRadius: 24,
+    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+    ...extra,
+  };
+}
+
+function btnStyle(variant = "primary", disabled = false) {
+  const base = {
+    height: 52,
+    borderRadius: 18,
+    border: "1px solid transparent",
+    padding: "0 18px",
+    fontSize: 16,
+    fontWeight: 700,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.5 : 1,
+  };
+
+  if (variant === "outline") {
+    return {
+      ...base,
+      background: "#fff",
+      color: "#14213d",
+      border: "1px solid #d7deea",
+    };
+  }
+
+  if (variant === "soft") {
+    return {
+      ...base,
+      background: "#e9eef6",
+      color: "#22304a",
+    };
+  }
+
+  if (variant === "success") {
+    return {
+      ...base,
+      background: "#187437",
+      color: "#fff",
+    };
+  }
+
+  return {
+    ...base,
+    background: "#07153a",
+    color: "#fff",
+  };
+}
+
+function inputStyle() {
+  return {
+    width: "100%",
+    height: 52,
+    borderRadius: 18,
+    border: "1px solid #d7deea",
+    padding: "0 14px",
+    fontSize: 16,
+    outline: "none",
+    background: "#fff",
+  };
+}
+
+function labelStyle() {
+  return {
+    display: "block",
+    fontSize: 15,
+    fontWeight: 700,
+    marginBottom: 8,
+    color: "#1f2937",
+  };
+}
+
 function normalizeProducts(rows) {
   return rows
     .map((row, index) => ({
-      id: String(getField(row, ["ID_Prodotto", "Id_Prodotto", "id", "Codice_Prodotto", "Codice prodotto"]) || `PROD-${index + 1}`),
+      id: String(
+        getField(row, [
+          "ID_Prodotto",
+          "Id_Prodotto",
+          "id",
+          "Codice_Prodotto",
+          "Codice prodotto",
+        ]) || `PROD-${index + 1}`
+      ),
       code: String(getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "code"])).trim(),
-      name: String(getField(row, ["Descrizione_Prodotto", "Descrizione prodotto", "Descrizione", "name"])).trim(),
-      uom: String(getField(row, ["UM", "U_M", "Unità_Misura", "Unità di misura", "uom"]) || "pz").trim(),
+      name: String(
+        getField(row, ["Descrizione_Prodotto", "Descrizione prodotto", "Descrizione", "name"])
+      ).trim(),
+      uom: String(
+        getField(row, ["UM", "U_M", "Unità_Misura", "Unità di misura", "uom"]) || "pz"
+      ).trim(),
     }))
     .filter((product) => product.code || product.name);
 }
@@ -63,7 +168,10 @@ function normalizeLots(rows, products) {
 
   return rows
     .map((row, index) => {
-      const productCode = String(getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "Prodotto"])).trim();
+      const productCode = String(
+        getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "Prodotto"])
+      ).trim();
+
       return {
         id: String(getField(row, ["ID_Lotto", "Id_Lotto", "id", "Lotto"]) || `LOT-${index + 1}`),
         productId: productByCode[productCode] || productCode,
@@ -100,7 +208,10 @@ function normalizeOrderLines(rows, products) {
 
   return rows
     .map((row, index) => {
-      const productCode = String(getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "Prodotto"])).trim();
+      const productCode = String(
+        getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "Prodotto"])
+      ).trim();
+
       return {
         lineId: String(getField(row, ["ID_Riga", "Id_Riga", "id"]) || `RIGA-${index + 1}`),
         orderId: String(getField(row, ["ID_Ordine", "Id_Ordine", "Ordine"])).trim(),
@@ -132,7 +243,9 @@ function normalizeAssignments(rows, lines, lots) {
     if (!lotId) return;
 
     const item = {
-      assignmentId: String(getField(row, ["ID_Assegnazione", "Id_Assegnazione", "id"]) || `ASS-${index + 1}`),
+      assignmentId: String(
+        getField(row, ["ID_Assegnazione", "Id_Assegnazione", "id"]) || `ASS-${index + 1}`
+      ),
       lotId,
       qty: Number(
         getField(row, [
@@ -158,7 +271,42 @@ function buildOrdersWithLines(orders, lines) {
   }));
 }
 
-export default function MiniAppMagazzinoLottiPasta() {
+function Modal({ open, title, children, onClose, maxWidth = 720 }) {
+  if (!open) return null;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+        zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          ...cardStyle(),
+          width: "100%",
+          maxWidth,
+          padding: 24,
+          maxHeight: "90vh",
+          overflow: "auto",
+        }}
+      >
+        <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 18 }}>{title}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
   const [page, setPage] = useState("ordini");
   const [orders, setOrders] = useState([]);
   const [lots, setLots] = useState([]);
@@ -180,6 +328,7 @@ export default function MiniAppMagazzinoLottiPasta() {
   const [lotDialogOpen, setLotDialogOpen] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
   const [editProductDialogOpen, setEditProductDialogOpen] = useState(false);
+
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState("");
   const [adminError, setAdminError] = useState("");
@@ -206,7 +355,7 @@ export default function MiniAppMagazzinoLottiPasta() {
     setLoadError("");
 
     try {
-      const response = await fetch(SHEETS_API_URL, { method: "GET" });
+      const response = await fetch(SHEETS_API_URL);
       if (!response.ok) throw new Error("Impossibile leggere il foglio Google");
       const raw = await response.json();
 
@@ -230,7 +379,9 @@ export default function MiniAppMagazzinoLottiPasta() {
       setSelectedOrderId(mergedOrders[0]?.id ?? "");
       setSelectedLineId(mergedOrders[0]?.lines?.[0]?.lineId ?? "");
     } catch (error) {
-      setLoadError("Non sono riuscito a leggere i dati dal Google Sheet. Per ora vedi una demo locale.");
+      setLoadError(
+        "Non sono riuscito a leggere i dati dal Google Sheet. Per ora vedi una demo locale."
+      );
       setProducts(fallbackProducts);
       setLots(fallbackLots);
       setOrders([]);
@@ -576,681 +727,630 @@ export default function MiniAppMagazzinoLottiPasta() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-6">
-      <div className="mx-auto max-w-7xl space-y-5">
-        <div className="flex flex-col gap-4 rounded-3xl bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-3xl font-semibold tracking-tight">MAGAZZINO 2.0</h1>
-            <p className="mt-1 text-sm text-slate-600">
-              Interfaccia semplificata per magazzino: pochi passaggi, bottoni grandi, dati chiari.
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-3 md:flex md:flex-wrap md:justify-end">
-            <Button
-              className={`h-14 rounded-2xl px-6 text-base ${
-                page === "ordini" ? "" : "bg-slate-200 text-slate-800 hover:bg-slate-300"
-              }`}
-              onClick={() => setPage("ordini")}
-            >
-              <ClipboardList className="mr-2 h-5 w-5" /> Ordini
-            </Button>
-            <Button
-              className={`h-14 rounded-2xl px-6 text-base ${
-                page === "prodotti" ? "" : "bg-slate-200 text-slate-800 hover:bg-slate-300"
-              }`}
-              onClick={() => setPage("prodotti")}
-            >
-              <Package className="mr-2 h-5 w-5" /> Prodotti
-            </Button>
-            <Button className="h-14 rounded-2xl px-6 text-base" onClick={() => setOrderDialogOpen(true)}>
-              <Plus className="mr-2 h-5 w-5" /> Nuovo ordine
-            </Button>
-            {isAdmin && (
-              <>
-                <Button className="h-14 rounded-2xl px-6 text-base" onClick={() => setProductDialogOpen(true)}>
-                  <Plus className="mr-2 h-5 w-5" /> Nuovo prodotto
-                </Button>
-                <Button className="h-14 rounded-2xl px-6 text-base" onClick={() => setLotDialogOpen(true)}>
-                  <Boxes className="mr-2 h-5 w-5" /> Carica lotto
-                </Button>
-              </>
-            )}
-            <Button className="h-14 rounded-2xl px-6 text-base" variant="outline" onClick={loadDataFromSheets}>
-              <RefreshCw className="mr-2 h-5 w-5" /> Aggiorna
-            </Button>
-            {!isAdmin ? (
-              <Button className="h-14 rounded-2xl px-6 text-base" variant="outline" onClick={() => setAdminDialogOpen(true)}>
-                <Lock className="mr-2 h-5 w-5" /> Admin
-              </Button>
-            ) : (
-              <Button className="h-14 rounded-2xl px-6 text-base" variant="outline" onClick={exitAdminMode}>
-                <Lock className="mr-2 h-5 w-5" /> Esci admin
-              </Button>
-            )}
+    <div style={{ minHeight: "100vh", background: "#f2f4f8", padding: 20, fontFamily: "Arial, sans-serif" }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+        <div style={{ ...cardStyle(), padding: 20, marginBottom: 20 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              justifyContent: "space-between",
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 32, fontWeight: 900, color: "#09122d" }}>MAGAZZINO 2.0</div>
+              <div style={{ marginTop: 8, color: "#617086", fontSize: 18 }}>
+                Interfaccia semplificata per magazzino: pochi passaggi, bottoni grandi, dati chiari.
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button style={btnStyle(page === "ordini" ? "primary" : "soft")} onClick={() => setPage("ordini")}>
+                <ClipboardList size={18} /> Ordini
+              </button>
+              <button style={btnStyle(page === "prodotti" ? "primary" : "soft")} onClick={() => setPage("prodotti")}>
+                <Package size={18} /> Prodotti
+              </button>
+              <button style={btnStyle("primary")} onClick={() => setOrderDialogOpen(true)}>
+                <Plus size={18} /> Nuovo ordine
+              </button>
+              {isAdmin && (
+                <>
+                  <button style={btnStyle("primary")} onClick={() => setProductDialogOpen(true)}>
+                    <Plus size={18} /> Nuovo prodotto
+                  </button>
+                  <button style={btnStyle("primary")} onClick={() => setLotDialogOpen(true)}>
+                    <Boxes size={18} /> Carica lotto
+                  </button>
+                </>
+              )}
+              <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
+                <RefreshCw size={18} /> Aggiorna
+              </button>
+              {!isAdmin ? (
+                <button style={btnStyle("outline")} onClick={() => setAdminDialogOpen(true)}>
+                  <Lock size={18} /> Admin
+                </button>
+              ) : (
+                <button style={btnStyle("outline")} onClick={exitAdminMode}>
+                  <Lock size={18} /> Esci admin
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
         {loadError ? (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <div style={{ ...cardStyle(), padding: 16, marginBottom: 16, background: "#fff8e6", color: "#8a5a00" }}>
             {loadError}
           </div>
         ) : null}
 
         {loadingData ? (
-          <div className="rounded-2xl border bg-white p-4 text-sm text-slate-500">
+          <div style={{ ...cardStyle(), padding: 16, marginBottom: 16, color: "#6b7280" }}>
             Caricamento dati dal Google Sheet...
           </div>
         ) : null}
 
         {page === "ordini" && (
-          <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
-            <Card className="rounded-3xl shadow-sm">
-              <CardHeader>
-                <div className="flex items-center justify-between gap-3">
-                  <CardTitle>Ordini</CardTitle>
-                  <Button className="rounded-2xl" onClick={() => setOrderDialogOpen(true)}>
-                    <Plus className="mr-2 h-4 w-4" /> Nuovo
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    value={orderSearch}
-                    onChange={(e) => setOrderSearch(e.target.value)}
-                    placeholder="Cerca ordine o cliente"
-                    className="h-12 rounded-2xl pl-9"
-                  />
-                </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "360px 1fr",
+              gap: 16,
+            }}
+          >
+            <div style={{ ...cardStyle(), padding: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+                <div style={{ fontSize: 20, fontWeight: 800 }}>Ordini</div>
+                <button style={btnStyle("primary")} onClick={() => setOrderDialogOpen(true)}>
+                  <Plus size={16} /> Nuovo
+                </button>
+              </div>
 
-                <div className="space-y-3">
-                  {filteredOrders.map((order) => (
-                    <button
-                      key={order.id}
-                      onClick={() => {
-                        setSelectedOrderId(order.id);
-                        setSelectedLineId(order.lines[0]?.lineId || "");
-                      }}
-                      className={`w-full rounded-3xl border p-4 text-left transition ${
+              <div style={{ position: "relative", marginBottom: 16 }}>
+                <Search size={16} style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }} />
+                <input
+                  style={{ ...inputStyle(), paddingLeft: 40 }}
+                  value={orderSearch}
+                  onChange={(e) => setOrderSearch(e.target.value)}
+                  placeholder="Cerca ordine o cliente"
+                />
+              </div>
+
+              <div style={{ display: "grid", gap: 12 }}>
+                {filteredOrders.map((order) => (
+                  <button
+                    key={order.id}
+                    onClick={() => {
+                      setSelectedOrderId(order.id);
+                      setSelectedLineId(order.lines[0]?.lineId || "");
+                    }}
+                    style={{
+                      textAlign: "left",
+                      padding: 18,
+                      borderRadius: 24,
+                      border:
                         selectedOrderId === order.id
-                          ? "border-slate-900 bg-slate-50"
-                          : "border-slate-200 bg-white hover:bg-slate-50"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-lg font-semibold">{order.id}</div>
-                          <div className="text-sm text-slate-600">{order.customer}</div>
-                        </div>
-                        <Badge variant={order.computedStatus === "Preparato" ? "secondary" : "outline"}>
-                          {order.computedStatus}
-                        </Badge>
+                          ? "2px solid #0f172a"
+                          : "1px solid #dbe2ea",
+                      background: selectedOrderId === order.id ? "#f8fafc" : "#fff",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 800 }}>{order.id}</div>
+                        <div style={{ color: "#66758b", marginTop: 4 }}>{order.customer}</div>
                       </div>
-                      <div className="mt-2 text-sm text-slate-500">
-                        Da assegnare: {order.totalToAssign}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="rounded-3xl shadow-sm">
-              <CardHeader>
-                <CardTitle>Preparazione ordine</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                {selectedOrder ? (
-                  <>
-                    <div className="rounded-3xl bg-slate-50 p-5">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-2xl font-semibold">{selectedOrder.id}</div>
-                          <div className="mt-1 text-sm text-slate-600">
-                            {selectedOrder.customer} · {fmtDate(selectedOrder.date)}
-                          </div>
-                        </div>
-                        <Button variant="outline" className="rounded-2xl" onClick={() => deleteOrder(selectedOrder.id)}>
-                          <Trash2 className="mr-2 h-4 w-4" /> Elimina ordine
-                        </Button>
-                      </div>
+                      <span style={badgeStyle("outline")}>{order.computedStatus}</span>
                     </div>
+                    <div style={{ marginTop: 14, color: "#66758b" }}>
+                      Da assegnare: {order.totalToAssign}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
 
-                    <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-                      <div className="space-y-4">
-                        {selectedOrder.lines.map((line) => {
-                          const product = productMap[String(line.productId)];
-                          const active = String(selectedLineId) === String(line.lineId);
+            <div style={{ ...cardStyle(), padding: 20 }}>
+              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 18 }}>Preparazione ordine</div>
 
-                          return (
-                            <button
-                              key={line.lineId}
-                              onClick={() => setSelectedLineId(line.lineId)}
-                              className={`w-full rounded-3xl border p-5 text-left transition ${
-                                active
-                                  ? "border-slate-900 bg-slate-50"
-                                  : "border-slate-200 bg-white hover:bg-slate-50"
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-4">
-                                <div>
-                                  <div className="text-base font-semibold">{product?.code}</div>
-                                  <div className="text-sm text-slate-700">{product?.name}</div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Badge variant={line.qtyToAssign === 0 ? "secondary" : "outline"}>
-                                    Da assegnare {line.qtyToAssign}
-                                  </Badge>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    className="rounded-2xl px-3"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      deleteLine(selectedOrder.id, line.lineId);
-                                    }}
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </div>
-                              <div className="mt-4 grid grid-cols-3 gap-3 text-center">
-                                <div className="rounded-2xl bg-slate-100 p-3">
-                                  <div className="text-xs text-slate-500">Ordinati</div>
-                                  <div className="text-xl font-semibold">{line.qtyOrdered}</div>
-                                </div>
-                                <div className="rounded-2xl bg-slate-100 p-3">
-                                  <div className="text-xs text-slate-500">Assegnati</div>
-                                  <div className="text-xl font-semibold">{line.assignedQty}</div>
-                                </div>
-                                <div className="rounded-2xl bg-slate-100 p-3">
-                                  <div className="text-xs text-slate-500">Da assegnare</div>
-                                  <div
-                                    className={`text-xl font-semibold ${
-                                      line.qtyToAssign > 0 ? "text-amber-700" : "text-emerald-700"
-                                    }`}
-                                  >
-                                    {line.qtyToAssign}
-                                  </div>
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })}
+              {selectedOrder ? (
+                <>
+                  <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 20, marginBottom: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontSize: 22, fontWeight: 900 }}>{selectedOrder.id}</div>
+                        <div style={{ marginTop: 6, color: "#66758b" }}>
+                          {selectedOrder.customer} · {fmtDate(selectedOrder.date)}
+                        </div>
                       </div>
+                      <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
+                        <Trash2 size={16} /> Elimina ordine
+                      </button>
+                    </div>
+                  </div>
 
-                      <div className="space-y-4">
-                        {selectedLine ? (
-                          <>
-                            <div className="rounded-3xl border bg-white p-5">
-                              <div className="text-lg font-semibold">
-                                {productMap[String(selectedLine.productId)]?.name}
+                  <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 16 }}>
+                    <div style={{ display: "grid", gap: 16 }}>
+                      {selectedOrder.lines.map((line) => {
+                        const product = productMap[String(line.productId)];
+                        const active = String(selectedLineId) === String(line.lineId);
+
+                        return (
+                          <button
+                            key={line.lineId}
+                            onClick={() => setSelectedLineId(line.lineId)}
+                            style={{
+                              textAlign: "left",
+                              padding: 20,
+                              borderRadius: 24,
+                              border: active ? "2px solid #0f172a" : "1px solid #dbe2ea",
+                              background: active ? "#f8fafc" : "#fff",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                              <div>
+                                <div style={{ fontSize: 18, fontWeight: 800 }}>{product?.code}</div>
+                                <div style={{ marginTop: 4, color: "#55657a" }}>{product?.name}</div>
                               </div>
-                              <div className="mt-1 text-sm text-slate-600">
-                                Codice {productMap[String(selectedLine.productId)]?.code}
-                              </div>
-                              <div className="mt-4 grid grid-cols-2 gap-3">
-                                <div className="rounded-2xl bg-slate-100 p-3">
-                                  <div className="text-xs text-slate-500">Da assegnare</div>
-                                  <div className="text-2xl font-semibold">{selectedLine.qtyToAssign}</div>
-                                </div>
-                                <div className="rounded-2xl bg-slate-100 p-3">
-                                  <div className="text-xs text-slate-500">Lotti disponibili</div>
-                                  <div className="text-2xl font-semibold">{availableLotsForSelectedLine.length}</div>
-                                </div>
-                              </div>
-                              <div className="mt-5 grid gap-3">
-                                <Button
-                                  className="h-16 rounded-3xl text-lg"
-                                  onClick={() => openAssignDialog(selectedLine.lineId)}
-                                  disabled={selectedLine.qtyToAssign <= 0}
+                              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                <span style={badgeStyle("outline")}>Da assegnare {line.qtyToAssign}</span>
+                                <span
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteLine(selectedOrder.id, line.lineId);
+                                  }}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: 40,
+                                    height: 40,
+                                    borderRadius: 14,
+                                    border: "1px solid #d8dee8",
+                                    background: "#fff",
+                                  }}
                                 >
-                                  Assegna lotto
-                                </Button>
+                                  <Trash2 size={16} />
+                                </span>
                               </div>
                             </div>
 
-                            <div className="rounded-3xl border bg-white p-5">
-                              <div className="mb-3 text-base font-semibold">Lotti assegnati</div>
-                              <div className="space-y-3">
-                                {(assignments[selectedLine.lineId] || []).length === 0 ? (
-                                  <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">
-                                    Nessun lotto assegnato.
-                                  </div>
-                                ) : (
-                                  (assignments[selectedLine.lineId] || []).map((assignment) => {
-                                    const lot = lots.find(
-                                      (item) => String(item.id) === String(assignment.lotId)
-                                    );
-                                    return (
-                                      <div key={assignment.assignmentId} className="rounded-2xl bg-slate-50 p-4">
-                                        <div className="flex items-start justify-between gap-3">
-                                          <div>
-                                            <div className="font-medium">Lotto {lot?.lot}</div>
-                                            <div className="text-sm text-slate-600">
-                                              Quantità {assignment.qty} · Scadenza {fmtDate(lot?.expiry)}
-                                            </div>
-                                          </div>
-                                          <Button
-                                            variant="ghost"
-                                            className="rounded-2xl px-3"
-                                            onClick={() =>
-                                              deleteAssignment(selectedLine.lineId, assignment.assignmentId)
-                                            }
-                                          >
-                                            <Trash2 className="h-4 w-4" />
-                                          </Button>
-                                        </div>
-                                      </div>
-                                    );
-                                  })
-                                )}
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 18 }}>
+                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>Ordinati</div>
+                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>{line.qtyOrdered}</div>
+                              </div>
+                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>Assegnati</div>
+                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>{line.assignedQty}</div>
+                              </div>
+                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>Da assegnare</div>
+                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6, color: line.qtyToAssign > 0 ? "#a16207" : "#166534" }}>
+                                  {line.qtyToAssign}
+                                </div>
                               </div>
                             </div>
-                          </>
-                        ) : (
-                          <div className="rounded-3xl border bg-white p-5 text-sm text-slate-500">
-                            Seleziona una riga.
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ display: "grid", gap: 16 }}>
+                      {selectedLine ? (
+                        <>
+                          <div style={{ ...cardStyle(), padding: 20 }}>
+                            <div style={{ fontSize: 18, fontWeight: 800 }}>
+                              {productMap[String(selectedLine.productId)]?.name}
+                            </div>
+                            <div style={{ marginTop: 6, color: "#66758b" }}>
+                              Codice {productMap[String(selectedLine.productId)]?.code}
+                            </div>
+
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 18 }}>
+                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>Da assegnare</div>
+                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>{selectedLine.qtyToAssign}</div>
+                              </div>
+                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>Lotti disponibili</div>
+                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>{availableLotsForSelectedLine.length}</div>
+                              </div>
+                            </div>
+
+                            <div style={{ marginTop: 18 }}>
+                              <button
+                                style={btnStyle("primary", selectedLine.qtyToAssign <= 0)}
+                                disabled={selectedLine.qtyToAssign <= 0}
+                                onClick={() => openAssignDialog(selectedLine.lineId)}
+                              >
+                                Assegna lotto
+                              </button>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    </div>
 
-                    <div className="flex justify-end">
-                      <Button className="h-16 rounded-3xl px-8 text-lg" onClick={markOrderPrepared}>
-                        <CheckCircle2 className="mr-2 h-5 w-5" /> Segna ordine preparato
-                      </Button>
+                          <div style={{ ...cardStyle(), padding: 20 }}>
+                            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>Lotti assegnati</div>
+                            <div style={{ display: "grid", gap: 12 }}>
+                              {(assignments[selectedLine.lineId] || []).length === 0 ? (
+                                <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16, color: "#66758b" }}>
+                                  Nessun lotto assegnato.
+                                </div>
+                              ) : (
+                                (assignments[selectedLine.lineId] || []).map((assignment) => {
+                                  const lot = lots.find((item) => String(item.id) === String(assignment.lotId));
+                                  return (
+                                    <div key={assignment.assignmentId} style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}>
+                                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                        <div>
+                                          <div style={{ fontWeight: 800 }}>Lotto {lot?.lot}</div>
+                                          <div style={{ marginTop: 6, color: "#66758b" }}>
+                                            Quantità {assignment.qty} · Scadenza {fmtDate(lot?.expiry)}
+                                          </div>
+                                        </div>
+                                        <button
+                                          style={btnStyle("outline")}
+                                          onClick={() => deleteAssignment(selectedLine.lineId, assignment.assignmentId)}
+                                        >
+                                          <Trash2 size={16} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div style={{ ...cardStyle(), padding: 20, color: "#66758b" }}>Seleziona una riga.</div>
+                      )}
                     </div>
-                  </>
-                ) : (
-                  <div className="text-sm text-slate-500">Seleziona un ordine.</div>
-                )}
-              </CardContent>
-            </Card>
+                  </div>
+
+                  <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+                    <button style={btnStyle("success")} onClick={markOrderPrepared}>
+                      <CheckCircle2 size={18} /> Segna ordine preparato
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div style={{ color: "#66758b" }}>Seleziona un ordine.</div>
+              )}
+            </div>
           </div>
         )}
 
         {page === "prodotti" && (
-          <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
-            <Card className="rounded-3xl shadow-sm xl:col-span-2">
-              <CardHeader>
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <CardTitle>Prodotti e disponibilità</CardTitle>
-                  {isAdmin && (
-                    <div className="flex gap-3">
-                      <Button className="rounded-2xl" onClick={() => setProductDialogOpen(true)}>
-                        <Plus className="mr-2 h-4 w-4" /> Nuovo prodotto
-                      </Button>
-                      <Button className="rounded-2xl" onClick={() => setLotDialogOpen(true)}>
-                        <Boxes className="mr-2 h-4 w-4" /> Carica lotto
-                      </Button>
+          <div style={{ ...cardStyle(), padding: 20 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "center",
+                flexWrap: "wrap",
+                marginBottom: 18,
+              }}
+            >
+              <div style={{ fontSize: 22, fontWeight: 800 }}>Prodotti e disponibilità</div>
+              {isAdmin && (
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button style={btnStyle("primary")} onClick={() => setProductDialogOpen(true)}>
+                    <Plus size={16} /> Nuovo prodotto
+                  </button>
+                  <button style={btnStyle("primary")} onClick={() => setLotDialogOpen(true)}>
+                    <Boxes size={16} /> Carica lotto
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div style={{ position: "relative", maxWidth: 520, marginBottom: 18 }}>
+              <Search size={16} style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }} />
+              <input
+                style={{ ...inputStyle(), paddingLeft: 40 }}
+                value={productSearch}
+                onChange={(e) => setProductSearch(e.target.value)}
+                placeholder="Cerca prodotto o codice"
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
+              {filteredProducts.map((product) => (
+                <div key={product.id} style={{ ...cardStyle(), padding: 20 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontSize: 18, fontWeight: 800 }}>{product.code}</div>
+                      <div style={{ marginTop: 4, color: "#55657a" }}>{product.name}</div>
                     </div>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="relative max-w-xl">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                    placeholder="Cerca prodotto o codice"
-                    className="h-12 rounded-2xl pl-9"
-                  />
-                </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={badgeStyle("outline")}>Disponibili {product.totalAvailable}</span>
+                      {isAdmin && (
+                        <button style={btnStyle("outline")} onClick={() => openEditProductDialog(product)}>
+                          <Pencil size={16} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
 
-                <div className="grid gap-4 lg:grid-cols-2">
-                  {filteredProducts.map((product) => (
-                    <Card key={product.id} className="rounded-3xl border shadow-none">
-                      <CardContent className="p-5">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-base font-semibold">{product.code}</div>
-                            <div className="text-sm text-slate-700">{product.name}</div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline">Disponibili {product.totalAvailable}</Badge>
-                            {isAdmin && (
-                              <Button
-                                variant="ghost"
-                                className="rounded-2xl px-3"
-                                onClick={() => openEditProductDialog(product)}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                            )}
-                          </div>
+                  <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+                    {product.productLots.length === 0 ? (
+                      <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 14, color: "#b45309" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <AlertTriangle size={16} /> Nessun lotto disponibile
                         </div>
-
-                        <div className="mt-4 space-y-3">
-                          {product.productLots.length === 0 ? (
-                            <div className="flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                              <AlertTriangle className="h-4 w-4" /> Nessun lotto disponibile
-                            </div>
-                          ) : (
-                            product.productLots
-                              .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
-                              .map((lot) => (
-                                <div key={lot.id} className="rounded-2xl bg-slate-50 p-4">
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                      <div className="font-medium">Lotto {lot.lot}</div>
-                                      <div className="text-sm text-slate-600">
-                                        Scadenza {fmtDate(lot.expiry)}
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <div
-                                        className={`text-lg font-semibold ${
-                                          lotsAvailableMap[String(lot.id)] <= 10
-                                            ? "text-red-600"
-                                            : "text-slate-900"
-                                        }`}
-                                      >
-                                        {lotsAvailableMap[String(lot.id)]}
-                                      </div>
-                                      <Button
-                                        variant="ghost"
-                                        className="rounded-2xl px-3"
-                                        onClick={() => deleteLot(lot.id)}
-                                        disabled={
-                                          lotsAvailableMap[String(lot.id)] !== lot.loadedQty
-                                        }
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </Button>
-                                    </div>
-                                  </div>
+                      </div>
+                    ) : (
+                      product.productLots
+                        .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
+                        .map((lot) => (
+                          <div key={lot.id} style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                              <div>
+                                <div style={{ fontWeight: 800 }}>Lotto {lot.lot}</div>
+                                <div style={{ marginTop: 6, color: "#66758b" }}>
+                                  Scadenza {fmtDate(lot.expiry)}
                                 </div>
-                              ))
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                              </div>
+                              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                <div style={{ fontSize: 20, fontWeight: 900, color: lotsAvailableMap[String(lot.id)] <= 10 ? "#dc2626" : "#0f172a" }}>
+                                  {lotsAvailableMap[String(lot.id)]}
+                                </div>
+                                <button
+                                  style={btnStyle("outline")}
+                                  onClick={() => deleteLot(lot.id)}
+                                  disabled={lotsAvailableMap[String(lot.id)] !== lot.loadedQty}
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                    )}
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
+              ))}
+            </div>
           </div>
         )}
 
-        <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
-          <DialogContent className="rounded-3xl sm:max-w-xl">
-            <DialogHeader>
-              <DialogTitle className="text-2xl">Assegna lotto</DialogTitle>
-            </DialogHeader>
-            {selectedLine && (
-              <div className="space-y-5">
-                <div className="rounded-3xl bg-slate-50 p-4">
-                  <div className="font-semibold">{productMap[String(selectedLine.productId)]?.name}</div>
-                  <div className="text-sm text-slate-600">Da assegnare: {selectedLine.qtyToAssign}</div>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-base">Lotto</Label>
-                  <Select value={selectedLotId} onValueChange={handleLotSelect}>
-                    <SelectTrigger className="h-14 rounded-2xl text-base">
-                      <SelectValue placeholder="Seleziona lotto" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableLotsForSelectedLine.map((lot) => (
-                        <SelectItem key={lot.id} value={String(lot.id)}>
-                          {lot.lot} · scad. {fmtDate(lot.expiry)} · disp. {lotsAvailableMap[String(lot.id)]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-base">Quantità</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    className="h-14 rounded-2xl text-lg"
-                    value={assignQty}
-                    onChange={(e) => setAssignQty(e.target.value)}
-                    placeholder="0"
-                  />
-                  <p className="text-sm text-slate-500">
-                    Quantità proposta in automatico, ma modificabile a mano.
-                  </p>
-                </div>
-                <Button className="h-16 w-full rounded-3xl text-lg" onClick={confirmAssignment}>
-                  Conferma lotto
-                </Button>
+        <Modal open={assignDialogOpen} title="Assegna lotto" onClose={() => setAssignDialogOpen(false)} maxWidth={560}>
+          {selectedLine && (
+            <div style={{ display: "grid", gap: 18 }}>
+              <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}>
+                <div style={{ fontWeight: 800 }}>{productMap[String(selectedLine.productId)]?.name}</div>
+                <div style={{ color: "#66758b", marginTop: 6 }}>Da assegnare: {selectedLine.qtyToAssign}</div>
               </div>
-            )}
-          </DialogContent>
-        </Dialog>
 
-        <Dialog open={orderDialogOpen} onOpenChange={setOrderDialogOpen}>
-          <DialogContent className="rounded-3xl sm:max-w-2xl">
-            <DialogHeader>
-              <DialogTitle className="text-2xl">Nuovo ordine</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-5">
-              <div className="space-y-2">
-                <Label className="text-base">Cliente</Label>
-                <Input
-                  className="h-14 rounded-2xl"
-                  value={newOrderCustomer}
-                  onChange={(e) => setNewOrderCustomer(e.target.value)}
-                  placeholder="Nome cliente"
-                />
+              <div>
+                <label style={labelStyle()}>Lotto</label>
+                <select style={inputStyle()} value={selectedLotId} onChange={(e) => handleLotSelect(e.target.value)}>
+                  <option value="">Seleziona lotto</option>
+                  {availableLotsForSelectedLine.map((lot) => (
+                    <option key={lot.id} value={String(lot.id)}>
+                      {lot.lot} · scad. {fmtDate(lot.expiry)} · disp. {lotsAvailableMap[String(lot.id)]}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div className="space-y-3">
-                <div className="text-base font-semibold">Righe ordine</div>
-                {newOrderLines.map((line, index) => (
-                  <div
-                    key={index}
-                    className="grid gap-3 rounded-2xl border p-4 md:grid-cols-[1fr_140px_110px]"
-                  >
-                    <Select
-                      value={line.productId}
-                      onValueChange={(value) => updateNewOrderLine(index, "productId", value)}
-                    >
-                      <SelectTrigger className="h-14 rounded-2xl text-base">
-                        <SelectValue placeholder="Seleziona prodotto" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {products.map((product) => (
-                          <SelectItem key={product.id} value={String(product.id)}>
-                            {product.code} · {product.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      type="number"
-                      min="1"
-                      className="h-14 rounded-2xl"
-                      value={line.qtyOrdered}
-                      onChange={(e) => updateNewOrderLine(index, "qtyOrdered", e.target.value)}
-                      placeholder="Quantità"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-14 rounded-2xl"
-                      onClick={() => removeNewOrderLine(index)}
-                    >
-                      Rimuovi
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-14 rounded-2xl"
-                  onClick={addEmptyOrderLine}
-                >
-                  <Plus className="mr-2 h-4 w-4" /> Aggiungi riga
-                </Button>
-              </div>
-              <Button className="h-16 w-full rounded-3xl text-lg" onClick={createOrder}>
-                Crea ordine
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
 
-        <Dialog open={adminDialogOpen} onOpenChange={setAdminDialogOpen}>
-          <DialogContent className="rounded-3xl sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle className="text-2xl">Accesso admin</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label className="text-base">PIN</Label>
-                <Input
-                  type="password"
-                  className="h-14 rounded-2xl"
-                  value={adminPinInput}
-                  onChange={(e) => setAdminPinInput(e.target.value)}
-                  placeholder="Inserisci PIN"
-                />
-              </div>
-              {adminError ? <div className="text-sm text-red-600">{adminError}</div> : null}
-              <Button className="h-16 w-full rounded-3xl text-lg" onClick={handleAdminAccess}>
-                Entra in admin
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={editProductDialogOpen} onOpenChange={setEditProductDialogOpen}>
-          <DialogContent className="rounded-3xl sm:max-w-xl">
-            <DialogHeader>
-              <DialogTitle className="text-2xl">Modifica prodotto</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-5">
-              <div className="space-y-2">
-                <Label className="text-base">Codice prodotto</Label>
-                <Input
-                  className="h-14 rounded-2xl"
-                  value={editProductCode}
-                  onChange={(e) => setEditProductCode(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-base">Descrizione</Label>
-                <Input
-                  className="h-14 rounded-2xl"
-                  value={editProductName}
-                  onChange={(e) => setEditProductName(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-base">Unità di misura</Label>
-                <Input
-                  className="h-14 rounded-2xl"
-                  value={editProductUom}
-                  onChange={(e) => setEditProductUom(e.target.value)}
-                />
-              </div>
-              <Button className="h-16 w-full rounded-3xl text-lg" onClick={saveEditedProduct}>
-                Salva modifiche
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={productDialogOpen} onOpenChange={setProductDialogOpen}>
-          <DialogContent className="rounded-3xl sm:max-w-xl">
-            <DialogHeader>
-              <DialogTitle className="text-2xl">Nuovo prodotto</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-5">
-              <div className="space-y-2">
-                <Label className="text-base">Codice prodotto</Label>
-                <Input
-                  className="h-14 rounded-2xl"
-                  value={newProductCode}
-                  onChange={(e) => setNewProductCode(e.target.value)}
-                  placeholder="Es. NFARMA 014"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-base">Descrizione</Label>
-                <Input
-                  className="h-14 rounded-2xl"
-                  value={newProductName}
-                  onChange={(e) => setNewProductName(e.target.value)}
-                  placeholder="Es. Mezzi paccheri 250"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-base">Unità di misura</Label>
-                <Input
-                  className="h-14 rounded-2xl"
-                  value={newProductUom}
-                  onChange={(e) => setNewProductUom(e.target.value)}
-                  placeholder="pz"
-                />
-              </div>
-              <Button className="h-16 w-full rounded-3xl text-lg" onClick={createProduct}>
-                Salva prodotto
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={lotDialogOpen} onOpenChange={setLotDialogOpen}>
-          <DialogContent className="rounded-3xl sm:max-w-xl">
-            <DialogHeader>
-              <DialogTitle className="text-2xl">Carica lotto</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-5">
-              <div className="space-y-2">
-                <Label className="text-base">Prodotto</Label>
-                <Select value={newLotProductId} onValueChange={setNewLotProductId}>
-                  <SelectTrigger className="h-14 rounded-2xl text-base">
-                    <SelectValue placeholder="Seleziona prodotto" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {products.map((product) => (
-                      <SelectItem key={product.id} value={String(product.id)}>
-                        {product.code} · {product.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-base">Codice lotto</Label>
-                <Input
-                  className="h-14 rounded-2xl"
-                  value={newLotCode}
-                  onChange={(e) => setNewLotCode(e.target.value)}
-                  placeholder="Es. 2604110"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-base">Scadenza</Label>
-                <Input
-                  type="date"
-                  className="h-14 rounded-2xl"
-                  value={newLotExpiry}
-                  onChange={(e) => setNewLotExpiry(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-base">Quantità caricata</Label>
-                <Input
+              <div>
+                <label style={labelStyle()}>Quantità</label>
+                <input
+                  style={inputStyle()}
                   type="number"
-                  min="1"
-                  className="h-14 rounded-2xl"
-                  value={newLotQty}
-                  onChange={(e) => setNewLotQty(e.target.value)}
+                  min="0"
+                  value={assignQty}
+                  onChange={(e) => setAssignQty(e.target.value)}
                   placeholder="0"
                 />
+                <div style={{ marginTop: 8, color: "#66758b", fontSize: 14 }}>
+                  Quantità proposta in automatico, ma modificabile a mano.
+                </div>
               </div>
-              <Button className="h-16 w-full rounded-3xl text-lg" onClick={createLot}>
-                Salva lotto
-              </Button>
+
+              <button style={btnStyle("primary")} onClick={confirmAssignment}>
+                Conferma lotto
+              </button>
             </div>
-          </DialogContent>
-        </Dialog>
+          )}
+        </Modal>
+
+        <Modal open={orderDialogOpen} title="Nuovo ordine" onClose={() => setOrderDialogOpen(false)} maxWidth={760}>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <label style={labelStyle()}>Cliente</label>
+              <input
+                style={inputStyle()}
+                value={newOrderCustomer}
+                onChange={(e) => setNewOrderCustomer(e.target.value)}
+                placeholder="Nome cliente"
+              />
+            </div>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>Righe ordine</div>
+
+              {newOrderLines.map((line, index) => (
+                <div
+                  key={index}
+                  style={{
+                    border: "1px solid #dbe2ea",
+                    borderRadius: 18,
+                    padding: 14,
+                    display: "grid",
+                    gridTemplateColumns: "1fr 140px 110px",
+                    gap: 12,
+                  }}
+                >
+                  <select
+                    style={inputStyle()}
+                    value={line.productId}
+                    onChange={(e) => updateNewOrderLine(index, "productId", e.target.value)}
+                  >
+                    <option value="">Seleziona prodotto</option>
+                    {products.map((product) => (
+                      <option key={product.id} value={String(product.id)}>
+                        {product.code} · {product.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <input
+                    style={inputStyle()}
+                    type="number"
+                    min="1"
+                    value={line.qtyOrdered}
+                    onChange={(e) => updateNewOrderLine(index, "qtyOrdered", e.target.value)}
+                    placeholder="Quantità"
+                  />
+
+                  <button style={btnStyle("outline")} onClick={() => removeNewOrderLine(index)}>
+                    Rimuovi
+                  </button>
+                </div>
+              ))}
+
+              <button style={btnStyle("outline")} onClick={addEmptyOrderLine}>
+                <Plus size={16} /> Aggiungi riga
+              </button>
+            </div>
+
+            <button style={btnStyle("primary")} onClick={createOrder}>
+              Crea ordine
+            </button>
+          </div>
+        </Modal>
+
+        <Modal open={adminDialogOpen} title="Accesso admin" onClose={() => setAdminDialogOpen(false)} maxWidth={420}>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <label style={labelStyle()}>PIN</label>
+              <input
+                style={inputStyle()}
+                type="password"
+                value={adminPinInput}
+                onChange={(e) => setAdminPinInput(e.target.value)}
+                placeholder="Inserisci PIN"
+              />
+            </div>
+            {adminError ? <div style={{ color: "#dc2626" }}>{adminError}</div> : null}
+            <button style={btnStyle("primary")} onClick={handleAdminAccess}>
+              Entra in admin
+            </button>
+          </div>
+        </Modal>
+
+        <Modal open={editProductDialogOpen} title="Modifica prodotto" onClose={() => setEditProductDialogOpen(false)} maxWidth={560}>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <label style={labelStyle()}>Codice prodotto</label>
+              <input style={inputStyle()} value={editProductCode} onChange={(e) => setEditProductCode(e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle()}>Descrizione</label>
+              <input style={inputStyle()} value={editProductName} onChange={(e) => setEditProductName(e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle()}>Unità di misura</label>
+              <input style={inputStyle()} value={editProductUom} onChange={(e) => setEditProductUom(e.target.value)} />
+            </div>
+            <button style={btnStyle("primary")} onClick={saveEditedProduct}>
+              Salva modifiche
+            </button>
+          </div>
+        </Modal>
+
+        <Modal open={productDialogOpen} title="Nuovo prodotto" onClose={() => setProductDialogOpen(false)} maxWidth={560}>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <label style={labelStyle()}>Codice prodotto</label>
+              <input
+                style={inputStyle()}
+                value={newProductCode}
+                onChange={(e) => setNewProductCode(e.target.value)}
+                placeholder="Es. NFARMA 014"
+              />
+            </div>
+            <div>
+              <label style={labelStyle()}>Descrizione</label>
+              <input
+                style={inputStyle()}
+                value={newProductName}
+                onChange={(e) => setNewProductName(e.target.value)}
+                placeholder="Es. Mezzi paccheri 250"
+              />
+            </div>
+            <div>
+              <label style={labelStyle()}>Unità di misura</label>
+              <input
+                style={inputStyle()}
+                value={newProductUom}
+                onChange={(e) => setNewProductUom(e.target.value)}
+                placeholder="pz"
+              />
+            </div>
+            <button style={btnStyle("primary")} onClick={createProduct}>
+              Salva prodotto
+            </button>
+          </div>
+        </Modal>
+
+        <Modal open={lotDialogOpen} title="Carica lotto" onClose={() => setLotDialogOpen(false)} maxWidth={560}>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <label style={labelStyle()}>Prodotto</label>
+              <select style={inputStyle()} value={newLotProductId} onChange={(e) => setNewLotProductId(e.target.value)}>
+                <option value="">Seleziona prodotto</option>
+                {products.map((product) => (
+                  <option key={product.id} value={String(product.id)}>
+                    {product.code} · {product.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle()}>Codice lotto</label>
+              <input
+                style={inputStyle()}
+                value={newLotCode}
+                onChange={(e) => setNewLotCode(e.target.value)}
+                placeholder="Es. 2604110"
+              />
+            </div>
+            <div>
+              <label style={labelStyle()}>Scadenza</label>
+              <input
+                style={inputStyle()}
+                type="date"
+                value={newLotExpiry}
+                onChange={(e) => setNewLotExpiry(e.target.value)}
+              />
+            </div>
+            <div>
+              <label style={labelStyle()}>Quantità caricata</label>
+              <input
+                style={inputStyle()}
+                type="number"
+                min="1"
+                value={newLotQty}
+                onChange={(e) => setNewLotQty(e.target.value)}
+                placeholder="0"
+              />
+            </div>
+            <button style={btnStyle("primary")} onClick={createLot}>
+              Salva lotto
+            </button>
+          </div>
+        </Modal>
       </div>
     </div>
   );
