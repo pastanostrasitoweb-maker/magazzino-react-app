@@ -163,17 +163,22 @@ function normalizeProducts(rows) {
 
 function normalizeLots(rows, products) {
   const productByCode = Object.fromEntries(products.map((p) => [String(p.code), p.id]));
+  const productById = Object.fromEntries(products.map((p) => [String(p.id), p.id]));
 
   return rows
     .map((row, index) => {
       const productCode = String(
         getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "Prodotto"])
       ).trim();
+      const productIdRaw = String(getField(row, ["ID_Prodotto", "Id_Prodotto", "ProductId"])).trim();
 
       return {
-        id: String(getField(row, ["ID_Lotto", "Id_Lotto", "id", "Lotto"]) || `LOT-${index + 1}`),
-        productId: productByCode[productCode] || productCode,
-        lot: String(getField(row, ["Lotto", "Codice_Lotto", "Codice lotto"])).trim(),
+        id: String(
+          getField(row, ["ID_Lotto", "Id_Lotto", "id", "Lotto", "Codice_Lotto", "Codice lotto"]) ||
+            `LOT-${index + 1}`
+        ),
+        productId: productByCode[productCode] || productById[productIdRaw] || productIdRaw,
+        lot: String(getField(row, ["Codice_Lotto", "Codice lotto", "Lotto"])).trim(),
         expiry: getField(row, ["Scadenza", "Data_Scadenza", "Data scadenza"]),
         loadedQty: Number(
           getField(row, [
@@ -203,17 +208,19 @@ function normalizeOrders(rows) {
 
 function normalizeOrderLines(rows, products) {
   const productByCode = Object.fromEntries(products.map((p) => [String(p.code), p.id]));
+  const productById = Object.fromEntries(products.map((p) => [String(p.id), p.id]));
 
   return rows
     .map((row, index) => {
       const productCode = String(
         getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "Prodotto"])
       ).trim();
+      const productIdRaw = String(getField(row, ["ID_Prodotto", "Id_Prodotto", "ProductId"])).trim();
 
       return {
         lineId: String(getField(row, ["ID_Riga", "Id_Riga", "id"]) || `RIGA-${index + 1}`),
         orderId: String(getField(row, ["ID_Ordine", "Id_Ordine", "Ordine"])).trim(),
-        productId: productByCode[productCode] || productCode,
+        productId: productByCode[productCode] || productById[productIdRaw] || productIdRaw,
         qtyOrdered: Number(
           getField(row, [
             "Quantità_Ordinata",
@@ -355,7 +362,6 @@ export default function App() {
     try {
       const raw = await new Promise((resolve, reject) => {
         const callbackName = `jsonpCallback_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-
         let script;
 
         const cleanup = () => {
@@ -571,80 +577,85 @@ export default function App() {
   const removeNewOrderLine = (index) => {
     setNewOrderLines((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
   };
-const createOrder = async () => {
-  const validLines = newOrderLines
-    .filter((line) => line.productId && Number(line.qtyOrdered) > 0)
-    .map((line, index) => {
-      const product = products.find((p) => String(p.id) === String(line.productId));
-      return {
-        lineId: `RIGA-${Date.now()}-${index}`,
-        productId: String(line.productId),
-        productCode: product?.code || "",
-        productName: product?.name || "",
-        qtyOrdered: Number(line.qtyOrdered),
-      };
-    });
 
-  if (!newOrderCustomer.trim() || validLines.length === 0) return;
-
-  const newOrder = {
-    id: `ORD-${Date.now()}`,
-    customer: newOrderCustomer.trim(),
-    status: "Da preparare",
-    date: new Date().toISOString().slice(0, 10),
-    lines: validLines,
-  };
-
-  try {
-    const response = await fetch(SHEETS_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        action: "createOrder",
-        payload: newOrder,
-      }),
-    });
-
-    const result = await response.json();
-
-    if (!result.success) {
-      alert("Errore nel salvataggio ordine sul foglio");
-      return;
-    }
-
-    setOrders((prev) => [newOrder, ...prev]);
-    setSelectedOrderId(newOrder.id);
-    setSelectedLineId(newOrder.lines[0]?.lineId || "");
-    setNewOrderCustomer("");
-    setNewOrderLines([{ productId: "", qtyOrdered: "" }]);
-    setOrderDialogOpen(false);
-    setPage("ordini");
-    loadDataFromSheets();
-  } catch (error) {
-    alert("Errore di collegamento con Google Sheet");
-  }
-};
-  
+  const createOrder = async () => {
+    const validLines = newOrderLines
+      .filter((line) => line.productId && Number(line.qtyOrdered) > 0)
+      .map((line, index) => {
+        const product = products.find((p) => String(p.id) === String(line.productId));
+        return {
+          lineId: `RIGA-${Date.now()}-${index}`,
+          productId: String(line.productId),
+          productCode: product?.code || "",
+          productName: product?.name || "",
+          qtyOrdered: Number(line.qtyOrdered),
+        };
+      });
 
     if (!newOrderCustomer.trim() || validLines.length === 0) return;
 
     const newOrder = {
-      id: `ORD-${String(orders.length + 1).padStart(4, "0")}`,
+      id: `ORD-${Date.now()}`,
       customer: newOrderCustomer.trim(),
       status: "Da preparare",
       date: new Date().toISOString().slice(0, 10),
       lines: validLines,
     };
 
-    setOrders((prev) => [newOrder, ...prev]);
-    setSelectedOrderId(newOrder.id);
-    setSelectedLineId(newOrder.lines[0]?.lineId || "");
-    setNewOrderCustomer("");
-    setNewOrderLines([{ productId: "", qtyOrdered: "" }]);
-    setOrderDialogOpen(false);
-    setPage("ordini");
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpSaveOrder_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        const payload = encodeURIComponent(
+          JSON.stringify({
+            id: newOrder.id,
+            customer: newOrder.customer,
+            status: newOrder.status,
+            date: newOrder.date,
+            lines: newOrder.lines,
+          })
+        );
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=createOrder&payload=${payload}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result.success) {
+        alert("Errore nel salvataggio ordine sul foglio");
+        return;
+      }
+
+      setOrders((prev) => [newOrder, ...prev]);
+      setSelectedOrderId(newOrder.id);
+      setSelectedLineId(newOrder.lines[0]?.lineId || "");
+      setNewOrderCustomer("");
+      setNewOrderLines([{ productId: "", qtyOrdered: "" }]);
+      setOrderDialogOpen(false);
+      setPage("ordini");
+      loadDataFromSheets();
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet");
+    }
   };
 
   const createProduct = () => {
