@@ -571,15 +571,62 @@ export default function App() {
   const removeNewOrderLine = (index) => {
     setNewOrderLines((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
   };
-
-  const createOrder = () => {
-    const validLines = newOrderLines
-      .filter((line) => line.productId && Number(line.qtyOrdered) > 0)
-      .map((line, index) => ({
+const createOrder = async () => {
+  const validLines = newOrderLines
+    .filter((line) => line.productId && Number(line.qtyOrdered) > 0)
+    .map((line, index) => {
+      const product = products.find((p) => String(p.id) === String(line.productId));
+      return {
         lineId: `RIGA-${Date.now()}-${index}`,
         productId: String(line.productId),
+        productCode: product?.code || "",
+        productName: product?.name || "",
         qtyOrdered: Number(line.qtyOrdered),
-      }));
+      };
+    });
+
+  if (!newOrderCustomer.trim() || validLines.length === 0) return;
+
+  const newOrder = {
+    id: `ORD-${Date.now()}`,
+    customer: newOrderCustomer.trim(),
+    status: "Da preparare",
+    date: new Date().toISOString().slice(0, 10),
+    lines: validLines,
+  };
+
+  try {
+    const response = await fetch(SHEETS_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "createOrder",
+        payload: newOrder,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      alert("Errore nel salvataggio ordine sul foglio");
+      return;
+    }
+
+    setOrders((prev) => [newOrder, ...prev]);
+    setSelectedOrderId(newOrder.id);
+    setSelectedLineId(newOrder.lines[0]?.lineId || "");
+    setNewOrderCustomer("");
+    setNewOrderLines([{ productId: "", qtyOrdered: "" }]);
+    setOrderDialogOpen(false);
+    setPage("ordini");
+    loadDataFromSheets();
+  } catch (error) {
+    alert("Errore di collegamento con Google Sheet");
+  }
+};
+  
 
     if (!newOrderCustomer.trim() || validLines.length === 0) return;
 
