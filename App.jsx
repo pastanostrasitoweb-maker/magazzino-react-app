@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbyIORMmDS3rio66ArQfEpgUUwnDT6wGBAdD_DF22ADtsoozjqXlxVIe1ZOhZBCodQni/exec";
+  "https://script.google.com/macros/s/AKfycbwJz9IYpuM9d1UjCd945ZYTMqnWL_Lsma_VE-jn5WZCXbvuvD4X3qd4NvffSPofv3iZ/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -1109,16 +1109,7 @@ export default function App() {
 
         {page === "prodotti" && (
           <div style={{ ...cardStyle(), padding: 20 }}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 12,
-                alignItems: "center",
-                flexWrap: "wrap",
-                marginBottom: 18,
-              }}
-            >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 18 }}>
               <div style={{ fontSize: 22, fontWeight: 800 }}>Prodotti e disponibilità</div>
               {isAdmin && (
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
