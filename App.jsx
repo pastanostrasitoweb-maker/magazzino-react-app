@@ -27,10 +27,6 @@ const fallbackLots = [
   { id: "2", productId: "2", lot: "2604108", expiry: "2026-05-08", loadedQty: 18 },
 ];
 
-function cx(...items) {
-  return items.filter(Boolean).join(" ");
-}
-
 function getField(row, keys) {
   for (const key of keys) {
     if (row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== "") return row[key];
@@ -43,20 +39,6 @@ function fmtDate(date) {
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return String(date);
   return d.toLocaleDateString("it-IT");
-}
-
-function badgeStyle(kind = "outline") {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    borderRadius: 999,
-    padding: "6px 12px",
-    fontSize: 13,
-    fontWeight: 600,
-    border: kind === "outline" ? "1px solid #d8dee8" : "1px solid #dfeee3",
-    background: kind === "outline" ? "#fff" : "#effaf1",
-    color: "#243043",
-  };
 }
 
 function cardStyle(extra = {}) {
@@ -83,6 +65,7 @@ function btnStyle(variant = "primary", disabled = false) {
     gap: 8,
     cursor: disabled ? "not-allowed" : "pointer",
     opacity: disabled ? 0.5 : 1,
+    whiteSpace: "nowrap",
   };
 
   if (variant === "outline") {
@@ -127,6 +110,7 @@ function inputStyle() {
     fontSize: 16,
     outline: "none",
     background: "#fff",
+    boxSizing: "border-box",
   };
 }
 
@@ -137,6 +121,20 @@ function labelStyle() {
     fontWeight: 700,
     marginBottom: 8,
     color: "#1f2937",
+  };
+}
+
+function badgeStyle(kind = "outline") {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    borderRadius: 999,
+    padding: "6px 12px",
+    fontSize: 13,
+    fontWeight: 600,
+    border: kind === "outline" ? "1px solid #d8dee8" : "1px solid #dfeee3",
+    background: kind === "outline" ? "#fff" : "#effaf1",
+    color: "#243043",
   };
 }
 
@@ -355,9 +353,31 @@ export default function App() {
     setLoadError("");
 
     try {
-      const response = await fetch(SHEETS_API_URL);
-      if (!response.ok) throw new Error("Impossibile leggere il foglio Google");
-      const raw = await response.json();
+      const raw = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpCallback_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        const script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Impossibile leggere il foglio Google"));
+        };
+
+        document.body.appendChild(script);
+      });
 
       const normalizedProducts = normalizeProducts(raw.prodotti || []);
       const safeProducts = normalizedProducts.length ? normalizedProducts : fallbackProducts;
@@ -727,7 +747,14 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f2f4f8", padding: 20, fontFamily: "Arial, sans-serif" }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#f2f4f8",
+        padding: 20,
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <div style={{ ...cardStyle(), padding: 20, marginBottom: 20 }}>
           <div
@@ -740,17 +767,25 @@ export default function App() {
             }}
           >
             <div>
-              <div style={{ fontSize: 32, fontWeight: 900, color: "#09122d" }}>MAGAZZINO 2.0</div>
+              <div style={{ fontSize: 32, fontWeight: 900, color: "#09122d" }}>
+                MAGAZZINO 2.0
+              </div>
               <div style={{ marginTop: 8, color: "#617086", fontSize: 18 }}>
                 Interfaccia semplificata per magazzino: pochi passaggi, bottoni grandi, dati chiari.
               </div>
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button style={btnStyle(page === "ordini" ? "primary" : "soft")} onClick={() => setPage("ordini")}>
+              <button
+                style={btnStyle(page === "ordini" ? "primary" : "soft")}
+                onClick={() => setPage("ordini")}
+              >
                 <ClipboardList size={18} /> Ordini
               </button>
-              <button style={btnStyle(page === "prodotti" ? "primary" : "soft")} onClick={() => setPage("prodotti")}>
+              <button
+                style={btnStyle(page === "prodotti" ? "primary" : "soft")}
+                onClick={() => setPage("prodotti")}
+              >
                 <Package size={18} /> Prodotti
               </button>
               <button style={btnStyle("primary")} onClick={() => setOrderDialogOpen(true)}>
@@ -783,7 +818,15 @@ export default function App() {
         </div>
 
         {loadError ? (
-          <div style={{ ...cardStyle(), padding: 16, marginBottom: 16, background: "#fff8e6", color: "#8a5a00" }}>
+          <div
+            style={{
+              ...cardStyle(),
+              padding: 16,
+              marginBottom: 16,
+              background: "#fff8e6",
+              color: "#8a5a00",
+            }}
+          >
             {loadError}
           </div>
         ) : null}
@@ -803,7 +846,14 @@ export default function App() {
             }}
           >
             <div style={{ ...cardStyle(), padding: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 18,
+                }}
+              >
                 <div style={{ fontSize: 20, fontWeight: 800 }}>Ordini</div>
                 <button style={btnStyle("primary")} onClick={() => setOrderDialogOpen(true)}>
                   <Plus size={16} /> Nuovo
@@ -811,7 +861,10 @@ export default function App() {
               </div>
 
               <div style={{ position: "relative", marginBottom: 16 }}>
-                <Search size={16} style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }} />
+                <Search
+                  size={16}
+                  style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+                />
                 <input
                   style={{ ...inputStyle(), paddingLeft: 40 }}
                   value={orderSearch}
@@ -856,19 +909,33 @@ export default function App() {
             </div>
 
             <div style={{ ...cardStyle(), padding: 20 }}>
-              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 18 }}>Preparazione ordine</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 18 }}>
+                Preparazione ordine
+              </div>
 
               {selectedOrder ? (
                 <>
-                  <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 20, marginBottom: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                  <div
+                    style={{ ...cardStyle({ background: "#f8fafc" }), padding: 20, marginBottom: 16 }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "flex-start",
+                      }}
+                    >
                       <div>
                         <div style={{ fontSize: 22, fontWeight: 900 }}>{selectedOrder.id}</div>
                         <div style={{ marginTop: 6, color: "#66758b" }}>
                           {selectedOrder.customer} · {fmtDate(selectedOrder.date)}
                         </div>
                       </div>
-                      <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
+                      <button
+                        style={btnStyle("outline")}
+                        onClick={() => deleteOrder(selectedOrder.id)}
+                      >
                         <Trash2 size={16} /> Elimina ordine
                       </button>
                     </div>
@@ -899,7 +966,9 @@ export default function App() {
                                 <div style={{ marginTop: 4, color: "#55657a" }}>{product?.name}</div>
                               </div>
                               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                <span style={badgeStyle("outline")}>Da assegnare {line.qtyToAssign}</span>
+                                <span style={badgeStyle("outline")}>
+                                  Da assegnare {line.qtyToAssign}
+                                </span>
                                 <span
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -921,18 +990,54 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 18 }}>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "repeat(3, 1fr)",
+                                gap: 12,
+                                marginTop: 18,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Ordinati</div>
-                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>{line.qtyOrdered}</div>
+                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>
+                                  {line.qtyOrdered}
+                                </div>
                               </div>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Assegnati</div>
-                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>{line.assignedQty}</div>
+                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>
+                                  {line.assignedQty}
+                                </div>
                               </div>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Da assegnare</div>
-                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6, color: line.qtyToAssign > 0 ? "#a16207" : "#166534" }}>
+                                <div
+                                  style={{
+                                    fontSize: 20,
+                                    fontWeight: 900,
+                                    marginTop: 6,
+                                    color: line.qtyToAssign > 0 ? "#a16207" : "#166534",
+                                  }}
+                                >
                                   {line.qtyToAssign}
                                 </div>
                               </div>
@@ -953,14 +1058,37 @@ export default function App() {
                               Codice {productMap[String(selectedLine.productId)]?.code}
                             </div>
 
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 18 }}>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "1fr 1fr",
+                                gap: 12,
+                                marginTop: 18,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Da assegnare</div>
-                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>{selectedLine.qtyToAssign}</div>
+                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>
+                                  {selectedLine.qtyToAssign}
+                                </div>
                               </div>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Lotti disponibili</div>
-                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>{availableLotsForSelectedLine.length}</div>
+                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>
+                                  {availableLotsForSelectedLine.length}
+                                </div>
                               </div>
                             </div>
 
@@ -976,18 +1104,37 @@ export default function App() {
                           </div>
 
                           <div style={{ ...cardStyle(), padding: 20 }}>
-                            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>Lotti assegnati</div>
+                            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>
+                              Lotti assegnati
+                            </div>
                             <div style={{ display: "grid", gap: 12 }}>
                               {(assignments[selectedLine.lineId] || []).length === 0 ? (
-                                <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16, color: "#66758b" }}>
+                                <div
+                                  style={{
+                                    ...cardStyle({ background: "#f8fafc" }),
+                                    padding: 16,
+                                    color: "#66758b",
+                                  }}
+                                >
                                   Nessun lotto assegnato.
                                 </div>
                               ) : (
                                 (assignments[selectedLine.lineId] || []).map((assignment) => {
-                                  const lot = lots.find((item) => String(item.id) === String(assignment.lotId));
+                                  const lot = lots.find(
+                                    (item) => String(item.id) === String(assignment.lotId)
+                                  );
                                   return (
-                                    <div key={assignment.assignmentId} style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}>
-                                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                    <div
+                                      key={assignment.assignmentId}
+                                      style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}
+                                    >
+                                      <div
+                                        style={{
+                                          display: "flex",
+                                          justifyContent: "space-between",
+                                          gap: 12,
+                                        }}
+                                      >
                                         <div>
                                           <div style={{ fontWeight: 800 }}>Lotto {lot?.lot}</div>
                                           <div style={{ marginTop: 6, color: "#66758b" }}>
@@ -996,7 +1143,12 @@ export default function App() {
                                         </div>
                                         <button
                                           style={btnStyle("outline")}
-                                          onClick={() => deleteAssignment(selectedLine.lineId, assignment.assignmentId)}
+                                          onClick={() =>
+                                            deleteAssignment(
+                                              selectedLine.lineId,
+                                              assignment.assignmentId
+                                            )
+                                          }
                                         >
                                           <Trash2 size={16} />
                                         </button>
@@ -1009,7 +1161,9 @@ export default function App() {
                           </div>
                         </>
                       ) : (
-                        <div style={{ ...cardStyle(), padding: 20, color: "#66758b" }}>Seleziona una riga.</div>
+                        <div style={{ ...cardStyle(), padding: 20, color: "#66758b" }}>
+                          Seleziona una riga.
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1053,7 +1207,10 @@ export default function App() {
             </div>
 
             <div style={{ position: "relative", maxWidth: 520, marginBottom: 18 }}>
-              <Search size={16} style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }} />
+              <Search
+                size={16}
+                style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+              />
               <input
                 style={{ ...inputStyle(), paddingLeft: 40 }}
                 value={productSearch}
@@ -1062,10 +1219,23 @@ export default function App() {
               />
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 16,
+              }}
+            >
               {filteredProducts.map((product) => (
                 <div key={product.id} style={{ ...cardStyle(), padding: 20 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      alignItems: "flex-start",
+                    }}
+                  >
                     <div>
                       <div style={{ fontSize: 18, fontWeight: 800 }}>{product.code}</div>
                       <div style={{ marginTop: 4, color: "#55657a" }}>{product.name}</div>
@@ -1073,7 +1243,10 @@ export default function App() {
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <span style={badgeStyle("outline")}>Disponibili {product.totalAvailable}</span>
                       {isAdmin && (
-                        <button style={btnStyle("outline")} onClick={() => openEditProductDialog(product)}>
+                        <button
+                          style={btnStyle("outline")}
+                          onClick={() => openEditProductDialog(product)}
+                        >
                           <Pencil size={16} />
                         </button>
                       )}
@@ -1082,7 +1255,13 @@ export default function App() {
 
                   <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
                     {product.productLots.length === 0 ? (
-                      <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 14, color: "#b45309" }}>
+                      <div
+                        style={{
+                          ...cardStyle({ background: "#fff7ed" }),
+                          padding: 14,
+                          color: "#b45309",
+                        }}
+                      >
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <AlertTriangle size={16} /> Nessun lotto disponibile
                         </div>
@@ -1100,7 +1279,14 @@ export default function App() {
                                 </div>
                               </div>
                               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                <div style={{ fontSize: 20, fontWeight: 900, color: lotsAvailableMap[String(lot.id)] <= 10 ? "#dc2626" : "#0f172a" }}>
+                                <div
+                                  style={{
+                                    fontSize: 20,
+                                    fontWeight: 900,
+                                    color:
+                                      lotsAvailableMap[String(lot.id)] <= 10 ? "#dc2626" : "#0f172a",
+                                  }}
+                                >
                                   {lotsAvailableMap[String(lot.id)]}
                                 </div>
                                 <button
@@ -1122,17 +1308,28 @@ export default function App() {
           </div>
         )}
 
-        <Modal open={assignDialogOpen} title="Assegna lotto" onClose={() => setAssignDialogOpen(false)} maxWidth={560}>
+        <Modal
+          open={assignDialogOpen}
+          title="Assegna lotto"
+          onClose={() => setAssignDialogOpen(false)}
+          maxWidth={560}
+        >
           {selectedLine && (
             <div style={{ display: "grid", gap: 18 }}>
               <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}>
                 <div style={{ fontWeight: 800 }}>{productMap[String(selectedLine.productId)]?.name}</div>
-                <div style={{ color: "#66758b", marginTop: 6 }}>Da assegnare: {selectedLine.qtyToAssign}</div>
+                <div style={{ color: "#66758b", marginTop: 6 }}>
+                  Da assegnare: {selectedLine.qtyToAssign}
+                </div>
               </div>
 
               <div>
                 <label style={labelStyle()}>Lotto</label>
-                <select style={inputStyle()} value={selectedLotId} onChange={(e) => handleLotSelect(e.target.value)}>
+                <select
+                  style={inputStyle()}
+                  value={selectedLotId}
+                  onChange={(e) => handleLotSelect(e.target.value)}
+                >
                   <option value="">Seleziona lotto</option>
                   {availableLotsForSelectedLine.map((lot) => (
                     <option key={lot.id} value={String(lot.id)}>
@@ -1164,7 +1361,12 @@ export default function App() {
           )}
         </Modal>
 
-        <Modal open={orderDialogOpen} title="Nuovo ordine" onClose={() => setOrderDialogOpen(false)} maxWidth={760}>
+        <Modal
+          open={orderDialogOpen}
+          title="Nuovo ordine"
+          onClose={() => setOrderDialogOpen(false)}
+          maxWidth={760}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>Cliente</label>
@@ -1230,7 +1432,12 @@ export default function App() {
           </div>
         </Modal>
 
-        <Modal open={adminDialogOpen} title="Accesso admin" onClose={() => setAdminDialogOpen(false)} maxWidth={420}>
+        <Modal
+          open={adminDialogOpen}
+          title="Accesso admin"
+          onClose={() => setAdminDialogOpen(false)}
+          maxWidth={420}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>PIN</label>
@@ -1249,19 +1456,36 @@ export default function App() {
           </div>
         </Modal>
 
-        <Modal open={editProductDialogOpen} title="Modifica prodotto" onClose={() => setEditProductDialogOpen(false)} maxWidth={560}>
+        <Modal
+          open={editProductDialogOpen}
+          title="Modifica prodotto"
+          onClose={() => setEditProductDialogOpen(false)}
+          maxWidth={560}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>Codice prodotto</label>
-              <input style={inputStyle()} value={editProductCode} onChange={(e) => setEditProductCode(e.target.value)} />
+              <input
+                style={inputStyle()}
+                value={editProductCode}
+                onChange={(e) => setEditProductCode(e.target.value)}
+              />
             </div>
             <div>
               <label style={labelStyle()}>Descrizione</label>
-              <input style={inputStyle()} value={editProductName} onChange={(e) => setEditProductName(e.target.value)} />
+              <input
+                style={inputStyle()}
+                value={editProductName}
+                onChange={(e) => setEditProductName(e.target.value)}
+              />
             </div>
             <div>
               <label style={labelStyle()}>Unità di misura</label>
-              <input style={inputStyle()} value={editProductUom} onChange={(e) => setEditProductUom(e.target.value)} />
+              <input
+                style={inputStyle()}
+                value={editProductUom}
+                onChange={(e) => setEditProductUom(e.target.value)}
+              />
             </div>
             <button style={btnStyle("primary")} onClick={saveEditedProduct}>
               Salva modifiche
@@ -1269,7 +1493,12 @@ export default function App() {
           </div>
         </Modal>
 
-        <Modal open={productDialogOpen} title="Nuovo prodotto" onClose={() => setProductDialogOpen(false)} maxWidth={560}>
+        <Modal
+          open={productDialogOpen}
+          title="Nuovo prodotto"
+          onClose={() => setProductDialogOpen(false)}
+          maxWidth={560}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>Codice prodotto</label>
@@ -1304,11 +1533,20 @@ export default function App() {
           </div>
         </Modal>
 
-        <Modal open={lotDialogOpen} title="Carica lotto" onClose={() => setLotDialogOpen(false)} maxWidth={560}>
+        <Modal
+          open={lotDialogOpen}
+          title="Carica lotto"
+          onClose={() => setLotDialogOpen(false)}
+          maxWidth={560}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>Prodotto</label>
-              <select style={inputStyle()} value={newLotProductId} onChange={(e) => setNewLotProductId(e.target.value)}>
+              <select
+                style={inputStyle()}
+                value={newLotProductId}
+                onChange={(e) => setNewLotProductId(e.target.value)}
+              >
                 <option value="">Seleziona prodotto</option>
                 {products.map((product) => (
                   <option key={product.id} value={String(product.id)}>
