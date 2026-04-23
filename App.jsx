@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbzMh4XDJmaIwEXfRbw015HRnXnbJJjcq7q2GIRIDhgOEorLENwG7eWsIUCIRVCHDorq/exec";
+  "https://script.google.com/macros/s/AKfycbyIORMmDS3rio66ArQfEpgUUwnDT6wGBAdD_DF22ADtsoozjqXlxVIe1ZOhZBCodQni/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -356,11 +356,13 @@ export default function App() {
       const raw = await new Promise((resolve, reject) => {
         const callbackName = `jsonpCallback_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
 
+        let script;
+
         const cleanup = () => {
           try {
             delete window[callbackName];
           } catch {}
-          if (script.parentNode) script.parentNode.removeChild(script);
+          if (script && script.parentNode) script.parentNode.removeChild(script);
         };
 
         window[callbackName] = (data) => {
@@ -368,7 +370,7 @@ export default function App() {
           resolve(data);
         };
 
-        const script = document.createElement("script");
+        script = document.createElement("script");
         script.src = `${SHEETS_API_URL}?callback=${callbackName}`;
         script.async = true;
         script.onerror = () => {
