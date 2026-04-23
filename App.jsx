@@ -641,7 +641,10 @@ export default function App() {
       });
 
       if (!result.success) {
-        alert("Errore nel salvataggio ordine sul foglio");
+        alert(
+          "Errore nel salvataggio ordine sul foglio: " +
+            (result.error || "errore sconosciuto")
+        );
         return;
       }
 
