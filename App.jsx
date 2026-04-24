@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbxrjx36pYIYyNPBA-vKgL_UwqO12tN5QyPxssotJcTdw8kjYEeAz8gNXQ6piSrynXYq/exec";
+  "https://script.google.com/macros/s/AKfycbxLibHwdCUxVsN6swAAYyol48NeCOOaVJ30tlBHRMN1oWlehvcSpZ6xABbhI2r_BNYs/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -475,8 +475,12 @@ export default function App() {
 
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
       const totalOrdered = lines.reduce((sum, line) => sum + line.qtyOrdered, 0);
+
+      const explicitStatus = String(order.status || "");
       const computedStatus =
-        totalToAssign === 0
+        explicitStatus === "Preparato"
+          ? "Preparato"
+          : totalToAssign === 0
           ? "Preparato"
           : totalToAssign < totalOrdered
           ? "Parziale"
@@ -640,15 +644,60 @@ export default function App() {
     }
   };
 
-  const markOrderPrepared = () => {
+  const markOrderPrepared = async () => {
     if (!selectedOrder) return;
-    setOrders((prev) =>
-      prev.map((order) =>
-        String(order.id) === String(selectedOrder.id)
-          ? { ...order, status: "Preparato" }
-          : order
-      )
-    );
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpPrepared_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=markOrderPrepared&orderId=${encodeURIComponent(
+          selectedOrder.id
+        )}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nel salvataggio stato ordine sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.id) === String(selectedOrder.id)
+            ? { ...order, status: "Preparato" }
+            : order
+        )
+      );
+
+      loadDataFromSheets();
+      alert("Ordine segnato come preparato");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
   };
 
   const addEmptyOrderLine = () => {
