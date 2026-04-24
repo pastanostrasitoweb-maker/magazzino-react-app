@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbxLibHwdCUxVsN6swAAYyol48NeCOOaVJ30tlBHRMN1oWlehvcSpZ6xABbhI2r_BNYs/exec";
+  "https://script.google.com/macros/s/AKfycbxyR1sVEPMHV0FqkwQNZoozGJhbpUvtxa7rQf_2Hb3l3BQfYfwOl-0oUImppIIfWwH0/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -251,7 +251,9 @@ function normalizeAssignments(rows, lines, lots) {
     const lineId = String(getField(row, ["ID_Riga", "Id_Riga", "Riga"])).trim();
     if (!lineIds.has(lineId)) return;
 
-    const lotCode = String(getField(row, ["Lotto", "Codice_Lotto", "Codice lotto", "ID_Lotto"])).trim();
+    const lotCode = String(
+      getField(row, ["Lotto", "Codice_Lotto", "Codice lotto", "ID_Lotto"])
+    ).trim();
     const lotId = lotByCode[lotCode] || lotCode;
     if (!lotId) return;
 
