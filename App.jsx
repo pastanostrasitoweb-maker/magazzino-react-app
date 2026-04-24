@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbx9K0LHXV4rR6QUyp-_84gMMUiMjLjPwwpEgneqI9U7Y4oWwi8GEBGc8goxiVmVWoBi/exec";
+  "https://script.google.com/macros/s/AKfycbwPiiwgMXpF44wZV8pE0n2Yl1982JSdrCtw8kAyBF78OGk1BshIutzxLHuEdV1waUUO/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -1201,12 +1201,79 @@ export default function App() {
     }));
   };
 
-  const deleteLot = (lotId) => {
+  const deleteLot = async (lotId) => {
+    if (!lotId) return;
+
+    const lotToDelete = lots.find((lot) => String(lot.id) === String(lotId));
+    const lotCodeToDelete = lotToDelete?.lot || lotId;
+
     const isUsed = Object.values(assignments)
       .flat()
-      .some((assignment) => String(assignment.lotId) === String(lotId));
-    if (isUsed) return;
-    setLots((prev) => prev.filter((lot) => String(lot.id) !== String(lotId)));
+      .some(
+        (assignment) =>
+          String(assignment.lotId) === String(lotId) ||
+          String(assignment.lotId) === String(lotCodeToDelete)
+      );
+
+    if (isUsed) {
+      alert("Impossibile eliminare questo lotto perché è già assegnato a un ordine.");
+      return;
+    }
+
+    const conferma = window.confirm(
+      `Vuoi eliminare davvero il lotto ${lotCodeToDelete} dal Google Sheet?`
+    );
+
+    if (!conferma) return;
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpDeleteLot_${Date.now()}_${Math.floor(
+          Math.random() * 10000
+        )}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=deleteLot&lotId=${encodeURIComponent(
+          lotCodeToDelete
+        )}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nell'eliminazione lotto sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setLots((prev) => prev.filter((lot) => String(lot.id) !== String(lotId)));
+
+      await loadDataFromSheets();
+
+      alert("Lotto eliminato correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
   };
 
   return (
