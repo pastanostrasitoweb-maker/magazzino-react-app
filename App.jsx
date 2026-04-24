@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwPiiwgMXpF44wZV8pE0n2Yl1982JSdrCtw8kAyBF78OGk1BshIutzxLHuEdV1waUUO/exec";
+  "https://script.google.com/macros/s/AKfycbz1hFmaFOuMshwTe3X9VbaGx_6griROR-VRHXmHYFD7SqbEsKu5Yw7PgR9DSNskJx13/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -1192,13 +1192,65 @@ export default function App() {
     );
   };
 
-  const deleteAssignment = (lineId, assignmentId) => {
-    setAssignments((prev) => ({
-      ...prev,
-      [lineId]: (prev[lineId] || []).filter(
-        (assignment) => String(assignment.assignmentId) !== String(assignmentId)
-      ),
-    }));
+  const deleteAssignment = async (lineId, assignmentId) => {
+    if (!lineId || !assignmentId) return;
+
+    const conferma = window.confirm("Vuoi eliminare questa assegnazione lotto?");
+    if (!conferma) return;
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpDeleteAssignment_${Date.now()}_${Math.floor(
+          Math.random() * 10000
+        )}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=deleteAssignment&assignmentId=${encodeURIComponent(
+          assignmentId
+        )}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nell'eliminazione assegnazione sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setAssignments((prev) => ({
+        ...prev,
+        [lineId]: (prev[lineId] || []).filter(
+          (assignment) => String(assignment.assignmentId) !== String(assignmentId)
+        ),
+      }));
+
+      await loadDataFromSheets();
+
+      alert("Assegnazione eliminata correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
   };
 
   const deleteLot = async (lotId) => {
