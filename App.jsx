@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbz1hFmaFOuMshwTe3X9VbaGx_6griROR-VRHXmHYFD7SqbEsKu5Yw7PgR9DSNskJx13/exec";
+  "https://script.google.com/macros/s/AKfycbzdhuEq5EXZ9GkBvx6Sox4vq5sAxjwYzzIEBimDwInqaZlPWVEPUQC-z0cTJ1NnbCA-/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -1164,32 +1164,87 @@ export default function App() {
     setAdminDialogOpen(false);
   };
 
-  const deleteLine = (orderId, lineId) => {
-    setAssignments((prev) => {
-      const next = { ...prev };
-      delete next[lineId];
-      return next;
-    });
+  const deleteLine = async (orderId, lineId) => {
+    if (!orderId || !lineId) return;
 
-    const updatedOrders = orders
-      .map((order) =>
-        String(order.id) === String(orderId)
-          ? {
-              ...order,
-              lines: (order.lines || []).filter(
-                (line) => String(line.lineId) !== String(lineId)
-              ),
-            }
-          : order
-      )
-      .filter((order) => (order.lines || []).length > 0);
-
-    setOrders(updatedOrders);
-    const sameOrder = updatedOrders.find((order) => String(order.id) === String(orderId));
-    setSelectedOrderId(sameOrder?.id ?? updatedOrders[0]?.id ?? "");
-    setSelectedLineId(
-      sameOrder?.lines?.[0]?.lineId ?? updatedOrders[0]?.lines?.[0]?.lineId ?? ""
+    const conferma = window.confirm(
+      "Vuoi eliminare davvero questa riga ordine? Verranno eliminate anche eventuali assegnazioni collegate."
     );
+    if (!conferma) return;
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpDeleteLine_${Date.now()}_${Math.floor(
+          Math.random() * 10000
+        )}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=deleteLine&lineId=${encodeURIComponent(
+          lineId
+        )}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nell'eliminazione riga ordine sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setAssignments((prev) => {
+        const next = { ...prev };
+        delete next[lineId];
+        return next;
+      });
+
+      const updatedOrders = orders
+        .map((order) =>
+          String(order.id) === String(orderId)
+            ? {
+                ...order,
+                lines: (order.lines || []).filter(
+                  (line) => String(line.lineId) !== String(lineId)
+                ),
+              }
+            : order
+        )
+        .filter((order) => (order.lines || []).length > 0);
+
+      setOrders(updatedOrders);
+
+      const sameOrder = updatedOrders.find((order) => String(order.id) === String(orderId));
+      setSelectedOrderId(sameOrder?.id ?? updatedOrders[0]?.id ?? "");
+      setSelectedLineId(
+        sameOrder?.lines?.[0]?.lineId ?? updatedOrders[0]?.lines?.[0]?.lineId ?? ""
+      );
+
+      await loadDataFromSheets();
+
+      alert("Riga ordine eliminata correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
   };
 
   const deleteAssignment = async (lineId, assignmentId) => {
