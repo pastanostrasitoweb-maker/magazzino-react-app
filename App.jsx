@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwVvg3440VxUSVRhUiyMwyIqY-GXQUvjPdx1rZoEFQ3Kh0--cAeeCLFTlQaH-x5f9TK/exec";
+  "https://script.google.com/macros/s/AKfycbx9K0LHXV4rR6QUyp-_84gMMUiMjLjPwwpEgneqI9U7Y4oWwi8GEBGc8goxiVmVWoBi/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -355,6 +355,7 @@ export default function App() {
   const [newProductCode, setNewProductCode] = useState("");
   const [newProductName, setNewProductName] = useState("");
   const [newProductUom, setNewProductUom] = useState("pz");
+  const [savingNewProduct, setSavingNewProduct] = useState(false);
 
   const [newLotProductId, setNewLotProductId] = useState("");
   const [newLotCode, setNewLotCode] = useState("");
@@ -956,22 +957,95 @@ export default function App() {
     }
   };
 
-  const createProduct = () => {
-    if (!newProductCode.trim() || !newProductName.trim()) return;
+  const createProduct = async () => {
+    if (!newProductCode.trim()) {
+      alert("Inserisci il codice prodotto");
+      return;
+    }
+
+    if (!newProductName.trim()) {
+      alert("Inserisci la descrizione prodotto");
+      return;
+    }
+
     const newProduct = {
-      id: `PROD-${Date.now()}`,
+      id: newProductCode.trim(),
+      productId: newProductCode.trim(),
       code: newProductCode.trim(),
+      Codice_Prodotto: newProductCode.trim(),
       name: newProductName.trim(),
-      uom: newProductUom || "pz",
+      productName: newProductName.trim(),
+      Descrizione_Prodotto: newProductName.trim(),
+      uom: newProductUom.trim() || "pz",
+      UM: newProductUom.trim() || "pz",
     };
 
-    setProducts((prev) => [newProduct, ...prev]);
-    setNewProductCode("");
-    setNewProductName("");
-    setNewProductUom("pz");
-    setProductDialogOpen(false);
-    setPage("prodotti");
-    alert("Prodotto creato solo in app. Il salvataggio nuovo prodotto su Google Sheet lo aggiungiamo dopo.");
+    setSavingNewProduct(true);
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpCreateProduct_${Date.now()}_${Math.floor(
+          Math.random() * 10000
+        )}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        const payload = encodeURIComponent(JSON.stringify(newProduct));
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=createProduct&payload=${payload}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nel salvataggio prodotto sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setProducts((prev) => [
+        {
+          id: newProduct.code,
+          code: newProduct.code,
+          name: newProduct.name,
+          uom: newProduct.uom,
+        },
+        ...prev,
+      ]);
+
+      setNewProductCode("");
+      setNewProductName("");
+      setNewProductUom("pz");
+      setProductDialogOpen(false);
+      setPage("prodotti");
+
+      await loadDataFromSheets();
+
+      alert("Prodotto creato correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingNewProduct(false);
+    }
   };
 
   const openEditProductDialog = (product) => {
@@ -1711,8 +1785,12 @@ export default function App() {
                 placeholder="pz"
               />
             </div>
-            <button style={btnStyle("primary")} onClick={createProduct}>
-              Salva prodotto
+            <button
+              style={btnStyle("primary", savingNewProduct)}
+              disabled={savingNewProduct}
+              onClick={createProduct}
+            >
+              {savingNewProduct ? "Salvataggio..." : "Salva prodotto"}
             </button>
           </div>
         </Modal>
