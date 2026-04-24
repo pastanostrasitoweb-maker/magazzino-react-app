@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbxyR1sVEPMHV0FqkwQNZoozGJhbpUvtxa7rQf_2Hb3l3BQfYfwOl-0oUImppIIfWwH0/exec";
+  "https://script.google.com/macros/s/AKfycbwVvg3440VxUSVRhUiyMwyIqY-GXQUvjPdx1rZoEFQ3Kh0--cAeeCLFTlQaH-x5f9TK/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -365,6 +365,7 @@ export default function App() {
   const [editProductCode, setEditProductCode] = useState("");
   const [editProductName, setEditProductName] = useState("");
   const [editProductUom, setEditProductUom] = useState("pz");
+  const [savingProduct, setSavingProduct] = useState(false);
 
   const loadDataFromSheets = async () => {
     setLoadingData(true);
@@ -970,6 +971,7 @@ export default function App() {
     setNewProductUom("pz");
     setProductDialogOpen(false);
     setPage("prodotti");
+    alert("Prodotto creato solo in app. Il salvataggio nuovo prodotto su Google Sheet lo aggiungiamo dopo.");
   };
 
   const openEditProductDialog = (product) => {
@@ -981,26 +983,93 @@ export default function App() {
     setEditProductDialogOpen(true);
   };
 
-  const saveEditedProduct = () => {
-    if (!editingProductId || !editProductCode.trim() || !editProductName.trim()) return;
-    setProducts((prev) =>
-      prev.map((product) =>
-        String(product.id) === String(editingProductId)
-          ? {
-              ...product,
-              code: editProductCode.trim(),
-              name: editProductName.trim(),
-              uom: editProductUom.trim() || "pz",
-            }
-          : product
-      )
-    );
+  const saveEditedProduct = async () => {
+    if (!editingProductId || !editProductCode.trim() || !editProductName.trim()) {
+      alert("Compila codice prodotto e descrizione");
+      return;
+    }
 
-    setEditProductDialogOpen(false);
-    setEditingProductId(null);
-    setEditProductCode("");
-    setEditProductName("");
-    setEditProductUom("pz");
+    const payload = {
+      productId: String(editingProductId),
+      id: String(editingProductId),
+      code: editProductCode.trim(),
+      Codice_Prodotto: editProductCode.trim(),
+      name: editProductName.trim(),
+      productName: editProductName.trim(),
+      Descrizione_Prodotto: editProductName.trim(),
+      uom: editProductUom.trim() || "pz",
+      UM: editProductUom.trim() || "pz",
+    };
+
+    setSavingProduct(true);
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpUpdateProduct_${Date.now()}_${Math.floor(
+          Math.random() * 10000
+        )}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        const encodedPayload = encodeURIComponent(JSON.stringify(payload));
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=updateProduct&payload=${encodedPayload}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nel salvataggio prodotto sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setProducts((prev) =>
+        prev.map((product) =>
+          String(product.id) === String(editingProductId)
+            ? {
+                ...product,
+                code: editProductCode.trim(),
+                name: editProductName.trim(),
+                uom: editProductUom.trim() || "pz",
+              }
+            : product
+        )
+      );
+
+      setEditProductDialogOpen(false);
+      setEditingProductId(null);
+      setEditProductCode("");
+      setEditProductName("");
+      setEditProductUom("pz");
+
+      await loadDataFromSheets();
+
+      alert("Prodotto modificato correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingProduct(false);
+    }
   };
 
   const handleAdminAccess = () => {
@@ -1607,8 +1676,8 @@ export default function App() {
                 onChange={(e) => setEditProductUom(e.target.value)}
               />
             </div>
-            <button style={btnStyle("primary")} onClick={saveEditedProduct}>
-              Salva modifiche
+            <button style={btnStyle("primary", savingProduct)} disabled={savingProduct} onClick={saveEditedProduct}>
+              {savingProduct ? "Salvataggio..." : "Salva modifiche"}
             </button>
           </div>
         </Modal>
