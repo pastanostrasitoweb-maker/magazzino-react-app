@@ -27,6 +27,43 @@ const fallbackLots = [
   { id: "2", productId: "2", lot: "2604108", expiry: "2026-05-08", loadedQty: 18 },
 ];
 
+function callSheetsApi(params = {}) {
+  return new Promise((resolve, reject) => {
+    const callbackName = `jsonpCallback_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    let script;
+
+    const cleanup = () => {
+      try {
+        delete window[callbackName];
+      } catch {}
+      if (script && script.parentNode) script.parentNode.removeChild(script);
+    };
+
+    window[callbackName] = (data) => {
+      cleanup();
+      resolve(data);
+    };
+
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        query.set(key, value);
+      }
+    });
+    query.set("callback", callbackName);
+
+    script = document.createElement("script");
+    script.src = `${SHEETS_API_URL}?${query.toString()}`;
+    script.async = true;
+    script.onerror = () => {
+      cleanup();
+      reject(new Error("Errore di collegamento con Google Sheet"));
+    };
+
+    document.body.appendChild(script);
+  });
+}
+
 function getField(row, keys) {
   for (const key of keys) {
     if (row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== "") return row[key];
@@ -383,32 +420,7 @@ export default function App() {
     setLoadError("");
 
     try {
-      const raw = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpCallback_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Impossibile leggere il foglio Google"));
-        };
-
-        document.body.appendChild(script);
-      });
+      const raw = await callSheetsApi();
 
       const normalizedProducts = normalizeProducts(raw.prodotti || []);
       const safeProducts = normalizedProducts.length ? normalizedProducts : fallbackProducts;
@@ -603,33 +615,9 @@ export default function App() {
     };
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpAssignLot_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        const payload = encodeURIComponent(JSON.stringify(newAssignment));
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=assignLot&payload=${payload}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "assignLot",
+        payload: JSON.stringify(newAssignment),
       });
 
       if (!result || !result.success) {
@@ -651,7 +639,6 @@ export default function App() {
       setAssignDialogOpen(false);
       setSelectedLotId("");
       setAssignQty("");
-      loadDataFromSheets();
       alert("Lotto assegnato correttamente");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -662,33 +649,9 @@ export default function App() {
     if (!selectedOrder) return;
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpPrepared_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=markOrderPrepared&orderId=${encodeURIComponent(
-          selectedOrder.id
-        )}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "markOrderPrepared",
+        orderId: selectedOrder.id,
       });
 
       if (!result || !result.success) {
@@ -707,7 +670,6 @@ export default function App() {
         )
       );
 
-      loadDataFromSheets();
       alert("Ordine segnato come preparato");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -761,41 +723,15 @@ export default function App() {
     };
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpSaveOrder_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        const payload = encodeURIComponent(
-          JSON.stringify({
-            id: newOrder.id,
-            customer: newOrder.customer,
-            status: newOrder.status,
-            date: newOrder.date,
-            lines: newOrder.lines,
-          })
-        );
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=createOrder&payload=${payload}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "createOrder",
+        payload: JSON.stringify({
+          id: newOrder.id,
+          customer: newOrder.customer,
+          status: newOrder.status,
+          date: newOrder.date,
+          lines: newOrder.lines,
+        }),
       });
 
       if (!result || !result.success) {
@@ -813,7 +749,6 @@ export default function App() {
       setNewOrderLines([{ productId: "", qtyOrdered: "" }]);
       setOrderDialogOpen(false);
       setPage("ordini");
-      loadDataFromSheets();
       alert("Ordine salvato correttamente");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -827,33 +762,9 @@ export default function App() {
     if (!conferma) return;
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpDeleteOrder_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=deleteOrder&orderId=${encodeURIComponent(
-          orderId
-        )}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "deleteOrder",
+        orderId,
       });
 
       if (!result || !result.success) {
@@ -879,7 +790,6 @@ export default function App() {
       setSelectedOrderId(nextOrder?.id ?? "");
       setSelectedLineId(nextOrder?.lines?.[0]?.lineId ?? "");
 
-      loadDataFromSheets();
       alert("Ordine eliminato correttamente");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -916,33 +826,9 @@ export default function App() {
     };
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpSaveLot_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        const payload = encodeURIComponent(JSON.stringify(newLot));
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=createLot&payload=${payload}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "createLot",
+        payload: JSON.stringify(newLot),
       });
 
       if (!result || !result.success) {
@@ -960,7 +846,6 @@ export default function App() {
       setNewLotQty("");
       setLotDialogOpen(false);
       setPage("prodotti");
-      loadDataFromSheets();
       alert("Lotto salvato correttamente");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -993,35 +878,9 @@ export default function App() {
     setSavingNewProduct(true);
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpCreateProduct_${Date.now()}_${Math.floor(
-          Math.random() * 10000
-        )}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        const payload = encodeURIComponent(JSON.stringify(newProduct));
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=createProduct&payload=${payload}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "createProduct",
+        payload: JSON.stringify(newProduct),
       });
 
       if (!result || !result.success) {
@@ -1047,8 +906,6 @@ export default function App() {
       setNewProductUom("pz");
       setProductDialogOpen(false);
       setPage("prodotti");
-
-      await loadDataFromSheets();
 
       alert("Prodotto creato correttamente");
     } catch (error) {
@@ -1088,35 +945,9 @@ export default function App() {
     setSavingProduct(true);
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpUpdateProduct_${Date.now()}_${Math.floor(
-          Math.random() * 10000
-        )}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        const encodedPayload = encodeURIComponent(JSON.stringify(payload));
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=updateProduct&payload=${encodedPayload}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "updateProduct",
+        payload: JSON.stringify(payload),
       });
 
       if (!result || !result.success) {
@@ -1145,8 +976,6 @@ export default function App() {
       setEditProductCode("");
       setEditProductName("");
       setEditProductUom("pz");
-
-      await loadDataFromSheets();
 
       alert("Prodotto modificato correttamente");
     } catch (error) {
@@ -1180,35 +1009,10 @@ export default function App() {
     setDeletingProductId(String(productIdToDelete));
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpDeleteProduct_${Date.now()}_${Math.floor(
-          Math.random() * 10000
-        )}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=deleteProduct&productId=${encodeURIComponent(
-          productIdToDelete
-        )}&adminPin=${encodeURIComponent(ADMIN_PIN)}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "deleteProduct",
+        productId: productIdToDelete,
+        adminPin: ADMIN_PIN,
       });
 
       if (!result || !result.success) {
@@ -1219,11 +1023,7 @@ export default function App() {
         return;
       }
 
-      setProducts((prev) =>
-        prev.filter((item) => String(item.id) !== String(product.id))
-      );
-
-      await loadDataFromSheets();
+      setProducts((prev) => prev.filter((item) => String(item.id) !== String(product.id)));
 
       alert("Prodotto eliminato correttamente");
     } catch (error) {
@@ -1260,35 +1060,9 @@ export default function App() {
     if (!conferma) return;
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpDeleteLine_${Date.now()}_${Math.floor(
-          Math.random() * 10000
-        )}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=deleteLine&lineId=${encodeURIComponent(
-          lineId
-        )}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "deleteLine",
+        lineId,
       });
 
       if (!result || !result.success) {
@@ -1326,8 +1100,6 @@ export default function App() {
         sameOrder?.lines?.[0]?.lineId ?? updatedOrders[0]?.lines?.[0]?.lineId ?? ""
       );
 
-      await loadDataFromSheets();
-
       alert("Riga ordine eliminata correttamente");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -1341,35 +1113,9 @@ export default function App() {
     if (!conferma) return;
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpDeleteAssignment_${Date.now()}_${Math.floor(
-          Math.random() * 10000
-        )}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=deleteAssignment&assignmentId=${encodeURIComponent(
-          assignmentId
-        )}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "deleteAssignment",
+        assignmentId,
       });
 
       if (!result || !result.success) {
@@ -1386,8 +1132,6 @@ export default function App() {
           (assignment) => String(assignment.assignmentId) !== String(assignmentId)
         ),
       }));
-
-      await loadDataFromSheets();
 
       alert("Assegnazione eliminata correttamente");
     } catch (error) {
@@ -1421,35 +1165,9 @@ export default function App() {
     if (!conferma) return;
 
     try {
-      const result = await new Promise((resolve, reject) => {
-        const callbackName = `jsonpDeleteLot_${Date.now()}_${Math.floor(
-          Math.random() * 10000
-        )}`;
-        let script;
-
-        const cleanup = () => {
-          try {
-            delete window[callbackName];
-          } catch {}
-          if (script && script.parentNode) script.parentNode.removeChild(script);
-        };
-
-        window[callbackName] = (data) => {
-          cleanup();
-          resolve(data);
-        };
-
-        script = document.createElement("script");
-        script.src = `${SHEETS_API_URL}?action=deleteLot&lotId=${encodeURIComponent(
-          lotCodeToDelete
-        )}&callback=${callbackName}`;
-        script.async = true;
-        script.onerror = () => {
-          cleanup();
-          reject(new Error("Errore di collegamento con Google Sheet"));
-        };
-
-        document.body.appendChild(script);
+      const result = await callSheetsApi({
+        action: "deleteLot",
+        lotId: lotCodeToDelete,
       });
 
       if (!result || !result.success) {
@@ -1461,8 +1179,6 @@ export default function App() {
       }
 
       setLots((prev) => prev.filter((lot) => String(lot.id) !== String(lotId)));
-
-      await loadDataFromSheets();
 
       alert("Lotto eliminato correttamente");
     } catch (error) {
