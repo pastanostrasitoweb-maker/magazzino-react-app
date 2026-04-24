@@ -229,6 +229,14 @@ function normalizeOrderLines(rows, products) {
             "Quantita ordinata",
           ]) || 0
         ),
+        qtyAssignedFromSheet: Number(
+          getField(row, [
+            "Quantita_Assegnata",
+            "Quantità_Assegnata",
+            "Quantita assegnata",
+            "Quantità assegnata",
+          ]) || 0
+        ),
       };
     })
     .filter((line) => line.lineId && line.orderId && line.productId);
@@ -243,7 +251,7 @@ function normalizeAssignments(rows, lines, lots) {
     const lineId = String(getField(row, ["ID_Riga", "Id_Riga", "Riga"])).trim();
     if (!lineIds.has(lineId)) return;
 
-    const lotCode = String(getField(row, ["Lotto", "Codice_Lotto", "Codice lotto"])).trim();
+    const lotCode = String(getField(row, ["Lotto", "Codice_Lotto", "Codice lotto", "ID_Lotto"])).trim();
     const lotId = lotByCode[lotCode] || lotCode;
     if (!lotId) return;
 
@@ -258,6 +266,7 @@ function normalizeAssignments(rows, lines, lots) {
           "Quantita_Assegnata",
           "Quantità assegnata",
           "Quantita assegnata",
+          "Quantita_A",
         ]) || 0
       ),
     };
@@ -450,10 +459,16 @@ export default function App() {
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
       const lines = (order.lines || []).map((line) => {
-        const assignedQty = (assignments[line.lineId] || []).reduce(
+        const assignedFromAssignments = (assignments[line.lineId] || []).reduce(
           (sum, assignment) => sum + assignment.qty,
           0
         );
+
+        const assignedQty = Math.max(
+          Number(line.qtyAssignedFromSheet || 0),
+          assignedFromAssignments
+        );
+
         const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
         return { ...line, assignedQty, qtyToAssign };
       });
