@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwVDrV5ndHis5WTEinZMd90P7vdNIF0CAeKNzsV_8ikFY8QHQP_CcTuZeohepXHAc8/exec";
+  "https://script.google.com/macros/s/AKfycbyaXsvtBjEx0MWR6Q_MOTRI0L5LrYwG-G6ii-l9YOO2YwDwn2eGt7SfZ47yyc0HqP-Z/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -736,6 +736,87 @@ export default function App() {
     }
   };
 
+  const createLot = async () => {
+    if (!newLotProductId) {
+      alert("Seleziona il prodotto");
+      return;
+    }
+
+    if (!newLotCode.trim()) {
+      alert("Inserisci il codice lotto");
+      return;
+    }
+
+    if (!newLotExpiry) {
+      alert("Inserisci la scadenza");
+      return;
+    }
+
+    if (!Number(newLotQty) || Number(newLotQty) <= 0) {
+      alert("Inserisci una quantità valida");
+      return;
+    }
+
+    const newLot = {
+      id: `LOT-${Date.now()}`,
+      productId: String(newLotProductId),
+      lot: newLotCode.trim(),
+      expiry: newLotExpiry,
+      loadedQty: Number(newLotQty),
+    };
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpSaveLot_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        const payload = encodeURIComponent(JSON.stringify(newLot));
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=createLot&payload=${payload}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nel salvataggio lotto sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setLots((prev) => [newLot, ...prev]);
+      setNewLotProductId("");
+      setNewLotCode("");
+      setNewLotExpiry("");
+      setNewLotQty("");
+      setLotDialogOpen(false);
+      setPage("prodotti");
+      loadDataFromSheets();
+      alert("Lotto salvato correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
+  };
+
   const createProduct = () => {
     if (!newProductCode.trim() || !newProductName.trim()) return;
     const newProduct = {
@@ -750,25 +831,6 @@ export default function App() {
     setNewProductName("");
     setNewProductUom("pz");
     setProductDialogOpen(false);
-    setPage("prodotti");
-  };
-
-  const createLot = () => {
-    if (!newLotProductId || !newLotCode.trim() || !newLotExpiry || Number(newLotQty) <= 0) return;
-    const newLot = {
-      id: `LOT-${Date.now()}`,
-      productId: String(newLotProductId),
-      lot: newLotCode.trim(),
-      expiry: newLotExpiry,
-      loadedQty: Number(newLotQty),
-    };
-
-    setLots((prev) => [newLot, ...prev]);
-    setNewLotProductId("");
-    setNewLotCode("");
-    setNewLotExpiry("");
-    setNewLotQty("");
-    setLotDialogOpen(false);
     setPage("prodotti");
   };
 
