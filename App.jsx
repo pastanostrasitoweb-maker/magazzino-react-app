@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbzdhuEq5EXZ9GkBvx6Sox4vq5sAxjwYzzIEBimDwInqaZlPWVEPUQC-z0cTJ1NnbCA-/exec";
+  "https://script.google.com/macros/s/AKfycbxpvYo9fOEE3-_PigVpvbuCJ55YvXbo0i-AZ-zPfxj7MLdpKsFuTHEAurvdZKXwLRen/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -90,6 +90,15 @@ function btnStyle(variant = "primary", disabled = false) {
       ...base,
       background: "#187437",
       color: "#fff",
+    };
+  }
+
+  if (variant === "danger") {
+    return {
+      ...base,
+      background: "#fff",
+      color: "#991b1b",
+      border: "1px solid #fecaca",
     };
   }
 
@@ -367,6 +376,7 @@ export default function App() {
   const [editProductName, setEditProductName] = useState("");
   const [editProductUom, setEditProductUom] = useState("pz");
   const [savingProduct, setSavingProduct] = useState(false);
+  const [deletingProductId, setDeletingProductId] = useState("");
 
   const loadDataFromSheets = async () => {
     setLoadingData(true);
@@ -1146,6 +1156,83 @@ export default function App() {
     }
   };
 
+  const deleteProduct = async (product) => {
+    if (!isAdmin) {
+      alert("Solo admin può eliminare un prodotto.");
+      return;
+    }
+
+    if (!product) return;
+
+    if ((product.productLots || []).length > 0) {
+      alert("Impossibile eliminare questo prodotto perché ha lotti collegati.");
+      return;
+    }
+
+    const productIdToDelete = product.id || product.code;
+
+    const conferma = window.confirm(
+      `Vuoi eliminare davvero il prodotto ${product.code} · ${product.name} dal Google Sheet?`
+    );
+
+    if (!conferma) return;
+
+    setDeletingProductId(String(productIdToDelete));
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpDeleteProduct_${Date.now()}_${Math.floor(
+          Math.random() * 10000
+        )}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=deleteProduct&productId=${encodeURIComponent(
+          productIdToDelete
+        )}&adminPin=${encodeURIComponent(ADMIN_PIN)}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nell'eliminazione prodotto sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setProducts((prev) =>
+        prev.filter((item) => String(item.id) !== String(product.id))
+      );
+
+      await loadDataFromSheets();
+
+      alert("Prodotto eliminato correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setDeletingProductId("");
+    }
+  };
+
   const handleAdminAccess = () => {
     if (adminPinInput === ADMIN_PIN) {
       setIsAdmin(true);
@@ -1709,12 +1796,21 @@ export default function App() {
                       <div style={{ fontSize: 18, fontWeight: 800 }}>{product.code}</div>
                       <div style={{ marginTop: 4, color: "#55657a" }}>{product.name}</div>
                     </div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                       <span style={badgeStyle("outline")}>Disponibili {product.totalAvailable}</span>
                       {isAdmin && (
-                        <button style={btnStyle("outline")} onClick={() => openEditProductDialog(product)}>
-                          <Pencil size={16} />
-                        </button>
+                        <>
+                          <button style={btnStyle("outline")} onClick={() => openEditProductDialog(product)}>
+                            <Pencil size={16} />
+                          </button>
+                          <button
+                            style={btnStyle("danger", deletingProductId === String(product.id))}
+                            disabled={deletingProductId === String(product.id)}
+                            onClick={() => deleteProduct(product)}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
