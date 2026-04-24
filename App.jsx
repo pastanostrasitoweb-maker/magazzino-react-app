@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbyaXsvtBjEx0MWR6Q_MOTRI0L5LrYwG-G6ii-l9YOO2YwDwn2eGt7SfZ47yyc0HqP-Z/exec";
+  "https://script.google.com/macros/s/AKfycbxrjx36pYIYyNPBA-vKgL_UwqO12tN5QyPxssotJcTdw8kjYEeAz8gNXQ6piSrynXYq/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -535,22 +535,94 @@ export default function App() {
     setAssignQty(String(suggestedQty));
   };
 
-  const confirmAssignment = () => {
+  const confirmAssignment = async () => {
     if (!selectedLine || !selectedLotId || !assignQty) return;
+
     const qty = Number(assignQty);
-    if (!qty || qty <= 0) return;
+    if (!qty || qty <= 0) {
+      alert("Inserisci una quantità valida");
+      return;
+    }
 
-    setAssignments((prev) => ({
-      ...prev,
-      [selectedLine.lineId]: [
-        ...(prev[selectedLine.lineId] || []),
-        { assignmentId: `ASS-${Date.now()}`, lotId: String(selectedLotId), qty },
-      ],
-    }));
+    const selectedLot = lots.find((lot) => String(lot.id) === String(selectedLotId));
+    if (!selectedLot) {
+      alert("Lotto non trovato");
+      return;
+    }
 
-    setAssignDialogOpen(false);
-    setSelectedLotId("");
-    setAssignQty("");
+    const available = lotsAvailableMap[String(selectedLotId)] || 0;
+    if (qty > available) {
+      alert("La quantità supera la disponibilità del lotto");
+      return;
+    }
+
+    if (selectedLine && qty > selectedLine.qtyToAssign) {
+      alert("La quantità supera il residuo da assegnare");
+      return;
+    }
+
+    const newAssignment = {
+      assignmentId: `ASS-${Date.now()}`,
+      lineId: String(selectedLine.lineId),
+      lotId: String(selectedLotId),
+      lotCode: selectedLot.lot,
+      qty,
+    };
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpAssignLot_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        const payload = encodeURIComponent(JSON.stringify(newAssignment));
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=assignLot&payload=${payload}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nel salvataggio assegnazione sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setAssignments((prev) => ({
+        ...prev,
+        [selectedLine.lineId]: [
+          ...(prev[selectedLine.lineId] || []),
+          { assignmentId: newAssignment.assignmentId, lotId: String(selectedLotId), qty },
+        ],
+      }));
+
+      setAssignDialogOpen(false);
+      setSelectedLotId("");
+      setAssignQty("");
+      loadDataFromSheets();
+      alert("Lotto assegnato correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
   };
 
   const markOrderPrepared = () => {
