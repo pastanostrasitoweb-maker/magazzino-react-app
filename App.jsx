@@ -670,6 +670,72 @@ export default function App() {
     }
   };
 
+  const deleteOrder = async (orderId) => {
+    if (!orderId) return;
+
+    const conferma = window.confirm("Vuoi eliminare davvero questo ordine?");
+    if (!conferma) return;
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const callbackName = `jsonpDeleteOrder_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        let script;
+
+        const cleanup = () => {
+          try {
+            delete window[callbackName];
+          } catch {}
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        };
+
+        window[callbackName] = (data) => {
+          cleanup();
+          resolve(data);
+        };
+
+        script = document.createElement("script");
+        script.src = `${SHEETS_API_URL}?action=deleteOrder&orderId=${encodeURIComponent(
+          orderId
+        )}&callback=${callbackName}`;
+        script.async = true;
+        script.onerror = () => {
+          cleanup();
+          reject(new Error("Errore di collegamento con Google Sheet"));
+        };
+
+        document.body.appendChild(script);
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nell'eliminazione ordine sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setAssignments((prev) => {
+        const next = { ...prev };
+        const orderToDelete = orders.find((o) => String(o.id) === String(orderId));
+        if (orderToDelete?.lines) {
+          orderToDelete.lines.forEach((line) => delete next[line.lineId]);
+        }
+        return next;
+      });
+
+      const remainingOrders = orders.filter((order) => String(order.id) !== String(orderId));
+      setOrders(remainingOrders);
+      const nextOrder = remainingOrders[0];
+      setSelectedOrderId(nextOrder?.id ?? "");
+      setSelectedLineId(nextOrder?.lines?.[0]?.lineId ?? "");
+
+      loadDataFromSheets();
+      alert("Ordine eliminato correttamente");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
+  };
+
   const createProduct = () => {
     if (!newProductCode.trim() || !newProductName.trim()) return;
     const newProduct = {
@@ -753,24 +819,6 @@ export default function App() {
     setAdminPinInput("");
     setAdminError("");
     setAdminDialogOpen(false);
-  };
-
-  const deleteOrder = (orderId) => {
-    const orderToDelete = orders.find((order) => String(order.id) === String(orderId));
-    if (!orderToDelete) return;
-
-    const lineIds = (orderToDelete.lines || []).map((line) => line.lineId);
-    setAssignments((prev) => {
-      const next = { ...prev };
-      lineIds.forEach((lineId) => delete next[lineId]);
-      return next;
-    });
-
-    const remainingOrders = orders.filter((order) => String(order.id) !== String(orderId));
-    setOrders(remainingOrders);
-    const nextOrder = remainingOrders[0];
-    setSelectedOrderId(nextOrder?.id ?? "");
-    setSelectedLineId(nextOrder?.lines?.[0]?.lineId ?? "");
   };
 
   const deleteLine = (orderId, lineId) => {
@@ -941,7 +989,10 @@ export default function App() {
                           {selectedOrder.customer} · {fmtDate(selectedOrder.date)}
                         </div>
                       </div>
-                      <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
+                      <button
+                        style={btnStyle("outline")}
+                        onClick={() => deleteOrder(selectedOrder.id)}
+                      >
                         <Trash2 size={16} /> Elimina ordine
                       </button>
                     </div>
