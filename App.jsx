@@ -1,4 +1,4 @@
-// versione admin righe ordine - add/update line
+// versione admin righe ordine - fix deploy JSX
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -2135,19 +2135,21 @@ export default function App() {
                                     </button>
 
                                     {isAdmin ? (
-                                      <button
-                                        style={compactBtnStyle("outline")}
-                                        onClick={() => openEditLineDialog(line)}
-                                      >
-                                        Qtà
-                                      </button>
+                                      <>
+                                        <button
+                                          style={compactBtnStyle("outline")}
+                                          onClick={() => openEditLineDialog(line)}
+                                        >
+                                          Qtà
+                                        </button>
 
-                                      <button
-                                        style={compactBtnStyle("outline")}
-                                        onClick={() => deleteLine(selectedOrder.id, line.lineId)}
-                                      >
-                                        <Trash2 size={15} />
-                                      </button>
+                                        <button
+                                          style={compactBtnStyle("outline")}
+                                          onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                        >
+                                          <Trash2 size={15} />
+                                        </button>
+                                      </>
                                     ) : null}
                                   </div>
                                 </div>
