@@ -1,4 +1,4 @@
-// versione immediata - aggiornamento locale prima del salvataggio
+// versione immediata - fix overflow pulsante assegna ipad
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -1472,11 +1472,13 @@ export default function App() {
       style={{
         minHeight: "100vh",
         background: "#f2f4f8",
-        padding: 20,
+        padding: isSmallLayout ? 10 : 20,
         fontFamily: "Arial, sans-serif",
+        overflowX: "hidden",
+        boxSizing: "border-box",
       }}
     >
-      <div style={{ maxWidth: 1280, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto", width: "100%", boxSizing: "border-box", minWidth: 0 }}>
         <div style={{ ...cardStyle(), padding: 20, marginBottom: 20 }}>
           <div
             style={{
@@ -1689,7 +1691,7 @@ export default function App() {
                               display: "grid",
                               gridTemplateColumns: isSmallLayout
                                 ? "1fr"
-                                : "minmax(220px, 1.2fr) 210px minmax(340px, 1.4fr)",
+                                : "minmax(180px, 1fr) 190px minmax(0, 1.2fr)",
                               gap: 12,
                               alignItems: "center",
                             }}
@@ -1853,13 +1855,13 @@ export default function App() {
                                 <div
                                   style={{
                                     display: "grid",
-                                    gridTemplateColumns: isSmallLayout ? "1fr" : "1fr 86px auto",
+                                    gridTemplateColumns: isIPadLayout ? "1fr" : "minmax(0, 1fr) 76px 96px",
                                     gap: 8,
                                     alignItems: "center",
                                   }}
                                 >
                                   <select
-                                    style={compactInputStyle()}
+                                    style={{ ...compactInputStyle(), minWidth: 0 }}
                                     value={form.lotId}
                                     onChange={(event) =>
                                       handleInlineLotSelect(line, event.target.value)
@@ -1875,7 +1877,7 @@ export default function App() {
                                   </select>
 
                                   <input
-                                    style={compactInputStyle()}
+                                    style={{ ...compactInputStyle(), minWidth: 0 }}
                                     type="number"
                                     min="1"
                                     value={form.qty}
@@ -1893,13 +1895,16 @@ export default function App() {
                                     style={{
                                       display: "flex",
                                       gap: 8,
-                                      justifyContent: isSmallLayout ? "stretch" : "flex-end",
+                                      justifyContent: "stretch",
+                                      minWidth: 0,
                                     }}
                                   >
                                     <button
                                       style={{
                                         ...compactBtnStyle("primary", savingThisLine),
-                                        flex: isSmallLayout ? 1 : "initial",
+                                        flex: 1,
+                                        minWidth: 0,
+                                        width: "100%",
                                       }}
                                       disabled={savingThisLine}
                                       onClick={() => confirmInlineAssignment(line)}
