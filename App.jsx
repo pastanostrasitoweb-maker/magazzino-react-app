@@ -1,4 +1,4 @@
-// versione veloce reale - residui calcolati solo da assegnazioni
+// versione immediata - aggiornamento locale prima del salvataggio
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -743,6 +743,21 @@ export default function App() {
       qty,
     };
 
+    // Aggiornamento immediato dell'interfaccia: l'operatore non aspetta Google Sheet.
+    setAssignments((prev) => ({
+      ...prev,
+      [line.lineId]: [
+        ...(prev[line.lineId] || []),
+        { assignmentId: newAssignment.assignmentId, lotId: String(form.lotId), qty },
+      ],
+    }));
+
+    setInlineAssignmentForms((prev) => ({
+      ...prev,
+      [String(line.lineId)]: { lotId: "", qty: "" },
+    }));
+
+    setSelectedLineId(line.lineId);
     setSavingAssignmentLineId(String(line.lineId));
 
     try {
@@ -752,28 +767,38 @@ export default function App() {
       });
 
       if (!result || !result.success) {
+        setAssignments((prev) => ({
+          ...prev,
+          [line.lineId]: (prev[line.lineId] || []).filter(
+            (assignment) =>
+              String(assignment.assignmentId) !== String(newAssignment.assignmentId)
+          ),
+        }));
+
+        setInlineAssignmentForms((prev) => ({
+          ...prev,
+          [String(line.lineId)]: form,
+        }));
+
         alert(
           "Errore nel salvataggio assegnazione sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
-        return;
       }
-
+    } catch (error) {
       setAssignments((prev) => ({
         ...prev,
-        [line.lineId]: [
-          ...(prev[line.lineId] || []),
-          { assignmentId: newAssignment.assignmentId, lotId: String(form.lotId), qty },
-        ],
+        [line.lineId]: (prev[line.lineId] || []).filter(
+          (assignment) =>
+            String(assignment.assignmentId) !== String(newAssignment.assignmentId)
+        ),
       }));
 
       setInlineAssignmentForms((prev) => ({
         ...prev,
-        [String(line.lineId)]: { lotId: "", qty: "" },
+        [String(line.lineId)]: form,
       }));
 
-      setSelectedLineId(line.lineId);
-    } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
       setSavingAssignmentLineId("");
@@ -817,6 +842,21 @@ export default function App() {
       qty,
     };
 
+    const previousLotId = selectedLotId;
+    const previousQty = assignQty;
+
+    setAssignments((prev) => ({
+      ...prev,
+      [selectedLine.lineId]: [
+        ...(prev[selectedLine.lineId] || []),
+        { assignmentId: newAssignment.assignmentId, lotId: String(selectedLotId), qty },
+      ],
+    }));
+
+    setAssignDialogOpen(false);
+    setSelectedLotId("");
+    setAssignQty("");
+
     try {
       const result = await callSheetsApi({
         action: "assignLot",
@@ -824,27 +864,34 @@ export default function App() {
       });
 
       if (!result || !result.success) {
+        setAssignments((prev) => ({
+          ...prev,
+          [selectedLine.lineId]: (prev[selectedLine.lineId] || []).filter(
+            (assignment) =>
+              String(assignment.assignmentId) !== String(newAssignment.assignmentId)
+          ),
+        }));
+
+        setSelectedLotId(previousLotId);
+        setAssignQty(previousQty);
+
         alert(
           "Errore nel salvataggio assegnazione sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
-        return;
       }
-
+    } catch (error) {
       setAssignments((prev) => ({
         ...prev,
-        [selectedLine.lineId]: [
-          ...(prev[selectedLine.lineId] || []),
-          { assignmentId: newAssignment.assignmentId, lotId: String(selectedLotId), qty },
-        ],
+        [selectedLine.lineId]: (prev[selectedLine.lineId] || []).filter(
+          (assignment) =>
+            String(assignment.assignmentId) !== String(newAssignment.assignmentId)
+        ),
       }));
 
-      setAssignDialogOpen(false);
-      setSelectedLotId("");
-      setAssignQty("");
+      setSelectedLotId(previousLotId);
+      setAssignQty(previousQty);
 
-      alert("Lotto assegnato correttamente");
-    } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
@@ -874,7 +921,7 @@ export default function App() {
         )
       );
 
-      alert("Ordine segnato come preparato");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
@@ -955,7 +1002,7 @@ export default function App() {
       setOrderDialogOpen(false);
       setPage("ordini");
 
-      alert("Ordine salvato correttamente");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
@@ -1003,7 +1050,7 @@ export default function App() {
       setSelectedOrderId(nextOrder?.id ?? "");
       setSelectedLineId(nextOrder?.lines?.[0]?.lineId ?? "");
 
-      alert("Ordine eliminato correttamente");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
@@ -1060,7 +1107,7 @@ export default function App() {
       setLotDialogOpen(false);
       setPage("prodotti");
 
-      alert("Lotto salvato correttamente");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
@@ -1121,7 +1168,7 @@ export default function App() {
       setProductDialogOpen(false);
       setPage("prodotti");
 
-      alert("Prodotto creato correttamente");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
@@ -1192,7 +1239,7 @@ export default function App() {
       setEditProductName("");
       setEditProductUom("pz");
 
-      alert("Prodotto modificato correttamente");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
@@ -1240,7 +1287,7 @@ export default function App() {
 
       setProducts((prev) => prev.filter((item) => String(item.id) !== String(product.id)));
 
-      alert("Prodotto eliminato correttamente");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
@@ -1318,7 +1365,7 @@ export default function App() {
         sameOrder?.lines?.[0]?.lineId ?? updatedOrders[0]?.lines?.[0]?.lineId ?? ""
       );
 
-      alert("Riga ordine eliminata correttamente");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
@@ -1330,6 +1377,18 @@ export default function App() {
     const conferma = window.confirm("Vuoi eliminare questa assegnazione lotto?");
     if (!conferma) return;
 
+    const assignmentToDelete = (assignments[lineId] || []).find(
+      (assignment) => String(assignment.assignmentId) === String(assignmentId)
+    );
+
+    // Aggiornamento immediato dell'interfaccia: il residuo torna subito disponibile.
+    setAssignments((prev) => ({
+      ...prev,
+      [lineId]: (prev[lineId] || []).filter(
+        (assignment) => String(assignment.assignmentId) !== String(assignmentId)
+      ),
+    }));
+
     try {
       const result = await callSheetsApi({
         action: "deleteAssignment",
@@ -1337,22 +1396,26 @@ export default function App() {
       });
 
       if (!result || !result.success) {
+        if (assignmentToDelete) {
+          setAssignments((prev) => ({
+            ...prev,
+            [lineId]: [...(prev[lineId] || []), assignmentToDelete],
+          }));
+        }
+
         alert(
           "Errore nell'eliminazione assegnazione sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
-        return;
+      }
+    } catch (error) {
+      if (assignmentToDelete) {
+        setAssignments((prev) => ({
+          ...prev,
+          [lineId]: [...(prev[lineId] || []), assignmentToDelete],
+        }));
       }
 
-      setAssignments((prev) => ({
-        ...prev,
-        [lineId]: (prev[lineId] || []).filter(
-          (assignment) => String(assignment.assignmentId) !== String(assignmentId)
-        ),
-      }));
-
-      alert("Assegnazione eliminata correttamente");
-    } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
@@ -1398,7 +1461,7 @@ export default function App() {
 
       setLots((prev) => prev.filter((lot) => String(lot.id) !== String(lotId)));
 
-      alert("Lotto eliminato correttamente");
+      
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
