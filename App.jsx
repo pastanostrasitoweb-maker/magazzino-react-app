@@ -49,19 +49,22 @@ function callSheetsApi(params = {}) {
       resolve(data);
     };
 
-    const query = new URLSearchParams();
+    const queryParts = [];
 
-    Object.entries(params).forEach(([key, value]) => {
+    Object.keys(params).forEach((key) => {
+      const value = params[key];
+
       if (value !== undefined && value !== null && value !== "") {
-        query.set(key, value);
+        queryParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
       }
     });
 
-    query.set("callback", callbackName);
+    queryParts.push(`callback=${encodeURIComponent(callbackName)}`);
 
     script = document.createElement("script");
-    script.src = `${SHEETS_API_URL}?${query.toString()}`;
+    script.src = `${SHEETS_API_URL}?${queryParts.join("&")}`;
     script.async = true;
+
     script.onerror = () => {
       cleanup();
       reject(new Error("Errore di collegamento con Google Sheet"));
