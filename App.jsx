@@ -158,6 +158,20 @@ function btnStyle(variant = "primary", disabled = false) {
   };
 }
 
+
+function compactBtnStyle(variant = "primary", disabled = false) {
+  const base = btnStyle(variant, disabled);
+
+  return {
+    ...base,
+    height: 42,
+    borderRadius: 14,
+    padding: "0 12px",
+    fontSize: 14,
+    fontWeight: 800,
+  };
+}
+
 function inputStyle() {
   return {
     width: "100%",
@@ -169,6 +183,17 @@ function inputStyle() {
     outline: "none",
     background: "#fff",
     boxSizing: "border-box",
+  };
+}
+
+
+function compactInputStyle() {
+  return {
+    ...inputStyle(),
+    height: 42,
+    borderRadius: 14,
+    fontSize: 14,
+    padding: "0 10px",
   };
 }
 
@@ -1578,159 +1603,195 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
+                  <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
                     {selectedOrder.lines.map((line) => {
                       const product = productMap[String(line.productId)];
                       const lineAssignments = assignments[line.lineId] || [];
                       const availableLots = getAvailableLotsForLine(line);
                       const form = getInlineAssignmentForm(line.lineId);
                       const savingThisLine = savingAssignmentLineId === String(line.lineId);
+                      const completed = line.qtyToAssign <= 0;
 
                       return (
                         <div
                           key={line.lineId}
                           style={{
-                            ...cardStyle({ background: "#fff" }),
-                            padding: isSmallLayout ? 14 : 20,
-                            border:
-                              String(selectedLineId) === String(line.lineId)
-                                ? "2px solid #0f172a"
-                                : "1px solid #dbe2ea",
+                            ...cardStyle({
+                              background: completed ? "#f8fff9" : "#fff",
+                            }),
+                            padding: isSmallLayout ? 12 : 14,
+                            border: completed ? "1px solid #cfe8d4" : "1px solid #dbe2ea",
                           }}
                         >
                           <div
                             style={{
-                              display: "flex",
-                              justifyContent: "space-between",
+                              display: "grid",
+                              gridTemplateColumns: isSmallLayout
+                                ? "1fr"
+                                : "minmax(220px, 1.2fr) 210px minmax(340px, 1.4fr)",
                               gap: 12,
-                              alignItems: "flex-start",
-                              flexWrap: "wrap",
+                              alignItems: "center",
                             }}
                           >
-                            <div>
-                              <div style={{ fontSize: 18, fontWeight: 800 }}>
-                                {product?.code}
+                            <div style={{ minWidth: 0 }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  flexWrap: "wrap",
+                                  marginBottom: 3,
+                                }}
+                              >
+                                <span style={{ fontSize: 17, fontWeight: 900, color: "#0f172a" }}>
+                                  {product?.code || line.productId}
+                                </span>
+                                {completed ? (
+                                  <span
+                                    style={{
+                                      ...badgeStyle("success"),
+                                      padding: "4px 9px",
+                                      fontSize: 12,
+                                      color: "#166534",
+                                    }}
+                                  >
+                                    Completa
+                                  </span>
+                                ) : null}
                               </div>
-                              <div style={{ marginTop: 4, color: "#55657a" }}>
+
+                              <div
+                                style={{
+                                  color: "#55657a",
+                                  fontSize: 14,
+                                  lineHeight: 1.25,
+                                  overflowWrap: "anywhere",
+                                }}
+                              >
                                 {product?.name}
                               </div>
                             </div>
 
                             <div
                               style={{
-                                display: "flex",
-                                gap: 8,
-                                alignItems: "center",
-                                flexWrap: "wrap",
-                                justifyContent: "flex-end",
+                                display: "grid",
+                                gridTemplateColumns: "repeat(3, 1fr)",
+                                gap: 6,
                               }}
                             >
-                              <span style={badgeStyle("outline")}>
-                                Da assegnare {line.qtyToAssign}
-                              </span>
-
-                              <button
-                                style={btnStyle("outline")}
-                                onClick={() => deleteLine(selectedOrder.id, line.lineId)}
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </div>
-
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: isSmallLayout ? "1fr" : "repeat(3, 1fr)",
-                              gap: 12,
-                              marginTop: 18,
-                            }}
-                          >
-                            <div
-                              style={{
-                                ...cardStyle({ background: "#f1f5f9" }),
-                                padding: 14,
-                                textAlign: "center",
-                              }}
-                            >
-                              <div style={{ fontSize: 13, color: "#6b7280" }}>Ordinati</div>
-                              <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>
-                                {line.qtyOrdered}
-                              </div>
-                            </div>
-
-                            <div
-                              style={{
-                                ...cardStyle({ background: "#f1f5f9" }),
-                                padding: 14,
-                                textAlign: "center",
-                              }}
-                            >
-                              <div style={{ fontSize: 13, color: "#6b7280" }}>Assegnati</div>
-                              <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>
-                                {line.assignedQty}
-                              </div>
-                            </div>
-
-                            <div
-                              style={{
-                                ...cardStyle({ background: "#f1f5f9" }),
-                                padding: 14,
-                                textAlign: "center",
-                              }}
-                            >
-                              <div style={{ fontSize: 13, color: "#6b7280" }}>Residuo</div>
                               <div
                                 style={{
-                                  fontSize: 20,
-                                  fontWeight: 900,
-                                  marginTop: 6,
-                                  color: line.qtyToAssign > 0 ? "#a16207" : "#166534",
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: "8px 6px",
+                                  textAlign: "center",
+                                  borderRadius: 14,
                                 }}
                               >
-                                {line.qtyToAssign}
+                                <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 700 }}>
+                                  Ord.
+                                </div>
+                                <div style={{ fontSize: 17, fontWeight: 900 }}>{line.qtyOrdered}</div>
                               </div>
-                            </div>
-                          </div>
 
-                          <div
-                            style={{
-                              ...cardStyle({ background: line.qtyToAssign > 0 ? "#f8fafc" : "#effaf1" }),
-                              padding: 16,
-                              marginTop: 16,
-                            }}
-                          >
-                            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 12 }}>
-                              Assegna lotto
-                            </div>
-
-                            {line.qtyToAssign <= 0 ? (
-                              <div style={{ color: "#166534", fontWeight: 700 }}>
-                                Riga completata: quantità già assegnata.
-                              </div>
-                            ) : availableLots.length === 0 ? (
-                              <div style={{ color: "#b45309", fontWeight: 700 }}>
-                                Nessun lotto disponibile per questo prodotto.
-                              </div>
-                            ) : (
                               <div
                                 style={{
-                                  display: "grid",
-                                  gridTemplateColumns: isSmallLayout ? "1fr" : "1fr 120px auto",
-                                  gap: 10,
-                                  alignItems: "end",
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: "8px 6px",
+                                  textAlign: "center",
+                                  borderRadius: 14,
                                 }}
                               >
-                                <div>
-                                  <label style={labelStyle()}>Lotto</label>
+                                <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 700 }}>
+                                  Ass.
+                                </div>
+                                <div style={{ fontSize: 17, fontWeight: 900 }}>{line.assignedQty}</div>
+                              </div>
+
+                              <div
+                                style={{
+                                  ...cardStyle({ background: completed ? "#effaf1" : "#fff7ed" }),
+                                  padding: "8px 6px",
+                                  textAlign: "center",
+                                  borderRadius: 14,
+                                }}
+                              >
+                                <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 700 }}>
+                                  Res.
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: 17,
+                                    fontWeight: 900,
+                                    color: completed ? "#166534" : "#a16207",
+                                  }}
+                                >
+                                  {line.qtyToAssign}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div>
+                              {completed ? (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "flex-end",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  <span style={{ color: "#166534", fontWeight: 800, fontSize: 14 }}>
+                                    Quantità completata
+                                  </span>
+                                  {isAdmin ? (
+                                    <button
+                                      style={compactBtnStyle("outline")}
+                                      onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                    >
+                                      <Trash2 size={15} /> Riga
+                                    </button>
+                                  ) : null}
+                                </div>
+                              ) : availableLots.length === 0 ? (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  <span style={{ color: "#b45309", fontWeight: 800, fontSize: 14 }}>
+                                    Nessun lotto disponibile
+                                  </span>
+                                  {isAdmin ? (
+                                    <button
+                                      style={compactBtnStyle("outline")}
+                                      onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                    >
+                                      <Trash2 size={15} /> Riga
+                                    </button>
+                                  ) : null}
+                                </div>
+                              ) : (
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: isSmallLayout ? "1fr" : "1fr 86px auto",
+                                    gap: 8,
+                                    alignItems: "center",
+                                  }}
+                                >
                                   <select
-                                    style={inputStyle()}
+                                    style={compactInputStyle()}
                                     value={form.lotId}
                                     onChange={(event) =>
                                       handleInlineLotSelect(line, event.target.value)
                                     }
                                   >
-                                    <option value="">Seleziona lotto</option>
+                                    <option value="">Lotto</option>
                                     {availableLots.map((lot) => (
                                       <option key={lot.id} value={String(lot.id)}>
                                         {lot.lot} · scad. {fmtDate(lot.expiry)} · disp.{" "}
@@ -1738,12 +1799,9 @@ export default function App() {
                                       </option>
                                     ))}
                                   </select>
-                                </div>
 
-                                <div>
-                                  <label style={labelStyle()}>Qtà</label>
                                   <input
-                                    style={inputStyle()}
+                                    style={compactInputStyle()}
                                     type="number"
                                     min="1"
                                     value={form.qty}
@@ -1754,82 +1812,99 @@ export default function App() {
                                         event.target.value
                                       )
                                     }
-                                    placeholder="0"
+                                    placeholder="Qtà"
                                   />
-                                </div>
 
-                                <button
-                                  style={btnStyle("primary", savingThisLine)}
-                                  disabled={savingThisLine}
-                                  onClick={() => confirmInlineAssignment(line)}
-                                >
-                                  {savingThisLine ? "Salvo..." : "Conferma"}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-
-                          <div style={{ marginTop: 16 }}>
-                            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 10 }}>
-                              Lotti assegnati
-                            </div>
-
-                            {lineAssignments.length === 0 ? (
-                              <div
-                                style={{
-                                  ...cardStyle({ background: "#f8fafc" }),
-                                  padding: 14,
-                                  color: "#66758b",
-                                }}
-                              >
-                                Nessun lotto assegnato.
-                              </div>
-                            ) : (
-                              <div style={{ display: "grid", gap: 10 }}>
-                                {lineAssignments.map((assignment) => {
-                                  const lot = lots.find(
-                                    (item) => String(item.id) === String(assignment.lotId)
-                                  );
-
-                                  return (
-                                    <div
-                                      key={assignment.assignmentId}
-                                      style={{ ...cardStyle({ background: "#f8fafc" }), padding: 14 }}
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      gap: 8,
+                                      justifyContent: isSmallLayout ? "stretch" : "flex-end",
+                                    }}
+                                  >
+                                    <button
+                                      style={{
+                                        ...compactBtnStyle("primary", savingThisLine),
+                                        flex: isSmallLayout ? 1 : "initial",
+                                      }}
+                                      disabled={savingThisLine}
+                                      onClick={() => confirmInlineAssignment(line)}
                                     >
-                                      <div
-                                        style={{
-                                          display: "flex",
-                                          justifyContent: "space-between",
-                                          gap: 12,
-                                          alignItems: "center",
-                                          flexWrap: "wrap",
-                                        }}
-                                      >
-                                        <div>
-                                          <div style={{ fontWeight: 800 }}>
-                                            Lotto {lot?.lot || assignment.lotId}
-                                          </div>
-                                          <div style={{ marginTop: 6, color: "#66758b" }}>
-                                            Quantità {assignment.qty}
-                                            {lot?.expiry ? ` · Scadenza ${fmtDate(lot.expiry)}` : ""}
-                                          </div>
-                                        </div>
+                                      {savingThisLine ? "Salvo..." : "Assegna"}
+                                    </button>
 
-                                        <button
-                                          style={btnStyle("outline")}
-                                          onClick={() =>
-                                            deleteAssignment(line.lineId, assignment.assignmentId)
-                                          }
-                                        >
-                                          <Trash2 size={16} />
-                                        </button>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
+                                    {isAdmin ? (
+                                      <button
+                                        style={compactBtnStyle("outline")}
+                                        onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                      >
+                                        <Trash2 size={15} />
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
+
+                          {lineAssignments.length > 0 ? (
+                            <div
+                              style={{
+                                marginTop: 10,
+                                paddingTop: 10,
+                                borderTop: "1px solid #e5e7eb",
+                                display: "flex",
+                                gap: 8,
+                                alignItems: "center",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <span style={{ color: "#66758b", fontSize: 13, fontWeight: 800 }}>
+                                Assegnati:
+                              </span>
+
+                              {lineAssignments.map((assignment) => {
+                                const lot = lots.find(
+                                  (item) => String(item.id) === String(assignment.lotId)
+                                );
+
+                                return (
+                                  <span
+                                    key={assignment.assignmentId}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 6,
+                                      border: "1px solid #d8dee8",
+                                      background: "#f8fafc",
+                                      borderRadius: 999,
+                                      padding: "5px 7px 5px 10px",
+                                      fontSize: 13,
+                                      fontWeight: 800,
+                                    }}
+                                  >
+                                    {lot?.lot || assignment.lotId} x {assignment.qty}
+                                    <button
+                                      onClick={() =>
+                                        deleteAssignment(line.lineId, assignment.assignmentId)
+                                      }
+                                      style={{
+                                        border: "none",
+                                        background: "transparent",
+                                        cursor: "pointer",
+                                        padding: 0,
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        color: "#991b1b",
+                                      }}
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })}
