@@ -1,4 +1,4 @@
-// versione immediata - fix overflow pulsante assegna ipad
+// versione admin righe ordine - add/update line
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -431,6 +431,8 @@ export default function App() {
   const [assignQty, setAssignQty] = useState("");
 
   const [orderDialogOpen, setOrderDialogOpen] = useState(false);
+  const [addLineDialogOpen, setAddLineDialogOpen] = useState(false);
+  const [editLineDialogOpen, setEditLineDialogOpen] = useState(false);
   const [productDialogOpen, setProductDialogOpen] = useState(false);
   const [lotDialogOpen, setLotDialogOpen] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
@@ -442,6 +444,14 @@ export default function App() {
 
   const [newOrderCustomer, setNewOrderCustomer] = useState("");
   const [newOrderLines, setNewOrderLines] = useState([{ productId: "", qtyOrdered: "" }]);
+
+  const [newLineProductId, setNewLineProductId] = useState("");
+  const [newLineQty, setNewLineQty] = useState("");
+  const [savingNewLine, setSavingNewLine] = useState(false);
+
+  const [editingLineId, setEditingLineId] = useState("");
+  const [editingLineQty, setEditingLineQty] = useState("");
+  const [savingEditedLine, setSavingEditedLine] = useState(false);
 
   const [newProductCode, setNewProductCode] = useState("");
   const [newProductName, setNewProductName] = useState("");
@@ -1314,6 +1324,183 @@ export default function App() {
     setAdminDialogOpen(false);
   };
 
+  const openAddLineDialog = () => {
+    if (!isAdmin || !selectedOrder) return;
+
+    setNewLineProductId("");
+    setNewLineQty("");
+    setAddLineDialogOpen(true);
+  };
+
+  const openEditLineDialog = (line) => {
+    if (!isAdmin || !line) return;
+
+    setEditingLineId(line.lineId);
+    setEditingLineQty(String(line.qtyOrdered || ""));
+    setEditLineDialogOpen(true);
+  };
+
+  const createOrderLine = async () => {
+    if (!isAdmin || !selectedOrder) return;
+
+    if (!newLineProductId) {
+      alert("Seleziona il prodotto");
+      return;
+    }
+
+    const qtyOrdered = Number(newLineQty);
+
+    if (!qtyOrdered || qtyOrdered <= 0) {
+      alert("Inserisci una quantità valida");
+      return;
+    }
+
+    const product = products.find((item) => String(item.id) === String(newLineProductId));
+
+    if (!product) {
+      alert("Prodotto non trovato");
+      return;
+    }
+
+    const newLine = {
+      lineId: `RIGA-${Date.now()}`,
+      orderId: selectedOrder.id,
+      productId: String(product.id),
+      productCode: product.code || product.id,
+      qtyOrdered,
+      qtyAssignedFromSheet: 0,
+    };
+
+    setSavingNewLine(true);
+
+    setOrders((prev) =>
+      prev.map((order) =>
+        String(order.id) === String(selectedOrder.id)
+          ? { ...order, lines: [...(order.lines || []), newLine] }
+          : order
+      )
+    );
+
+    setAddLineDialogOpen(false);
+    setNewLineProductId("");
+    setNewLineQty("");
+
+    try {
+      const result = await callSheetsApi({
+        action: "addOrderLine",
+        payload: JSON.stringify({
+          orderId: selectedOrder.id,
+          lineId: newLine.lineId,
+          productId: product.code || product.id,
+          qtyOrdered,
+        }),
+      });
+
+      if (!result || !result.success) {
+        setOrders((prev) =>
+          prev.map((order) =>
+            String(order.id) === String(selectedOrder.id)
+              ? {
+                  ...order,
+                  lines: (order.lines || []).filter(
+                    (line) => String(line.lineId) !== String(newLine.lineId)
+                  ),
+                }
+              : order
+          )
+        );
+
+        alert(
+          "Errore nel salvataggio riga ordine sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+      }
+    } catch (error) {
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.id) === String(selectedOrder.id)
+            ? {
+                ...order,
+                lines: (order.lines || []).filter(
+                  (line) => String(line.lineId) !== String(newLine.lineId)
+                ),
+              }
+            : order
+        )
+      );
+
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingNewLine(false);
+    }
+  };
+
+  const saveEditedOrderLine = async () => {
+    if (!isAdmin || !editingLineId) return;
+
+    const qtyOrdered = Number(editingLineQty);
+
+    if (!qtyOrdered || qtyOrdered <= 0) {
+      alert("Inserisci una quantità valida");
+      return;
+    }
+
+    const previousOrders = orders;
+    const assignedQty = (assignments[editingLineId] || []).reduce(
+      (sum, assignment) => sum + Number(assignment.qty || 0),
+      0
+    );
+
+    if (qtyOrdered < assignedQty) {
+      alert("La quantità non può essere minore della quantità già assegnata");
+      return;
+    }
+
+    const lineIdToUpdate = editingLineId;
+
+    setSavingEditedLine(true);
+
+    setOrders((prev) =>
+      prev.map((order) => ({
+        ...order,
+        lines: (order.lines || []).map((line) =>
+          String(line.lineId) === String(lineIdToUpdate)
+            ? { ...line, qtyOrdered }
+            : line
+        ),
+      }))
+    );
+
+    setEditLineDialogOpen(false);
+    setEditingLineId("");
+    setEditingLineQty("");
+
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrderLine",
+        payload: JSON.stringify({
+          lineId: lineIdToUpdate,
+          qtyOrdered,
+        }),
+      });
+
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+
+        alert(
+          "Errore nel salvataggio modifica riga sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+      }
+    } catch (error) {
+      setOrders(previousOrders);
+
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingEditedLine(false);
+    }
+  };
+
   const deleteLine = async (orderId, lineId) => {
     if (!orderId || !lineId) return;
 
@@ -1660,9 +1847,17 @@ export default function App() {
                         </div>
                       </div>
 
-                      <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
-                        <Trash2 size={16} /> Elimina ordine
-                      </button>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        {isAdmin ? (
+                          <button style={btnStyle("primary")} onClick={openAddLineDialog}>
+                            <Plus size={16} /> Riga
+                          </button>
+                        ) : null}
+
+                        <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
+                          <Trash2 size={16} /> Elimina ordine
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -1818,15 +2013,33 @@ export default function App() {
                                     Quantità completata
                                   </span>
                                   {isAdmin ? (
-                                    <button
+                                    <div
                                       style={{
-                                        ...compactBtnStyle("outline"),
+                                        display: "flex",
+                                        gap: 8,
                                         width: isSmallLayout ? "100%" : "auto",
                                       }}
-                                      onClick={() => deleteLine(selectedOrder.id, line.lineId)}
                                     >
-                                      <Trash2 size={15} /> Riga
-                                    </button>
+                                      <button
+                                        style={{
+                                          ...compactBtnStyle("outline"),
+                                          width: isSmallLayout ? "100%" : "auto",
+                                        }}
+                                        onClick={() => openEditLineDialog(line)}
+                                      >
+                                        Qtà
+                                      </button>
+
+                                      <button
+                                        style={{
+                                          ...compactBtnStyle("outline"),
+                                          width: isSmallLayout ? "100%" : "auto",
+                                        }}
+                                        onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                      >
+                                        <Trash2 size={15} /> Riga
+                                      </button>
+                                    </div>
                                   ) : null}
                                 </div>
                               ) : availableLots.length === 0 ? (
@@ -1843,12 +2056,21 @@ export default function App() {
                                     Nessun lotto disponibile
                                   </span>
                                   {isAdmin ? (
-                                    <button
-                                      style={compactBtnStyle("outline")}
-                                      onClick={() => deleteLine(selectedOrder.id, line.lineId)}
-                                    >
-                                      <Trash2 size={15} /> Riga
-                                    </button>
+                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                      <button
+                                        style={compactBtnStyle("outline")}
+                                        onClick={() => openEditLineDialog(line)}
+                                      >
+                                        Qtà
+                                      </button>
+
+                                      <button
+                                        style={compactBtnStyle("outline")}
+                                        onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                      >
+                                        <Trash2 size={15} /> Riga
+                                      </button>
+                                    </div>
                                   ) : null}
                                 </div>
                               ) : (
@@ -1913,6 +2135,13 @@ export default function App() {
                                     </button>
 
                                     {isAdmin ? (
+                                      <button
+                                        style={compactBtnStyle("outline")}
+                                        onClick={() => openEditLineDialog(line)}
+                                      >
+                                        Qtà
+                                      </button>
+
                                       <button
                                         style={compactBtnStyle("outline")}
                                         onClick={() => deleteLine(selectedOrder.id, line.lineId)}
@@ -2369,6 +2598,77 @@ export default function App() {
               onClick={saveEditedProduct}
             >
               {savingProduct ? "Salvataggio..." : "Salva modifiche"}
+            </button>
+          </div>
+        </Modal>
+
+        <Modal open={addLineDialogOpen} title="Aggiungi riga ordine" onClose={() => setAddLineDialogOpen(false)} maxWidth={560}>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 14 }}>
+              <div style={{ fontWeight: 800 }}>Ordine {selectedOrder?.id}</div>
+              <div style={{ marginTop: 4, color: "#66758b" }}>
+                {selectedOrder?.customer}
+              </div>
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Prodotto</label>
+              <select
+                style={inputStyle()}
+                value={newLineProductId}
+                onChange={(event) => setNewLineProductId(event.target.value)}
+              >
+                <option value="">Seleziona prodotto</option>
+                {products.map((product) => (
+                  <option key={product.id} value={String(product.id)}>
+                    {product.code} · {product.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Quantità ordinata</label>
+              <input
+                style={inputStyle()}
+                type="number"
+                min="1"
+                value={newLineQty}
+                onChange={(event) => setNewLineQty(event.target.value)}
+                placeholder="0"
+              />
+            </div>
+
+            <button
+              style={btnStyle("primary", savingNewLine)}
+              disabled={savingNewLine}
+              onClick={createOrderLine}
+            >
+              {savingNewLine ? "Salvataggio..." : "Aggiungi riga"}
+            </button>
+          </div>
+        </Modal>
+
+        <Modal open={editLineDialogOpen} title="Modifica quantità riga" onClose={() => setEditLineDialogOpen(false)} maxWidth={460}>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <label style={labelStyle()}>Quantità ordinata</label>
+              <input
+                style={inputStyle()}
+                type="number"
+                min="1"
+                value={editingLineQty}
+                onChange={(event) => setEditingLineQty(event.target.value)}
+                placeholder="0"
+              />
+            </div>
+
+            <button
+              style={btnStyle("primary", savingEditedLine)}
+              disabled={savingEditedLine}
+              onClick={saveEditedOrderLine}
+            >
+              {savingEditedLine ? "Salvataggio..." : "Salva quantità"}
             </button>
           </div>
         </Modal>
