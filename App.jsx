@@ -1,4 +1,4 @@
-// versione ottimizzata velocità ipad
+// versione veloce reale - residui calcolati solo da assegnazioni
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -562,10 +562,7 @@ export default function App() {
           0
         );
 
-        const assignedQty = Math.max(
-          Number(line.qtyAssignedFromSheet || 0),
-          assignedFromAssignments
-        );
+        const assignedQty = assignedFromAssignments;
 
         const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
 
