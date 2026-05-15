@@ -94,6 +94,8 @@ function cardStyle(extra = {}) {
     border: "1px solid #e5e7eb",
     borderRadius: 24,
     boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+    minWidth: 0,
+    boxSizing: "border-box",
     ...extra,
   };
 }
@@ -431,6 +433,30 @@ export default function App() {
   const [editProductUom, setEditProductUom] = useState("pz");
   const [savingProduct, setSavingProduct] = useState(false);
   const [deletingProductId, setDeletingProductId] = useState("");
+  const [windowWidth, setWindowWidth] = useState(
+    typeof window !== "undefined" ? window.innerWidth : 1280
+  );
+
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowWidth(window.innerWidth);
+    };
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  const isIPadLayout = windowWidth <= 1100;
+  const isSmallLayout = windowWidth <= 760;
+
+  const responsiveTwoColumns = isIPadLayout ? "1fr" : "360px minmax(0, 1fr)";
+  const responsiveOrderDetailColumns = isIPadLayout ? "1fr" : "1.1fr 0.9fr";
+  const responsiveProductColumns = isIPadLayout ? "1fr" : "repeat(2, minmax(0, 1fr))";
+  const responsiveOrderLineColumns = isSmallLayout ? "1fr" : "1fr 140px 110px";
 
   const loadDataFromSheets = async () => {
     setLoadingData(true);
@@ -459,9 +485,9 @@ export default function App() {
       setSelectedOrderId(mergedOrders[0]?.id ?? "");
       setSelectedLineId(mergedOrders[0]?.lines?.[0]?.lineId ?? "");
     } catch (error) {
-  setLoadError(
-    "Non sono riuscito a leggere i dati dal Google Sheet. Errore reale: " + String(error)
-  );
+      setLoadError(
+        "Non sono riuscito a leggere i dati dal Google Sheet. Per ora vedi una demo locale."
+      );
       setProducts(fallbackProducts);
       setLots(fallbackLots);
       setOrders([]);
@@ -1240,7 +1266,7 @@ export default function App() {
         fontFamily: "Arial, sans-serif",
       }}
     >
-      <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
         <div style={{ ...cardStyle(), padding: 20, marginBottom: 20 }}>
           <div
             style={{
@@ -1326,7 +1352,7 @@ export default function App() {
         ) : null}
 
         {page === "ordini" && (
-          <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: responsiveTwoColumns, gap: 16, minWidth: 0 }}>
             <div style={{ ...cardStyle(), padding: 20 }}>
               <div
                 style={{
@@ -1428,7 +1454,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveOrderDetailColumns, gap: 16, minWidth: 0 }}>
                     <div style={{ display: "grid", gap: 16 }}>
                       {selectedOrder.lines.map((line) => {
                         const product = productMap[String(line.productId)];
@@ -1488,7 +1514,7 @@ export default function App() {
                             <div
                               style={{
                                 display: "grid",
-                                gridTemplateColumns: "repeat(3, 1fr)",
+                                gridTemplateColumns: isSmallLayout ? "1fr" : "repeat(3, 1fr)",
                                 gap: 12,
                                 marginTop: 18,
                               }}
@@ -1559,7 +1585,7 @@ export default function App() {
                             <div
                               style={{
                                 display: "grid",
-                                gridTemplateColumns: "1fr 1fr",
+                                gridTemplateColumns: isSmallLayout ? "1fr" : "1fr 1fr",
                                 gap: 12,
                                 marginTop: 18,
                               }}
@@ -1933,7 +1959,7 @@ export default function App() {
                     borderRadius: 18,
                     padding: 14,
                     display: "grid",
-                    gridTemplateColumns: "1fr 140px 110px",
+                    gridTemplateColumns: responsiveOrderLineColumns,
                     gap: 12,
                   }}
                 >
