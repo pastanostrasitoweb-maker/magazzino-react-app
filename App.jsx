@@ -35,8 +35,13 @@ function callSheetsApi(params = {}) {
     const cleanup = () => {
       try {
         delete window[callbackName];
-      } catch {}
-      if (script && script.parentNode) script.parentNode.removeChild(script);
+      } catch (error) {
+        // Ignora errori di pulizia del callback.
+      }
+
+      if (script && script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
     };
 
     window[callbackName] = (data) => {
@@ -45,11 +50,13 @@ function callSheetsApi(params = {}) {
     };
 
     const query = new URLSearchParams();
+
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== "") {
         query.set(key, value);
       }
     });
+
     query.set("callback", callbackName);
 
     script = document.createElement("script");
@@ -216,7 +223,10 @@ function normalizeLots(rows, products) {
       const productCode = String(
         getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "Prodotto"])
       ).trim();
-      const productIdRaw = String(getField(row, ["ID_Prodotto", "Id_Prodotto", "ProductId"])).trim();
+
+      const productIdRaw = String(
+        getField(row, ["ID_Prodotto", "Id_Prodotto", "ProductId"])
+      ).trim();
 
       return {
         id: String(
@@ -261,7 +271,10 @@ function normalizeOrderLines(rows, products) {
       const productCode = String(
         getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "Prodotto"])
       ).trim();
-      const productIdRaw = String(getField(row, ["ID_Prodotto", "Id_Prodotto", "ProductId"])).trim();
+
+      const productIdRaw = String(
+        getField(row, ["ID_Prodotto", "Id_Prodotto", "ProductId"])
+      ).trim();
 
       return {
         lineId: String(getField(row, ["ID_Riga", "Id_Riga", "id"]) || `RIGA-${index + 1}`),
@@ -289,8 +302,8 @@ function normalizeOrderLines(rows, products) {
 }
 
 function normalizeAssignments(rows, lines, lots) {
-  const lineIds = new Set(lines.map((l) => String(l.lineId)));
-  const lotByCode = Object.fromEntries(lots.map((l) => [String(l.lot), l.id]));
+  const lineIds = new Set(lines.map((line) => String(line.lineId)));
+  const lotByCode = Object.fromEntries(lots.map((lot) => [String(lot.lot), lot.id]));
   const grouped = {};
 
   rows.forEach((row, index) => {
@@ -300,6 +313,7 @@ function normalizeAssignments(rows, lines, lots) {
     const lotCode = String(
       getField(row, ["Lotto", "Codice_Lotto", "Codice lotto", "ID_Lotto"])
     ).trim();
+
     const lotId = lotByCode[lotCode] || lotCode;
     if (!lotId) return;
 
@@ -351,7 +365,7 @@ function Modal({ open, title, children, onClose, maxWidth = 720 }) {
       }}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
         style={{
           ...cardStyle(),
           width: "100%",
@@ -461,12 +475,13 @@ export default function App() {
   }, []);
 
   const productMap = useMemo(
-    () => Object.fromEntries(products.map((p) => [String(p.id), p])),
+    () => Object.fromEntries(products.map((product) => [String(product.id), product])),
     [products]
   );
 
   const lotsAvailableMap = useMemo(() => {
     const usedByLot = {};
+
     Object.values(assignments)
       .flat()
       .forEach((assignment) => {
@@ -496,6 +511,7 @@ export default function App() {
         );
 
         const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
+
         return { ...line, assignedQty, qtyToAssign };
       });
 
@@ -507,10 +523,10 @@ export default function App() {
         explicitStatus === "Preparato"
           ? "Preparato"
           : totalToAssign === 0
-          ? "Preparato"
-          : totalToAssign < totalOrdered
-          ? "Parziale"
-          : "Da preparare";
+            ? "Preparato"
+            : totalToAssign < totalOrdered
+              ? "Parziale"
+              : "Da preparare";
 
       return { ...order, lines, totalToAssign, computedStatus };
     });
@@ -518,7 +534,9 @@ export default function App() {
 
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
+
     if (!q) return ordersWithComputed;
+
     return ordersWithComputed.filter(
       (order) =>
         String(order.id).toLowerCase().includes(q) ||
@@ -537,6 +555,7 @@ export default function App() {
 
   const availableLotsForSelectedLine = useMemo(() => {
     if (!selectedLine) return [];
+
     return lots
       .filter(
         (lot) =>
@@ -548,6 +567,7 @@ export default function App() {
 
   const filteredProducts = useMemo(() => {
     const q = productSearch.trim().toLowerCase();
+
     return products
       .map((product) => {
         const productLots = lots.filter((lot) => String(lot.productId) === String(product.id));
@@ -555,6 +575,7 @@ export default function App() {
           (sum, lot) => sum + (lotsAvailableMap[String(lot.id)] || 0),
           0
         );
+
         return { ...product, productLots, totalAvailable };
       })
       .filter(
@@ -574,9 +595,12 @@ export default function App() {
 
   const handleLotSelect = (lotId) => {
     setSelectedLotId(lotId);
+
     if (!selectedLine) return;
+
     const available = lotsAvailableMap[String(lotId)] || 0;
     const suggestedQty = Math.min(selectedLine.qtyToAssign, available);
+
     setAssignQty(String(suggestedQty));
   };
 
@@ -584,24 +608,27 @@ export default function App() {
     if (!selectedLine || !selectedLotId || !assignQty) return;
 
     const qty = Number(assignQty);
+
     if (!qty || qty <= 0) {
       alert("Inserisci una quantità valida");
       return;
     }
 
     const selectedLot = lots.find((lot) => String(lot.id) === String(selectedLotId));
+
     if (!selectedLot) {
       alert("Lotto non trovato");
       return;
     }
 
     const available = lotsAvailableMap[String(selectedLotId)] || 0;
+
     if (qty > available) {
       alert("La quantità supera la disponibilità del lotto");
       return;
     }
 
-    if (selectedLine && qty > selectedLine.qtyToAssign) {
+    if (qty > selectedLine.qtyToAssign) {
       alert("La quantità supera il residuo da assegnare");
       return;
     }
@@ -639,6 +666,7 @@ export default function App() {
       setAssignDialogOpen(false);
       setSelectedLotId("");
       setAssignQty("");
+
       alert("Lotto assegnato correttamente");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -700,6 +728,7 @@ export default function App() {
       .filter((line) => line.productId && Number(line.qtyOrdered) > 0)
       .map((line, index) => {
         const product = products.find((p) => String(p.id) === String(line.productId));
+
         return {
           lineId: `RIGA-${Date.now()}-${index}`,
           productId: String(line.productId),
@@ -749,6 +778,7 @@ export default function App() {
       setNewOrderLines([{ productId: "", qtyOrdered: "" }]);
       setOrderDialogOpen(false);
       setPage("ordini");
+
       alert("Ordine salvato correttamente");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -777,16 +807,23 @@ export default function App() {
 
       setAssignments((prev) => {
         const next = { ...prev };
-        const orderToDelete = orders.find((o) => String(o.id) === String(orderId));
+        const orderToDelete = orders.find((order) => String(order.id) === String(orderId));
+
         if (orderToDelete?.lines) {
-          orderToDelete.lines.forEach((line) => delete next[line.lineId]);
+          orderToDelete.lines.forEach((line) => {
+            delete next[line.lineId];
+          });
         }
+
         return next;
       });
 
       const remainingOrders = orders.filter((order) => String(order.id) !== String(orderId));
+
       setOrders(remainingOrders);
+
       const nextOrder = remainingOrders[0];
+
       setSelectedOrderId(nextOrder?.id ?? "");
       setSelectedLineId(nextOrder?.lines?.[0]?.lineId ?? "");
 
@@ -846,6 +883,7 @@ export default function App() {
       setNewLotQty("");
       setLotDialogOpen(false);
       setPage("prodotti");
+
       alert("Lotto salvato correttamente");
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
@@ -917,6 +955,7 @@ export default function App() {
 
   const openEditProductDialog = (product) => {
     if (!isAdmin) return;
+
     setEditingProductId(product.id);
     setEditProductCode(product.code);
     setEditProductName(product.name);
@@ -1041,6 +1080,7 @@ export default function App() {
       setAdminError("");
       return;
     }
+
     setAdminError("PIN non corretto");
   };
 
@@ -1057,6 +1097,7 @@ export default function App() {
     const conferma = window.confirm(
       "Vuoi eliminare davvero questa riga ordine? Verranno eliminate anche eventuali assegnazioni collegate."
     );
+
     if (!conferma) return;
 
     try {
@@ -1095,6 +1136,7 @@ export default function App() {
       setOrders(updatedOrders);
 
       const sameOrder = updatedOrders.find((order) => String(order.id) === String(orderId));
+
       setSelectedOrderId(sameOrder?.id ?? updatedOrders[0]?.id ?? "");
       setSelectedLineId(
         sameOrder?.lines?.[0]?.lineId ?? updatedOrders[0]?.lines?.[0]?.lineId ?? ""
@@ -1187,40 +1229,66 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f2f4f8", padding: 20, fontFamily: "Arial, sans-serif" }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#f2f4f8",
+        padding: 20,
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <div style={{ ...cardStyle(), padding: 20, marginBottom: 20 }}>
-          <div style={{ display: "flex", gap: 14, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              justifyContent: "space-between",
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
             <div>
-              <div style={{ fontSize: 32, fontWeight: 900, color: "#09122d" }}>MAGAZZINO 2.0</div>
-              <div style={{ marginTop: 8, color: "#617086", fontSize: 18 }}>
-                Interfaccia semplificata per magazzino: pochi passaggi, bottoni grandi, dati chiari.
+              <div style={{ fontSize: 32, fontWeight: 900, color: "#09122d" }}>
+                MAGAZZINO 2.0
               </div>
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button style={btnStyle(page === "ordini" ? "primary" : "soft")} onClick={() => setPage("ordini")}>
+              <button
+                style={btnStyle(page === "ordini" ? "primary" : "soft")}
+                onClick={() => setPage("ordini")}
+              >
                 <ClipboardList size={18} /> Ordini
               </button>
-              <button style={btnStyle(page === "prodotti" ? "primary" : "soft")} onClick={() => setPage("prodotti")}>
+
+              <button
+                style={btnStyle(page === "prodotti" ? "primary" : "soft")}
+                onClick={() => setPage("prodotti")}
+              >
                 <Package size={18} /> Prodotti
               </button>
+
               <button style={btnStyle("primary")} onClick={() => setOrderDialogOpen(true)}>
                 <Plus size={18} /> Nuovo ordine
               </button>
+
               {isAdmin && (
                 <>
                   <button style={btnStyle("primary")} onClick={() => setProductDialogOpen(true)}>
                     <Plus size={18} /> Nuovo prodotto
                   </button>
+
                   <button style={btnStyle("primary")} onClick={() => setLotDialogOpen(true)}>
                     <Boxes size={18} /> Carica lotto
                   </button>
                 </>
               )}
+
               <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
                 <RefreshCw size={18} /> Aggiorna
               </button>
+
               {!isAdmin ? (
                 <button style={btnStyle("outline")} onClick={() => setAdminDialogOpen(true)}>
                   <Lock size={18} /> Admin
@@ -1235,7 +1303,15 @@ export default function App() {
         </div>
 
         {loadError ? (
-          <div style={{ ...cardStyle(), padding: 16, marginBottom: 16, background: "#fff8e6", color: "#8a5a00" }}>
+          <div
+            style={{
+              ...cardStyle(),
+              padding: 16,
+              marginBottom: 16,
+              background: "#fff8e6",
+              color: "#8a5a00",
+            }}
+          >
             {loadError}
           </div>
         ) : null}
@@ -1249,19 +1325,31 @@ export default function App() {
         {page === "ordini" && (
           <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 16 }}>
             <div style={{ ...cardStyle(), padding: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 18,
+                }}
+              >
                 <div style={{ fontSize: 20, fontWeight: 800 }}>Ordini</div>
+
                 <button style={btnStyle("primary")} onClick={() => setOrderDialogOpen(true)}>
                   <Plus size={16} /> Nuovo
                 </button>
               </div>
 
               <div style={{ position: "relative", marginBottom: 16 }}>
-                <Search size={16} style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }} />
+                <Search
+                  size={16}
+                  style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+                />
+
                 <input
                   style={{ ...inputStyle(), paddingLeft: 40 }}
                   value={orderSearch}
-                  onChange={(e) => setOrderSearch(e.target.value)}
+                  onChange={(event) => setOrderSearch(event.target.value)}
                   placeholder="Cerca ordine o cliente"
                 />
               </div>
@@ -1278,7 +1366,8 @@ export default function App() {
                       textAlign: "left",
                       padding: 18,
                       borderRadius: 24,
-                      border: selectedOrderId === order.id ? "2px solid #0f172a" : "1px solid #dbe2ea",
+                      border:
+                        selectedOrderId === order.id ? "2px solid #0f172a" : "1px solid #dbe2ea",
                       background: selectedOrderId === order.id ? "#f8fafc" : "#fff",
                       cursor: "pointer",
                     }}
@@ -1288,31 +1377,49 @@ export default function App() {
                         <div style={{ fontSize: 18, fontWeight: 800 }}>{order.id}</div>
                         <div style={{ color: "#66758b", marginTop: 4 }}>{order.customer}</div>
                       </div>
+
                       <span style={badgeStyle("outline")}>{order.computedStatus}</span>
                     </div>
-                    <div style={{ marginTop: 14, color: "#66758b" }}>Da assegnare: {order.totalToAssign}</div>
+
+                    <div style={{ marginTop: 14, color: "#66758b" }}>
+                      Da assegnare: {order.totalToAssign}
+                    </div>
                   </button>
                 ))}
               </div>
             </div>
 
             <div style={{ ...cardStyle(), padding: 20 }}>
-              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 18 }}>Preparazione ordine</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 18 }}>
+                Preparazione ordine
+              </div>
 
               {selectedOrder ? (
                 <>
-                  <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 20, marginBottom: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                  <div
+                    style={{
+                      ...cardStyle({ background: "#f8fafc" }),
+                      padding: 20,
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "flex-start",
+                      }}
+                    >
                       <div>
                         <div style={{ fontSize: 22, fontWeight: 900 }}>{selectedOrder.id}</div>
+
                         <div style={{ marginTop: 6, color: "#66758b" }}>
                           {selectedOrder.customer} · {fmtDate(selectedOrder.date)}
                         </div>
                       </div>
-                      <button
-                        style={btnStyle("outline")}
-                        onClick={() => deleteOrder(selectedOrder.id)}
-                      >
+
+                      <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
                         <Trash2 size={16} /> Elimina ordine
                       </button>
                     </div>
@@ -1337,16 +1444,26 @@ export default function App() {
                               cursor: "pointer",
                             }}
                           >
-                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                            <div
+                              style={{ display: "flex", justifyContent: "space-between", gap: 12 }}
+                            >
                               <div>
-                                <div style={{ fontSize: 18, fontWeight: 800 }}>{product?.code}</div>
-                                <div style={{ marginTop: 4, color: "#55657a" }}>{product?.name}</div>
+                                <div style={{ fontSize: 18, fontWeight: 800 }}>
+                                  {product?.code}
+                                </div>
+                                <div style={{ marginTop: 4, color: "#55657a" }}>
+                                  {product?.name}
+                                </div>
                               </div>
+
                               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                <span style={badgeStyle("outline")}>Da assegnare {line.qtyToAssign}</span>
+                                <span style={badgeStyle("outline")}>
+                                  Da assegnare {line.qtyToAssign}
+                                </span>
+
                                 <span
-                                  onClick={(e) => {
-                                    e.stopPropagation();
+                                  onClick={(event) => {
+                                    event.stopPropagation();
                                     deleteLine(selectedOrder.id, line.lineId);
                                   }}
                                   style={{
@@ -1365,16 +1482,47 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 18 }}>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "repeat(3, 1fr)",
+                                gap: 12,
+                                marginTop: 18,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Ordinati</div>
-                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>{line.qtyOrdered}</div>
+                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>
+                                  {line.qtyOrdered}
+                                </div>
                               </div>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Assegnati</div>
-                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>{line.assignedQty}</div>
+                                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>
+                                  {line.assignedQty}
+                                </div>
                               </div>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Da assegnare</div>
                                 <div
                                   style={{
@@ -1400,18 +1548,45 @@ export default function App() {
                             <div style={{ fontSize: 18, fontWeight: 800 }}>
                               {productMap[String(selectedLine.productId)]?.name}
                             </div>
+
                             <div style={{ marginTop: 6, color: "#66758b" }}>
                               Codice {productMap[String(selectedLine.productId)]?.code}
                             </div>
 
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 18 }}>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "1fr 1fr",
+                                gap: 12,
+                                marginTop: 18,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
                                 <div style={{ fontSize: 13, color: "#6b7280" }}>Da assegnare</div>
-                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>{selectedLine.qtyToAssign}</div>
+                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>
+                                  {selectedLine.qtyToAssign}
+                                </div>
                               </div>
-                              <div style={{ ...cardStyle({ background: "#f1f5f9" }), padding: 16, textAlign: "center" }}>
-                                <div style={{ fontSize: 13, color: "#6b7280" }}>Lotti disponibili</div>
-                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>{availableLotsForSelectedLine.length}</div>
+
+                              <div
+                                style={{
+                                  ...cardStyle({ background: "#f1f5f9" }),
+                                  padding: 16,
+                                  textAlign: "center",
+                                }}
+                              >
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>
+                                  Lotti disponibili
+                                </div>
+                                <div style={{ fontSize: 26, fontWeight: 900, marginTop: 6 }}>
+                                  {availableLotsForSelectedLine.length}
+                                </div>
                               </div>
                             </div>
 
@@ -1427,27 +1602,54 @@ export default function App() {
                           </div>
 
                           <div style={{ ...cardStyle(), padding: 20 }}>
-                            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>Lotti assegnati</div>
+                            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>
+                              Lotti assegnati
+                            </div>
+
                             <div style={{ display: "grid", gap: 12 }}>
                               {(assignments[selectedLine.lineId] || []).length === 0 ? (
-                                <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16, color: "#66758b" }}>
+                                <div
+                                  style={{
+                                    ...cardStyle({ background: "#f8fafc" }),
+                                    padding: 16,
+                                    color: "#66758b",
+                                  }}
+                                >
                                   Nessun lotto assegnato.
                                 </div>
                               ) : (
                                 (assignments[selectedLine.lineId] || []).map((assignment) => {
-                                  const lot = lots.find((item) => String(item.id) === String(assignment.lotId));
+                                  const lot = lots.find(
+                                    (item) => String(item.id) === String(assignment.lotId)
+                                  );
+
                                   return (
-                                    <div key={assignment.assignmentId} style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}>
-                                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                    <div
+                                      key={assignment.assignmentId}
+                                      style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}
+                                    >
+                                      <div
+                                        style={{
+                                          display: "flex",
+                                          justifyContent: "space-between",
+                                          gap: 12,
+                                        }}
+                                      >
                                         <div>
                                           <div style={{ fontWeight: 800 }}>Lotto {lot?.lot}</div>
                                           <div style={{ marginTop: 6, color: "#66758b" }}>
                                             Quantità {assignment.qty} · Scadenza {fmtDate(lot?.expiry)}
                                           </div>
                                         </div>
+
                                         <button
                                           style={btnStyle("outline")}
-                                          onClick={() => deleteAssignment(selectedLine.lineId, assignment.assignmentId)}
+                                          onClick={() =>
+                                            deleteAssignment(
+                                              selectedLine.lineId,
+                                              assignment.assignmentId
+                                            )
+                                          }
                                         >
                                           <Trash2 size={16} />
                                         </button>
@@ -1460,7 +1662,9 @@ export default function App() {
                           </div>
                         </>
                       ) : (
-                        <div style={{ ...cardStyle(), padding: 20, color: "#66758b" }}>Seleziona una riga.</div>
+                        <div style={{ ...cardStyle(), padding: 20, color: "#66758b" }}>
+                          Seleziona una riga.
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1480,13 +1684,24 @@ export default function App() {
 
         {page === "prodotti" && (
           <div style={{ ...cardStyle(), padding: 20 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "center",
+                flexWrap: "wrap",
+                marginBottom: 18,
+              }}
+            >
               <div style={{ fontSize: 22, fontWeight: 800 }}>Prodotti e disponibilità</div>
+
               {isAdmin && (
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <button style={btnStyle("primary")} onClick={() => setProductDialogOpen(true)}>
                     <Plus size={16} /> Nuovo prodotto
                   </button>
+
                   <button style={btnStyle("primary")} onClick={() => setLotDialogOpen(true)}>
                     <Boxes size={16} /> Carica lotto
                   </button>
@@ -1495,30 +1710,61 @@ export default function App() {
             </div>
 
             <div style={{ position: "relative", maxWidth: 520, marginBottom: 18 }}>
-              <Search size={16} style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }} />
+              <Search
+                size={16}
+                style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+              />
+
               <input
                 style={{ ...inputStyle(), paddingLeft: 40 }}
                 value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
+                onChange={(event) => setProductSearch(event.target.value)}
                 placeholder="Cerca prodotto o codice"
               />
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 16,
+              }}
+            >
               {filteredProducts.map((product) => (
                 <div key={product.id} style={{ ...cardStyle(), padding: 20 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      alignItems: "flex-start",
+                    }}
+                  >
                     <div>
                       <div style={{ fontSize: 18, fontWeight: 800 }}>{product.code}</div>
                       <div style={{ marginTop: 4, color: "#55657a" }}>{product.name}</div>
                     </div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        justifyContent: "flex-end",
+                      }}
+                    >
                       <span style={badgeStyle("outline")}>Disponibili {product.totalAvailable}</span>
+
                       {isAdmin && (
                         <>
-                          <button style={btnStyle("outline")} onClick={() => openEditProductDialog(product)}>
+                          <button
+                            style={btnStyle("outline")}
+                            onClick={() => openEditProductDialog(product)}
+                          >
                             <Pencil size={16} />
                           </button>
+
                           <button
                             style={btnStyle("danger", deletingProductId === String(product.id))}
                             disabled={deletingProductId === String(product.id)}
@@ -1533,7 +1779,13 @@ export default function App() {
 
                   <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
                     {product.productLots.length === 0 ? (
-                      <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 14, color: "#b45309" }}>
+                      <div
+                        style={{
+                          ...cardStyle({ background: "#fff7ed" }),
+                          padding: 14,
+                          color: "#b45309",
+                        }}
+                      >
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <AlertTriangle size={16} /> Nessun lotto disponibile
                         </div>
@@ -1542,24 +1794,34 @@ export default function App() {
                       product.productLots
                         .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
                         .map((lot) => (
-                          <div key={lot.id} style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                          <div
+                            key={lot.id}
+                            style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}
+                          >
+                            <div
+                              style={{ display: "flex", justifyContent: "space-between", gap: 12 }}
+                            >
                               <div>
                                 <div style={{ fontWeight: 800 }}>Lotto {lot.lot}</div>
                                 <div style={{ marginTop: 6, color: "#66758b" }}>
                                   Scadenza {fmtDate(lot.expiry)}
                                 </div>
                               </div>
+
                               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                 <div
                                   style={{
                                     fontSize: 20,
                                     fontWeight: 900,
-                                    color: lotsAvailableMap[String(lot.id)] <= 10 ? "#dc2626" : "#0f172a",
+                                    color:
+                                      lotsAvailableMap[String(lot.id)] <= 10
+                                        ? "#dc2626"
+                                        : "#0f172a",
                                   }}
                                 >
                                   {lotsAvailableMap[String(lot.id)]}
                                 </div>
+
                                 <button
                                   style={btnStyle("outline")}
                                   onClick={() => deleteLot(lot.id)}
@@ -1579,25 +1841,37 @@ export default function App() {
           </div>
         )}
 
-        <Modal open={assignDialogOpen} title="Assegna lotto" onClose={() => setAssignDialogOpen(false)} maxWidth={560}>
+        <Modal
+          open={assignDialogOpen}
+          title="Assegna lotto"
+          onClose={() => setAssignDialogOpen(false)}
+          maxWidth={560}
+        >
           {selectedLine && (
             <div style={{ display: "grid", gap: 18 }}>
               <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}>
-                <div style={{ fontWeight: 800 }}>{productMap[String(selectedLine.productId)]?.name}</div>
-                <div style={{ color: "#66758b", marginTop: 6 }}>Da assegnare: {selectedLine.qtyToAssign}</div>
+                <div style={{ fontWeight: 800 }}>
+                  {productMap[String(selectedLine.productId)]?.name}
+                </div>
+                <div style={{ color: "#66758b", marginTop: 6 }}>
+                  Da assegnare: {selectedLine.qtyToAssign}
+                </div>
               </div>
 
               <div>
                 <label style={labelStyle()}>Lotto</label>
+
                 <select
                   style={inputStyle()}
                   value={selectedLotId}
-                  onChange={(e) => handleLotSelect(e.target.value)}
+                  onChange={(event) => handleLotSelect(event.target.value)}
                 >
                   <option value="">Seleziona lotto</option>
+
                   {availableLotsForSelectedLine.map((lot) => (
                     <option key={lot.id} value={String(lot.id)}>
-                      {lot.lot} · scad. {fmtDate(lot.expiry)} · disp. {lotsAvailableMap[String(lot.id)]}
+                      {lot.lot} · scad. {fmtDate(lot.expiry)} · disp.{" "}
+                      {lotsAvailableMap[String(lot.id)]}
                     </option>
                   ))}
                 </select>
@@ -1605,14 +1879,16 @@ export default function App() {
 
               <div>
                 <label style={labelStyle()}>Quantità</label>
+
                 <input
                   style={inputStyle()}
                   type="number"
                   min="0"
                   value={assignQty}
-                  onChange={(e) => setAssignQty(e.target.value)}
+                  onChange={(event) => setAssignQty(event.target.value)}
                   placeholder="0"
                 />
+
                 <div style={{ marginTop: 8, color: "#66758b", fontSize: 14 }}>
                   Quantità proposta in automatico, ma modificabile a mano.
                 </div>
@@ -1625,14 +1901,20 @@ export default function App() {
           )}
         </Modal>
 
-        <Modal open={orderDialogOpen} title="Nuovo ordine" onClose={() => setOrderDialogOpen(false)} maxWidth={760}>
+        <Modal
+          open={orderDialogOpen}
+          title="Nuovo ordine"
+          onClose={() => setOrderDialogOpen(false)}
+          maxWidth={760}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>Cliente</label>
+
               <input
                 style={inputStyle()}
                 value={newOrderCustomer}
-                onChange={(e) => setNewOrderCustomer(e.target.value)}
+                onChange={(event) => setNewOrderCustomer(event.target.value)}
                 placeholder="Nome cliente"
               />
             </div>
@@ -1655,9 +1937,12 @@ export default function App() {
                   <select
                     style={inputStyle()}
                     value={line.productId}
-                    onChange={(e) => updateNewOrderLine(index, "productId", e.target.value)}
+                    onChange={(event) =>
+                      updateNewOrderLine(index, "productId", event.target.value)
+                    }
                   >
                     <option value="">Seleziona prodotto</option>
+
                     {products.map((product) => (
                       <option key={product.id} value={String(product.id)}>
                         {product.code} · {product.name}
@@ -1670,7 +1955,9 @@ export default function App() {
                     type="number"
                     min="1"
                     value={line.qtyOrdered}
-                    onChange={(e) => updateNewOrderLine(index, "qtyOrdered", e.target.value)}
+                    onChange={(event) =>
+                      updateNewOrderLine(index, "qtyOrdered", event.target.value)
+                    }
                     placeholder="Quantità"
                   />
 
@@ -1691,86 +1978,120 @@ export default function App() {
           </div>
         </Modal>
 
-        <Modal open={adminDialogOpen} title="Accesso admin" onClose={() => setAdminDialogOpen(false)} maxWidth={420}>
+        <Modal
+          open={adminDialogOpen}
+          title="Accesso admin"
+          onClose={() => setAdminDialogOpen(false)}
+          maxWidth={420}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>PIN</label>
+
               <input
                 style={inputStyle()}
                 type="password"
                 value={adminPinInput}
-                onChange={(e) => setAdminPinInput(e.target.value)}
+                onChange={(event) => setAdminPinInput(event.target.value)}
                 placeholder="Inserisci PIN"
               />
             </div>
+
             {adminError ? <div style={{ color: "#dc2626" }}>{adminError}</div> : null}
+
             <button style={btnStyle("primary")} onClick={handleAdminAccess}>
               Entra in admin
             </button>
           </div>
         </Modal>
 
-        <Modal open={editProductDialogOpen} title="Modifica prodotto" onClose={() => setEditProductDialogOpen(false)} maxWidth={560}>
+        <Modal
+          open={editProductDialogOpen}
+          title="Modifica prodotto"
+          onClose={() => setEditProductDialogOpen(false)}
+          maxWidth={560}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>Codice prodotto</label>
+
               <input
                 style={inputStyle()}
                 value={editProductCode}
-                onChange={(e) => setEditProductCode(e.target.value)}
+                onChange={(event) => setEditProductCode(event.target.value)}
               />
             </div>
+
             <div>
               <label style={labelStyle()}>Descrizione</label>
+
               <input
                 style={inputStyle()}
                 value={editProductName}
-                onChange={(e) => setEditProductName(e.target.value)}
+                onChange={(event) => setEditProductName(event.target.value)}
               />
             </div>
+
             <div>
               <label style={labelStyle()}>Unità di misura</label>
+
               <input
                 style={inputStyle()}
                 value={editProductUom}
-                onChange={(e) => setEditProductUom(e.target.value)}
+                onChange={(event) => setEditProductUom(event.target.value)}
               />
             </div>
-            <button style={btnStyle("primary", savingProduct)} disabled={savingProduct} onClick={saveEditedProduct}>
+
+            <button
+              style={btnStyle("primary", savingProduct)}
+              disabled={savingProduct}
+              onClick={saveEditedProduct}
+            >
               {savingProduct ? "Salvataggio..." : "Salva modifiche"}
             </button>
           </div>
         </Modal>
 
-        <Modal open={productDialogOpen} title="Nuovo prodotto" onClose={() => setProductDialogOpen(false)} maxWidth={560}>
+        <Modal
+          open={productDialogOpen}
+          title="Nuovo prodotto"
+          onClose={() => setProductDialogOpen(false)}
+          maxWidth={560}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>Codice prodotto</label>
+
               <input
                 style={inputStyle()}
                 value={newProductCode}
-                onChange={(e) => setNewProductCode(e.target.value)}
+                onChange={(event) => setNewProductCode(event.target.value)}
                 placeholder="Es. NFARMA 014"
               />
             </div>
+
             <div>
               <label style={labelStyle()}>Descrizione</label>
+
               <input
                 style={inputStyle()}
                 value={newProductName}
-                onChange={(e) => setNewProductName(e.target.value)}
+                onChange={(event) => setNewProductName(event.target.value)}
                 placeholder="Es. Mezzi paccheri 250"
               />
             </div>
+
             <div>
               <label style={labelStyle()}>Unità di misura</label>
+
               <input
                 style={inputStyle()}
                 value={newProductUom}
-                onChange={(e) => setNewProductUom(e.target.value)}
+                onChange={(event) => setNewProductUom(event.target.value)}
                 placeholder="pz"
               />
             </div>
+
             <button
               style={btnStyle("primary", savingNewProduct)}
               disabled={savingNewProduct}
@@ -1781,16 +2102,23 @@ export default function App() {
           </div>
         </Modal>
 
-        <Modal open={lotDialogOpen} title="Carica lotto" onClose={() => setLotDialogOpen(false)} maxWidth={560}>
+        <Modal
+          open={lotDialogOpen}
+          title="Carica lotto"
+          onClose={() => setLotDialogOpen(false)}
+          maxWidth={560}
+        >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
               <label style={labelStyle()}>Prodotto</label>
+
               <select
                 style={inputStyle()}
                 value={newLotProductId}
-                onChange={(e) => setNewLotProductId(e.target.value)}
+                onChange={(event) => setNewLotProductId(event.target.value)}
               >
                 <option value="">Seleziona prodotto</option>
+
                 {products.map((product) => (
                   <option key={product.id} value={String(product.id)}>
                     {product.code} · {product.name}
@@ -1798,35 +2126,42 @@ export default function App() {
                 ))}
               </select>
             </div>
+
             <div>
               <label style={labelStyle()}>Codice lotto</label>
+
               <input
                 style={inputStyle()}
                 value={newLotCode}
-                onChange={(e) => setNewLotCode(e.target.value)}
+                onChange={(event) => setNewLotCode(event.target.value)}
                 placeholder="Es. 2604110"
               />
             </div>
+
             <div>
               <label style={labelStyle()}>Scadenza</label>
+
               <input
                 style={inputStyle()}
                 type="date"
                 value={newLotExpiry}
-                onChange={(e) => setNewLotExpiry(e.target.value)}
+                onChange={(event) => setNewLotExpiry(event.target.value)}
               />
             </div>
+
             <div>
               <label style={labelStyle()}>Quantità caricata</label>
+
               <input
                 style={inputStyle()}
                 type="number"
                 min="1"
                 value={newLotQty}
-                onChange={(e) => setNewLotQty(e.target.value)}
+                onChange={(event) => setNewLotQty(event.target.value)}
                 placeholder="0"
               />
             </div>
+
             <button style={btnStyle("primary")} onClick={createLot}>
               Salva lotto
             </button>
