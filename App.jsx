@@ -1730,23 +1730,36 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div>
+                            <div style={{ minWidth: 0 }}>
                               {completed ? (
                                 <div
                                   style={{
-                                    display: "flex",
-                                    justifyContent: "flex-end",
+                                    display: "grid",
+                                    gridTemplateColumns: isSmallLayout ? "1fr" : "minmax(0, 1fr) auto",
                                     alignItems: "center",
                                     gap: 8,
-                                    flexWrap: "wrap",
+                                    minWidth: 0,
+                                    width: "100%",
                                   }}
                                 >
-                                  <span style={{ color: "#166534", fontWeight: 800, fontSize: 14 }}>
+                                  <span
+                                    style={{
+                                      color: "#166534",
+                                      fontWeight: 800,
+                                      fontSize: 14,
+                                      minWidth: 0,
+                                      overflowWrap: "anywhere",
+                                      lineHeight: 1.25,
+                                    }}
+                                  >
                                     Quantità completata
                                   </span>
                                   {isAdmin ? (
                                     <button
-                                      style={compactBtnStyle("outline")}
+                                      style={{
+                                        ...compactBtnStyle("outline"),
+                                        width: isSmallLayout ? "100%" : "auto",
+                                      }}
                                       onClick={() => deleteLine(selectedOrder.id, line.lineId)}
                                     >
                                       <Trash2 size={15} /> Riga
