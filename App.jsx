@@ -459,9 +459,9 @@ export default function App() {
       setSelectedOrderId(mergedOrders[0]?.id ?? "");
       setSelectedLineId(mergedOrders[0]?.lines?.[0]?.lineId ?? "");
     } catch (error) {
-      setLoadError(
-        "Non sono riuscito a leggere i dati dal Google Sheet. Per ora vedi una demo locale."
-      );
+  setLoadError(
+    "Non sono riuscito a leggere i dati dal Google Sheet. Errore reale: " + String(error)
+  );
       setProducts(fallbackProducts);
       setLots(fallbackLots);
       setOrders([]);
