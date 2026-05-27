@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbzLSYM2bBrBzheg0JCUXjGUZOf3_klA-rdzFH-cK1F2jtKvlAoRL6xG1_lFmWzoProw/exec";
+  "https://script.google.com/macros/s/AKfycbwaR6EycWBN5xoLWqu6oEDnnqbjPFdJR9wTXaA63qLgrl0kmZccn6C45KiutLGhgnGj/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
