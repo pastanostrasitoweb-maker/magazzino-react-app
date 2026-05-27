@@ -1,4 +1,4 @@
-// versione GitHub aggiornata - sheet ID fisso e categorie a sezioni
+// versione GitHub aggiornata - niente lotti demo se il foglio è vuoto
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -562,9 +562,9 @@ export default function App() {
       const raw = await callSheetsApi();
 
       const normalizedProducts = normalizeProducts(raw.prodotti || []);
-      const safeProducts = normalizedProducts.length ? normalizedProducts : fallbackProducts;
+      const safeProducts = normalizedProducts;
       const normalizedLots = normalizeLots(raw.lotti || [], safeProducts);
-      const safeLots = normalizedLots.length ? normalizedLots : fallbackLots;
+      const safeLots = normalizedLots;
       const normalizedOrders = normalizeOrders(raw.ordini || []);
       const normalizedLines = normalizeOrderLines(raw.righeOrdine || [], safeProducts);
       const mergedOrders = buildOrdersWithLines(normalizedOrders, normalizedLines);
