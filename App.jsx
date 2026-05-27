@@ -1,4 +1,4 @@
-// versione UI finale iPad - categorie dinamiche prodotti
+// versione UI categorie a sezioni + delete lotto robusto
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -478,6 +478,7 @@ export default function App() {
   const [productSearch, setProductSearch] = useState("");
   const [productCategoryFilter, setProductCategoryFilter] = useState("");
   const [productSubcategoryFilter, setProductSubcategoryFilter] = useState("");
+  const [openProductSections, setOpenProductSections] = useState({});
   const [orderSearch, setOrderSearch] = useState("");
   const [assignments, setAssignments] = useState({});
   const [loadingData, setLoadingData] = useState(true);
@@ -775,6 +776,45 @@ export default function App() {
     productCategoryFilter,
     productSubcategoryFilter,
   ]);
+
+  const groupedProducts = useMemo(() => {
+    const groups = {};
+
+    filteredProducts.forEach((product) => {
+      const category = product.category || "Senza categoria";
+
+      if (!groups[category]) {
+        groups[category] = {
+          category,
+          products: [],
+          totalAvailable: 0,
+          totalLots: 0,
+          subcategories: {},
+        };
+      }
+
+      groups[category].products.push(product);
+      groups[category].totalAvailable += Number(product.totalAvailable || 0);
+      groups[category].totalLots += (product.productLots || []).length;
+
+      const subcategory = product.subcategory || "Senza sottocategoria";
+
+      if (!groups[category].subcategories[subcategory]) {
+        groups[category].subcategories[subcategory] = [];
+      }
+
+      groups[category].subcategories[subcategory].push(product);
+    });
+
+    return Object.values(groups).sort((a, b) => a.category.localeCompare(b.category));
+  }, [filteredProducts]);
+
+  const toggleProductSection = (category) => {
+    setOpenProductSections((prev) => ({
+      ...prev,
+      [category]: !prev[category],
+    }));
+  };
 
   const openAssignDialog = (lineId) => {
     setSelectedLineId(lineId);
@@ -1738,12 +1778,13 @@ export default function App() {
 
     const lotToDelete = lots.find((lot) => String(lot.id) === String(lotId));
     const lotCodeToDelete = lotToDelete?.lot || lotId;
+    const lotIdToDelete = lotToDelete?.id || lotId;
 
     const isUsed = Object.values(assignments)
       .flat()
       .some(
         (assignment) =>
-          String(assignment.lotId) === String(lotId) ||
+          String(assignment.lotId) === String(lotIdToDelete) ||
           String(assignment.lotId) === String(lotCodeToDelete)
       );
 
@@ -1759,10 +1800,19 @@ export default function App() {
     if (!conferma) return;
 
     try {
-      const result = await callSheetsApi({
+      let result = await callSheetsApi({
         action: "deleteLot",
-        lotId: lotCodeToDelete,
+        lotId: lotIdToDelete,
       });
+
+      // Alcuni fogli hanno come chiave ID_Lotto, altri Codice_Lotto.
+      // Se il primo tentativo non trova la riga, riproviamo con il codice lotto visibile.
+      if ((!result || !result.success) && String(lotCodeToDelete) !== String(lotIdToDelete)) {
+        result = await callSheetsApi({
+          action: "deleteLot",
+          lotId: lotCodeToDelete,
+        });
+      }
 
       if (!result || !result.success) {
         alert(
@@ -1772,9 +1822,13 @@ export default function App() {
         return;
       }
 
-      setLots((prev) => prev.filter((lot) => String(lot.id) !== String(lotId)));
-
-      
+      setLots((prev) =>
+        prev.filter(
+          (lot) =>
+            String(lot.id) !== String(lotIdToDelete) &&
+            String(lot.lot) !== String(lotCodeToDelete)
+        )
+      );
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
@@ -2456,133 +2510,269 @@ export default function App() {
               </select>
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: responsiveProductColumns,
-                gap: 16,
-                minWidth: 0,
-              }}
-            >
-              {filteredProducts.map((product) => (
-                <div key={product.id} style={{ ...cardStyle(), padding: 20 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: 12,
-                      alignItems: "flex-start",
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: 18, fontWeight: 800 }}>{product.code}</div>
-                      <div style={{ marginTop: 4, color: "#55657a" }}>{product.name}</div>
+            <div style={{ display: "grid", gap: 14 }}>
+              {groupedProducts.length === 0 ? (
+                <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 18, color: "#b45309" }}>
+                  Nessun prodotto trovato con i filtri selezionati.
+                </div>
+              ) : (
+                groupedProducts.map((group) => {
+                  const isOpen =
+                    openProductSections[group.category] ??
+                    Boolean(productCategoryFilter || productSubcategoryFilter || productSearch);
 
-                      {(product.category || product.subcategory) && (
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                          {product.category ? (
-                            <span style={badgeStyle("dark")}>{product.category}</span>
-                          ) : null}
-
-                          {product.subcategory ? (
-                            <span style={badgeStyle("outline")}>{product.subcategory}</span>
-                          ) : null}
-                        </div>
-                      )}
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: 8,
-                        alignItems: "center",
-                        flexWrap: "wrap",
-                        justifyContent: "flex-end",
-                      }}
-                    >
-                      <span style={badgeStyle("outline")}>Disponibili {product.totalAvailable}</span>
-
-                      {isAdmin && (
-                        <>
-                          <button
-                            style={btnStyle("outline")}
-                            onClick={() => openEditProductDialog(product)}
-                          >
-                            <Pencil size={16} />
-                          </button>
-
-                          <button
-                            style={btnStyle("danger", deletingProductId === String(product.id))}
-                            disabled={deletingProductId === String(product.id)}
-                            onClick={() => deleteProduct(product)}
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
-                    {product.productLots.length === 0 ? (
-                      <div
+                  return (
+                    <div key={group.category} style={{ ...cardStyle(), overflow: "hidden" }}>
+                      <button
+                        onClick={() => toggleProductSection(group.category)}
                         style={{
-                          ...cardStyle({ background: "#fff7ed" }),
-                          padding: 14,
-                          color: "#b45309",
+                          width: "100%",
+                          border: 0,
+                          background: isOpen ? "#07153a" : "#fff",
+                          color: isOpen ? "#fff" : "#07153a",
+                          padding: isSmallLayout ? 16 : 20,
+                          cursor: "pointer",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 14,
+                          textAlign: "left",
                         }}
                       >
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <AlertTriangle size={16} /> Nessun lotto disponibile
-                        </div>
-                      </div>
-                    ) : (
-                      product.productLots
-                        .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
-                        .map((lot) => (
+                        <div>
+                          <div style={{ fontSize: isSmallLayout ? 20 : 24, fontWeight: 950 }}>
+                            {group.category}
+                          </div>
                           <div
-                            key={lot.id}
-                            style={{ ...cardStyle({ background: "#f8fafc" }), padding: 16 }}
+                            style={{
+                              marginTop: 6,
+                              color: isOpen ? "rgba(255,255,255,0.72)" : "#617086",
+                              fontSize: 14,
+                            }}
                           >
-                            <div
-                              style={{ display: "flex", justifyContent: "space-between", gap: 12 }}
-                            >
-                              <div>
-                                <div style={{ fontWeight: 800 }}>Lotto {lot.lot}</div>
-                                <div style={{ marginTop: 6, color: "#66758b" }}>
-                                  Scadenza {fmtDate(lot.expiry)}
-                                </div>
-                              </div>
+                            {group.products.length} prodotti · {group.totalLots} lotti · {group.totalAvailable} disponibili
+                          </div>
+                        </div>
 
-                              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <div
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 42,
+                            height: 42,
+                            borderRadius: 16,
+                            background: isOpen ? "rgba(255,255,255,0.14)" : "#eef3f9",
+                            fontSize: 24,
+                            fontWeight: 900,
+                            flex: "0 0 auto",
+                          }}
+                        >
+                          {isOpen ? "−" : "+"}
+                        </div>
+                      </button>
+
+                      {isOpen ? (
+                        <div style={{ padding: isSmallLayout ? 14 : 18, display: "grid", gap: 18 }}>
+                          {Object.entries(group.subcategories)
+                            .sort(([a], [b]) => a.localeCompare(b))
+                            .map(([subcategory, productsInSubcategory]) => (
+                              <div key={subcategory} style={{ display: "grid", gap: 12 }}>
                                 <div
                                   style={{
-                                    fontSize: 20,
-                                    fontWeight: 900,
-                                    color:
-                                      lotsAvailableMap[String(lot.id)] <= 10
-                                        ? "#dc2626"
-                                        : "#0f172a",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    gap: 10,
+                                    flexWrap: "wrap",
                                   }}
                                 >
-                                  {lotsAvailableMap[String(lot.id)]}
+                                  <div style={{ fontSize: 16, fontWeight: 900, color: "#243043" }}>
+                                    {subcategory}
+                                  </div>
+                                  <span style={badgeStyle("outline")}>
+                                    {productsInSubcategory.length} prodotti
+                                  </span>
                                 </div>
 
-                                <button
-                                  style={btnStyle("outline")}
-                                  onClick={() => deleteLot(lot.id)}
-                                  disabled={lotsAvailableMap[String(lot.id)] !== lot.loadedQty}
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: responsiveProductColumns,
+                                    gap: 16,
+                                    minWidth: 0,
+                                  }}
                                 >
-                                  <Trash2 size={16} />
-                                </button>
+                                  {productsInSubcategory.map((product) => (
+                                    <div key={product.id} style={{ ...cardStyle(), padding: 20 }}>
+                                      <div
+                                        style={{
+                                          display: "flex",
+                                          justifyContent: "space-between",
+                                          gap: 12,
+                                          alignItems: "flex-start",
+                                        }}
+                                      >
+                                        <div>
+                                          <div style={{ fontSize: 18, fontWeight: 900 }}>
+                                            {product.code}
+                                          </div>
+                                          <div style={{ marginTop: 4, color: "#55657a" }}>
+                                            {product.name}
+                                          </div>
+
+                                          {(product.category || product.subcategory) && (
+                                            <div
+                                              style={{
+                                                display: "flex",
+                                                gap: 8,
+                                                flexWrap: "wrap",
+                                                marginTop: 10,
+                                              }}
+                                            >
+                                              {product.category ? (
+                                                <span style={badgeStyle("dark")}>{product.category}</span>
+                                              ) : null}
+
+                                              {product.subcategory ? (
+                                                <span style={badgeStyle("outline")}>
+                                                  {product.subcategory}
+                                                </span>
+                                              ) : null}
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        <div
+                                          style={{
+                                            display: "flex",
+                                            gap: 8,
+                                            alignItems: "center",
+                                            flexWrap: "wrap",
+                                            justifyContent: "flex-end",
+                                          }}
+                                        >
+                                          <span style={badgeStyle("outline")}>
+                                            Disponibili {product.totalAvailable}
+                                          </span>
+
+                                          {isAdmin && (
+                                            <>
+                                              <button
+                                                style={btnStyle("outline")}
+                                                onClick={() => openEditProductDialog(product)}
+                                              >
+                                                <Pencil size={16} />
+                                              </button>
+
+                                              <button
+                                                style={btnStyle(
+                                                  "danger",
+                                                  deletingProductId === String(product.id)
+                                                )}
+                                                disabled={deletingProductId === String(product.id)}
+                                                onClick={() => deleteProduct(product)}
+                                              >
+                                                <Trash2 size={16} />
+                                              </button>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+                                        {product.productLots.length === 0 ? (
+                                          <div
+                                            style={{
+                                              ...cardStyle({ background: "#fff7ed" }),
+                                              padding: 14,
+                                              color: "#b45309",
+                                            }}
+                                          >
+                                            <div
+                                              style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: 8,
+                                              }}
+                                            >
+                                              <AlertTriangle size={16} /> Nessun lotto disponibile
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          product.productLots
+                                            .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
+                                            .map((lot) => (
+                                              <div
+                                                key={lot.id}
+                                                style={{
+                                                  ...cardStyle({ background: "#f8fafc" }),
+                                                  padding: 16,
+                                                }}
+                                              >
+                                                <div
+                                                  style={{
+                                                    display: "flex",
+                                                    justifyContent: "space-between",
+                                                    gap: 12,
+                                                  }}
+                                                >
+                                                  <div>
+                                                    <div style={{ fontWeight: 800 }}>
+                                                      Lotto {lot.lot}
+                                                    </div>
+                                                    <div style={{ marginTop: 6, color: "#66758b" }}>
+                                                      Scadenza {fmtDate(lot.expiry)}
+                                                    </div>
+                                                  </div>
+
+                                                  <div
+                                                    style={{
+                                                      display: "flex",
+                                                      gap: 8,
+                                                      alignItems: "center",
+                                                    }}
+                                                  >
+                                                    <div
+                                                      style={{
+                                                        fontSize: 20,
+                                                        fontWeight: 900,
+                                                        color:
+                                                          lotsAvailableMap[String(lot.id)] <= 10
+                                                            ? "#dc2626"
+                                                            : "#0f172a",
+                                                      }}
+                                                    >
+                                                      {lotsAvailableMap[String(lot.id)]}
+                                                    </div>
+
+                                                    <button
+                                                      style={btnStyle("outline")}
+                                                      onClick={() => deleteLot(lot.id)}
+                                                      disabled={
+                                                        lotsAvailableMap[String(lot.id)] !==
+                                                        lot.loadedQty
+                                                      }
+                                                    >
+                                                      <Trash2 size={16} />
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            ))
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          </div>
-                        ))
-                    )}
-                  </div>
-                </div>
-              ))}
+                            ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
