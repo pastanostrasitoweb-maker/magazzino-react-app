@@ -1,4 +1,4 @@
-// versione UI finale iPad - polish professionale
+// versione UI finale iPad - categorie dinamiche prodotti
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -19,8 +19,8 @@ const SHEETS_API_URL =
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
-  { id: "1", code: "NFARMA 013", name: "Pici 250", uom: "pz" },
-  { id: "2", code: "NFARMA 007", name: "Tonnarelli 250", uom: "pz" },
+  { id: "1", code: "NFARMA 013", name: "Pici 250", uom: "pz", category: "", subcategory: "" },
+  { id: "2", code: "NFARMA 007", name: "Tonnarelli 250", uom: "pz", category: "", subcategory: "" },
 ];
 
 const fallbackLots = [
@@ -235,6 +235,18 @@ function badgeStyle(kind = "outline") {
   };
 }
 
+
+function productCategoryLabel(product) {
+  return [product?.category, product?.subcategory].filter(Boolean).join(" › ");
+}
+
+function productOptionLabel(product) {
+  const categoryLabel = productCategoryLabel(product);
+  const baseLabel = [product?.code, product?.name].filter(Boolean).join(" · ");
+
+  return categoryLabel ? `${categoryLabel} · ${baseLabel}` : baseLabel;
+}
+
 function miniStatStyle(tone = "neutral") {
   const variants = {
     neutral: { background: "#f3f6fb", color: "#0f172a", border: "1px solid #dce4f0" },
@@ -270,6 +282,19 @@ function normalizeProducts(rows) {
       ).trim(),
       uom: String(
         getField(row, ["UM", "U_M", "Unità_Misura", "Unità di misura", "uom"]) || "pz"
+      ).trim(),
+      category: String(
+        getField(row, ["Categoria", "category", "Categoria_Prodotto", "Categoria prodotto"])
+      ).trim(),
+      subcategory: String(
+        getField(row, [
+          "Sottocategoria",
+          "Sotto_Categoria",
+          "Sotto categoria",
+          "Subcategoria",
+          "subcategory",
+          "Sottocategoria_Prodotto",
+        ])
       ).trim(),
     }))
     .filter((product) => product.code || product.name);
@@ -451,6 +476,8 @@ export default function App() {
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [selectedLineId, setSelectedLineId] = useState("");
   const [productSearch, setProductSearch] = useState("");
+  const [productCategoryFilter, setProductCategoryFilter] = useState("");
+  const [productSubcategoryFilter, setProductSubcategoryFilter] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
   const [assignments, setAssignments] = useState({});
   const [loadingData, setLoadingData] = useState(true);
@@ -571,6 +598,10 @@ export default function App() {
     loadDataFromSheets();
   }, []);
 
+  useEffect(() => {
+    setProductSubcategoryFilter("");
+  }, [productCategoryFilter]);
+
   const productMap = useMemo(() => {
     const map = {};
 
@@ -581,6 +612,24 @@ export default function App() {
 
     return map;
   }, [products]);
+
+  const categoryOptions = useMemo(() => {
+    return Array.from(new Set(products.map((product) => product.category).filter(Boolean))).sort();
+  }, [products]);
+
+  const subcategoryOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        products
+          .filter(
+            (product) =>
+              !productCategoryFilter || String(product.category) === String(productCategoryFilter)
+          )
+          .map((product) => product.subcategory)
+          .filter(Boolean)
+      )
+    ).sort();
+  }, [products, productCategoryFilter]);
 
   const lotsAvailableMap = useMemo(() => {
     const usedByLot = {};
@@ -701,13 +750,31 @@ export default function App() {
 
         return { ...product, productLots, totalAvailable };
       })
-      .filter(
-        (product) =>
+      .filter((product) => {
+        const matchesSearch =
           !q ||
           String(product.code).toLowerCase().includes(q) ||
-          String(product.name).toLowerCase().includes(q)
-      );
-  }, [products, lots, lotsAvailableMap, productSearch]);
+          String(product.name).toLowerCase().includes(q) ||
+          String(product.category).toLowerCase().includes(q) ||
+          String(product.subcategory).toLowerCase().includes(q);
+
+        const matchesCategory =
+          !productCategoryFilter || String(product.category) === String(productCategoryFilter);
+
+        const matchesSubcategory =
+          !productSubcategoryFilter ||
+          String(product.subcategory) === String(productSubcategoryFilter);
+
+        return matchesSearch && matchesCategory && matchesSubcategory;
+      });
+  }, [
+    products,
+    lots,
+    lotsAvailableMap,
+    productSearch,
+    productCategoryFilter,
+    productSubcategoryFilter,
+  ]);
 
   const openAssignDialog = (lineId) => {
     setSelectedLineId(lineId);
@@ -2338,18 +2405,55 @@ export default function App() {
               )}
             </div>
 
-            <div style={{ position: "relative", maxWidth: 520, marginBottom: 18 }}>
-              <Search
-                size={16}
-                style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
-              />
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isSmallLayout
+                  ? "1fr"
+                  : "minmax(260px, 1.4fr) minmax(180px, 0.8fr) minmax(180px, 0.8fr)",
+                gap: 12,
+                marginBottom: 18,
+              }}
+            >
+              <div style={{ position: "relative" }}>
+                <Search
+                  size={16}
+                  style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+                />
 
-              <input
-                style={{ ...inputStyle(), paddingLeft: 40 }}
-                value={productSearch}
-                onChange={(event) => setProductSearch(event.target.value)}
-                placeholder="Cerca prodotto o codice"
-              />
+                <input
+                  style={{ ...inputStyle(), paddingLeft: 40 }}
+                  value={productSearch}
+                  onChange={(event) => setProductSearch(event.target.value)}
+                  placeholder="Cerca prodotto, codice o categoria"
+                />
+              </div>
+
+              <select
+                style={inputStyle()}
+                value={productCategoryFilter}
+                onChange={(event) => setProductCategoryFilter(event.target.value)}
+              >
+                <option value="">Tutte le categorie</option>
+                {categoryOptions.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                style={inputStyle()}
+                value={productSubcategoryFilter}
+                onChange={(event) => setProductSubcategoryFilter(event.target.value)}
+              >
+                <option value="">Tutte le sottocategorie</option>
+                {subcategoryOptions.map((subcategory) => (
+                  <option key={subcategory} value={subcategory}>
+                    {subcategory}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div
@@ -2373,6 +2477,18 @@ export default function App() {
                     <div>
                       <div style={{ fontSize: 18, fontWeight: 800 }}>{product.code}</div>
                       <div style={{ marginTop: 4, color: "#55657a" }}>{product.name}</div>
+
+                      {(product.category || product.subcategory) && (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                          {product.category ? (
+                            <span style={badgeStyle("dark")}>{product.category}</span>
+                          ) : null}
+
+                          {product.subcategory ? (
+                            <span style={badgeStyle("outline")}>{product.subcategory}</span>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
 
                     <div
@@ -2575,7 +2691,7 @@ export default function App() {
 
                     {products.map((product) => (
                       <option key={product.id} value={String(product.id)}>
-                        {product.code} · {product.name}
+                        {productOptionLabel(product)}
                       </option>
                     ))}
                   </select>
@@ -2701,7 +2817,7 @@ export default function App() {
                 <option value="">Seleziona prodotto</option>
                 {products.map((product) => (
                   <option key={product.id} value={String(product.id)}>
-                    {product.code} · {product.name}
+                    {productOptionLabel(product)}
                   </option>
                 ))}
               </select>
@@ -2822,7 +2938,7 @@ export default function App() {
 
                 {products.map((product) => (
                   <option key={product.id} value={String(product.id)}>
-                    {product.code} · {product.name}
+                    {productOptionLabel(product)}
                   </option>
                 ))}
               </select>
