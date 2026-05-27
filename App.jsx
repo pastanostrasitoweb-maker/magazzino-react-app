@@ -1,4 +1,4 @@
-// versione UI categorie a sezioni + delete lotto robusto
+// versione GitHub aggiornata - sheet ID fisso e categorie a sezioni
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwaR6EycWBN5xoLWqu6oEDnnqbjPFdJR9wTXaA63qLgrl0kmZccn6C45KiutLGhgnGj/exec";
+  "https://script.google.com/macros/s/AKfycbz03HAwRq8U4kGqS196_q17WJ7ylTyComaNpG9GkjPZVB4I5nNGGtM7q_ulhBrb6QSF/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
