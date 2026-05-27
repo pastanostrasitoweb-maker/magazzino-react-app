@@ -1,4 +1,4 @@
-// versione admin righe ordine - fix deploy JSX
+// versione UI finale iPad - polish professionale
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -91,10 +91,10 @@ function fmtDate(date) {
 
 function cardStyle(extra = {}) {
   return {
-    background: "#fff",
-    border: "1px solid #e5e7eb",
-    borderRadius: 24,
-    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+    background: "rgba(255,255,255,0.96)",
+    border: "1px solid #dce4f0",
+    borderRadius: 26,
+    boxShadow: "0 10px 30px rgba(15,23,42,0.06)",
     minWidth: 0,
     boxSizing: "border-box",
     ...extra,
@@ -103,12 +103,12 @@ function cardStyle(extra = {}) {
 
 function btnStyle(variant = "primary", disabled = false) {
   const base = {
-    height: 52,
-    borderRadius: 18,
+    height: 50,
+    borderRadius: 16,
     border: "1px solid transparent",
     padding: "0 18px",
-    fontSize: 16,
-    fontWeight: 700,
+    fontSize: 15,
+    fontWeight: 850,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
@@ -116,30 +116,34 @@ function btnStyle(variant = "primary", disabled = false) {
     cursor: disabled ? "not-allowed" : "pointer",
     opacity: disabled ? 0.5 : 1,
     whiteSpace: "nowrap",
+    boxSizing: "border-box",
+    transition: "transform 120ms ease, box-shadow 120ms ease, background 120ms ease",
   };
 
   if (variant === "outline") {
     return {
       ...base,
       background: "#fff",
-      color: "#14213d",
-      border: "1px solid #d7deea",
+      color: "#0b1638",
+      border: "1px solid #cfd8e6",
+      boxShadow: "0 4px 12px rgba(15,23,42,0.04)",
     };
   }
 
   if (variant === "soft") {
     return {
       ...base,
-      background: "#e9eef6",
-      color: "#22304a",
+      background: "#edf2f8",
+      color: "#1d2a44",
     };
   }
 
   if (variant === "success") {
     return {
       ...base,
-      background: "#187437",
+      background: "linear-gradient(135deg, #16813d, #0f6b32)",
       color: "#fff",
+      boxShadow: "0 10px 22px rgba(22,129,61,0.22)",
     };
   }
 
@@ -154,8 +158,9 @@ function btnStyle(variant = "primary", disabled = false) {
 
   return {
     ...base,
-    background: "#07153a",
+    background: "linear-gradient(135deg, #07153a, #0d225d)",
     color: "#fff",
+    boxShadow: "0 8px 18px rgba(7,21,58,0.16)",
   };
 }
 
@@ -165,10 +170,10 @@ function compactBtnStyle(variant = "primary", disabled = false) {
 
   return {
     ...base,
-    height: 42,
+    height: 40,
     borderRadius: 14,
     padding: "0 12px",
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 800,
   };
 }
@@ -176,11 +181,11 @@ function compactBtnStyle(variant = "primary", disabled = false) {
 function inputStyle() {
   return {
     width: "100%",
-    height: 52,
-    borderRadius: 18,
-    border: "1px solid #d7deea",
+    height: 50,
+    borderRadius: 16,
+    border: "1px solid #cfd8e6",
     padding: "0 14px",
-    fontSize: 16,
+    fontSize: 15,
     outline: "none",
     background: "#fff",
     boxSizing: "border-box",
@@ -209,16 +214,41 @@ function labelStyle() {
 }
 
 function badgeStyle(kind = "outline") {
+  const variants = {
+    outline: { border: "1px solid #d8dee8", background: "#fff", color: "#243043" },
+    success: { border: "1px solid #bfe7c8", background: "#eefbf2", color: "#166534" },
+    warning: { border: "1px solid #fed7aa", background: "#fff7ed", color: "#b45309" },
+    dark: { border: "1px solid #07153a", background: "#07153a", color: "#fff" },
+    danger: { border: "1px solid #fecaca", background: "#fff1f2", color: "#991b1b" },
+  };
+
   return {
     display: "inline-flex",
     alignItems: "center",
+    justifyContent: "center",
     borderRadius: 999,
     padding: "6px 12px",
-    fontSize: 13,
-    fontWeight: 600,
-    border: kind === "outline" ? "1px solid #d8dee8" : "1px solid #dfeee3",
-    background: kind === "outline" ? "#fff" : "#effaf1",
-    color: "#243043",
+    fontSize: 12,
+    fontWeight: 850,
+    lineHeight: 1,
+    ...(variants[kind] || variants.outline),
+  };
+}
+
+function miniStatStyle(tone = "neutral") {
+  const variants = {
+    neutral: { background: "#f3f6fb", color: "#0f172a", border: "1px solid #dce4f0" },
+    success: { background: "#eefbf2", color: "#166534", border: "1px solid #bfe7c8" },
+    warning: { background: "#fff7ed", color: "#b45309", border: "1px solid #fed7aa" },
+  };
+
+  return {
+    borderRadius: 16,
+    padding: "9px 7px",
+    textAlign: "center",
+    minWidth: 54,
+    boxShadow: "inset 0 -1px 0 rgba(15,23,42,0.04)",
+    ...(variants[tone] || variants.neutral),
   };
 }
 
@@ -541,10 +571,16 @@ export default function App() {
     loadDataFromSheets();
   }, []);
 
-  const productMap = useMemo(
-    () => Object.fromEntries(products.map((product) => [String(product.id), product])),
-    [products]
-  );
+  const productMap = useMemo(() => {
+    const map = {};
+
+    products.forEach((product) => {
+      map[String(product.id)] = product;
+      if (product.code) map[String(product.code)] = product;
+    });
+
+    return map;
+  }, [products]);
 
   const lotsAvailableMap = useMemo(() => {
     const usedByLot = {};
@@ -598,10 +634,18 @@ export default function App() {
 
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
+    const visibleOrders = ordersWithComputed
+      .filter((order) => String(order.computedStatus) !== "Preparato" || !q)
+      .sort((a, b) => {
+        const aOpen = a.totalToAssign > 0 ? 0 : 1;
+        const bOpen = b.totalToAssign > 0 ? 0 : 1;
+        if (aOpen !== bOpen) return aOpen - bOpen;
+        return String(b.date || "").localeCompare(String(a.date || ""));
+      });
 
-    if (!q) return ordersWithComputed;
+    if (!q) return visibleOrders;
 
-    return ordersWithComputed.filter(
+    return visibleOrders.filter(
       (order) =>
         String(order.id).toLowerCase().includes(q) ||
         String(order.customer).toLowerCase().includes(q) ||
@@ -616,6 +660,21 @@ export default function App() {
   const selectedLine =
     selectedOrder?.lines.find((line) => String(line.lineId) === String(selectedLineId)) ||
     selectedOrder?.lines[0];
+
+  const selectedOrderLines = useMemo(() => {
+    if (!selectedOrder?.lines) return [];
+
+    return [...selectedOrder.lines].sort((a, b) => {
+      const aDone = a.qtyToAssign <= 0 ? 1 : 0;
+      const bDone = b.qtyToAssign <= 0 ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
+      return String(a.lineId).localeCompare(String(b.lineId));
+    });
+  }, [selectedOrder]);
+
+  const selectedOrderCompletedLines = selectedOrderLines.filter(
+    (line) => line.qtyToAssign <= 0
+  ).length;
 
   const availableLotsForSelectedLine = useMemo(() => {
     if (!selectedLine) return [];
@@ -1658,15 +1717,24 @@ export default function App() {
     <div
       style={{
         minHeight: "100vh",
-        background: "#f2f4f8",
+        background: "linear-gradient(180deg, #eef3f9 0%, #f7f9fc 42%, #eef3f9 100%)",
         padding: isSmallLayout ? 10 : 20,
         fontFamily: "Arial, sans-serif",
         overflowX: "hidden",
         boxSizing: "border-box",
       }}
     >
-      <div style={{ maxWidth: 1280, margin: "0 auto", width: "100%", boxSizing: "border-box", minWidth: 0 }}>
-        <div style={{ ...cardStyle(), padding: 20, marginBottom: 20 }}>
+      <div style={{ maxWidth: 1320, margin: "0 auto", width: "100%", boxSizing: "border-box", minWidth: 0 }}>
+        <div
+          style={{
+            ...cardStyle({ background: "linear-gradient(135deg, #ffffff 0%, #f8fbff 100%)" }),
+            padding: isSmallLayout ? 16 : 22,
+            marginBottom: 20,
+            position: "sticky",
+            top: 10,
+            zIndex: 20,
+          }}
+        >
           <div
             style={{
               display: "flex",
@@ -1677,12 +1745,20 @@ export default function App() {
             }}
           >
             <div>
-              <div style={{ fontSize: 32, fontWeight: 900, color: "#09122d" }}>
-                MAGAZZINO 2.0
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ fontSize: isSmallLayout ? 26 : 34, fontWeight: 950, color: "#07153a", letterSpacing: "-0.04em" }}>
+                  MAGAZZINO 2.0
+                </div>
+                <span style={badgeStyle(isAdmin ? "dark" : "outline")}>
+                  {isAdmin ? "ADMIN" : "OPERATORE"}
+                </span>
+              </div>
+              <div style={{ marginTop: 6, color: "#65758f", fontSize: 14, fontWeight: 650 }}>
+                Preparazione ordini · lotti · disponibilità
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: isSmallLayout ? "stretch" : "flex-end", flex: 1 }}>
               <button
                 style={btnStyle(page === "ordini" ? "primary" : "soft")}
                 onClick={() => setPage("ordini")}
@@ -1751,8 +1827,8 @@ export default function App() {
         ) : null}
 
         {page === "ordini" && (
-          <div style={{ display: "grid", gridTemplateColumns: responsiveTwoColumns, gap: 16, minWidth: 0 }}>
-            <div style={{ ...cardStyle(), padding: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: responsiveTwoColumns, gap: 18, minWidth: 0 }}>
+            <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20, alignSelf: "start" }}>
               <div
                 style={{
                   display: "flex",
@@ -1795,18 +1871,19 @@ export default function App() {
                       padding: 18,
                       borderRadius: 24,
                       border:
-                        selectedOrderId === order.id ? "2px solid #0f172a" : "1px solid #dbe2ea",
-                      background: selectedOrderId === order.id ? "#f8fafc" : "#fff",
+                        selectedOrderId === order.id ? "2px solid #07153a" : "1px solid #dbe2ea",
+                      background: selectedOrderId === order.id ? "linear-gradient(135deg, #f8fbff, #eef4ff)" : "#fff",
                       cursor: "pointer",
+                      boxShadow: selectedOrderId === order.id ? "0 12px 24px rgba(7,21,58,0.10)" : "0 5px 14px rgba(15,23,42,0.04)",
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                       <div>
-                        <div style={{ fontSize: 18, fontWeight: 800 }}>{order.id}</div>
+                        <div style={{ fontSize: 17, fontWeight: 950, color: "#07153a", overflowWrap: "anywhere" }}>{order.id}</div>
                         <div style={{ color: "#66758b", marginTop: 4 }}>{order.customer}</div>
                       </div>
 
-                      <span style={badgeStyle("outline")}>{order.computedStatus}</span>
+                      <span style={badgeStyle(order.totalToAssign > 0 ? "warning" : "success")}>{order.computedStatus}</span>
                     </div>
 
                     <div style={{ marginTop: 14, color: "#66758b" }}>
@@ -1817,18 +1894,26 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ ...cardStyle(), padding: 20 }}>
-              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 18 }}>
-                Preparazione ordine
+            <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 24, fontWeight: 950, color: "#07153a", letterSpacing: "-0.02em" }}>
+                  Preparazione ordine
+                </div>
+                {selectedOrder ? (
+                  <span style={badgeStyle(selectedOrder.totalToAssign > 0 ? "warning" : "success")}>
+                    {selectedOrderCompletedLines}/{selectedOrderLines.length} righe complete
+                  </span>
+                ) : null}
               </div>
 
               {selectedOrder ? (
                 <>
                   <div
                     style={{
-                      ...cardStyle({ background: "#f8fafc" }),
-                      padding: 20,
+                      ...cardStyle({ background: "linear-gradient(135deg, #f8fbff, #eef4ff)" }),
+                      padding: isSmallLayout ? 16 : 20,
                       marginBottom: 16,
+                      border: "1px solid #d4e0f2",
                     }}
                   >
                     <div
@@ -1840,7 +1925,7 @@ export default function App() {
                       }}
                     >
                       <div>
-                        <div style={{ fontSize: 22, fontWeight: 900 }}>{selectedOrder.id}</div>
+                        <div style={{ fontSize: isSmallLayout ? 20 : 24, fontWeight: 950, color: "#07153a", overflowWrap: "anywhere" }}>{selectedOrder.id}</div>
 
                         <div style={{ marginTop: 6, color: "#66758b" }}>
                           {selectedOrder.customer} · {fmtDate(selectedOrder.date)}
@@ -1862,7 +1947,7 @@ export default function App() {
                   </div>
 
                   <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
-                    {selectedOrder.lines.map((line) => {
+                    {selectedOrderLines.map((line) => {
                       const product = productMap[String(line.productId)];
                       const lineAssignments = assignments[line.lineId] || [];
                       const availableLots = getAvailableLotsForLine(line);
@@ -1875,10 +1960,12 @@ export default function App() {
                           key={line.lineId}
                           style={{
                             ...cardStyle({
-                              background: completed ? "#f8fff9" : "#fff",
+                              background: completed ? "linear-gradient(135deg, #f8fff9, #ffffff)" : "#fff",
                             }),
-                            padding: isSmallLayout ? 12 : 14,
-                            border: completed ? "1px solid #cfe8d4" : "1px solid #dbe2ea",
+                            padding: isSmallLayout ? 14 : 16,
+                            border: completed ? "1px solid #bfe7c8" : "1px solid #dbe2ea",
+                            borderLeft: completed ? "6px solid #16a34a" : "6px solid #f59e0b",
+                            boxShadow: completed ? "0 8px 18px rgba(22,163,74,0.07)" : "0 8px 18px rgba(245,158,11,0.07)",
                           }}
                         >
                           <div
@@ -1886,7 +1973,7 @@ export default function App() {
                               display: "grid",
                               gridTemplateColumns: isSmallLayout
                                 ? "1fr"
-                                : "minmax(180px, 1fr) 190px minmax(0, 1.2fr)",
+                                : "minmax(220px, 1.1fr) 180px minmax(300px, 1.4fr)",
                               gap: 12,
                               alignItems: "center",
                             }}
@@ -1901,7 +1988,7 @@ export default function App() {
                                   marginBottom: 3,
                                 }}
                               >
-                                <span style={{ fontSize: 17, fontWeight: 900, color: "#0f172a" }}>
+                                <span style={{ fontSize: 17, fontWeight: 950, color: "#07153a" }}>
                                   {product?.code || line.productId}
                                 </span>
                                 {completed ? (
@@ -1939,10 +2026,7 @@ export default function App() {
                             >
                               <div
                                 style={{
-                                  ...cardStyle({ background: "#f1f5f9" }),
-                                  padding: "8px 6px",
-                                  textAlign: "center",
-                                  borderRadius: 14,
+                                  ...miniStatStyle("neutral"),
                                 }}
                               >
                                 <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 700 }}>
@@ -1953,10 +2037,7 @@ export default function App() {
 
                               <div
                                 style={{
-                                  ...cardStyle({ background: "#f1f5f9" }),
-                                  padding: "8px 6px",
-                                  textAlign: "center",
-                                  borderRadius: 14,
+                                  ...miniStatStyle("neutral"),
                                 }}
                               >
                                 <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 700 }}>
@@ -1967,10 +2048,7 @@ export default function App() {
 
                               <div
                                 style={{
-                                  ...cardStyle({ background: completed ? "#effaf1" : "#fff7ed" }),
-                                  padding: "8px 6px",
-                                  textAlign: "center",
-                                  borderRadius: 14,
+                                  ...miniStatStyle(completed ? "success" : "warning"),
                                 }}
                               >
                                 <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 700 }}>
@@ -2185,8 +2263,8 @@ export default function App() {
                                       display: "inline-flex",
                                       alignItems: "center",
                                       gap: 6,
-                                      border: "1px solid #d8dee8",
-                                      background: "#f8fafc",
+                                      border: "1px solid #cfd8e6",
+                                      background: "#fff",
                                       borderRadius: 999,
                                       padding: "5px 7px 5px 10px",
                                       fontSize: 13,
