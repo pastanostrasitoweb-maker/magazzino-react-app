@@ -1,4 +1,4 @@
-// versione stock visibile - totale impegnati disponibili
+// versione stock prodotto: totale impegnati disponibili da ordini aperti
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbzm5w7iF3XFMtH-rdste3uBx9qb1YXQcFOVG649fe02d22kK-c2R7dcSaY4M4yljWOX/exec";
+  "https://script.google.com/macros/s/AKfycbz03HAwRq8U4kGqS196_q17WJ7ylTyComaNpG9GkjPZVB4I5nNGGtM7q_ulhBrb6QSF/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -632,7 +632,7 @@ export default function App() {
     ).sort();
   }, [products, productCategoryFilter]);
 
-  const lotStatsMap = useMemo(() => {
+  const lotAssignedMap = useMemo(() => {
     const openLineIds = new Set();
 
     orders.forEach((order) => {
@@ -643,25 +643,61 @@ export default function App() {
       });
     });
 
-    const committedByLot = {};
+    const assignedByLot = {};
 
     Object.entries(assignments).forEach(([lineId, lineAssignments]) => {
       if (!openLineIds.has(String(lineId))) return;
 
       (lineAssignments || []).forEach((assignment) => {
-        committedByLot[String(assignment.lotId)] =
-          (committedByLot[String(assignment.lotId)] || 0) + Number(assignment.qty || 0);
+        assignedByLot[String(assignment.lotId)] =
+          (assignedByLot[String(assignment.lotId)] || 0) + Number(assignment.qty || 0);
       });
     });
 
     return Object.fromEntries(
       lots.map((lot) => {
         const total = Number(lot.loadedQty || 0);
-        const committed = Number(committedByLot[String(lot.id)] || 0);
-        const available = Math.max(0, total - committed);
+        const assigned = Number(assignedByLot[String(lot.id)] || 0);
+        const assignable = Math.max(0, total - assigned);
 
         return [
           String(lot.id),
+          {
+            total,
+            assigned,
+            assignable,
+          },
+        ];
+      })
+    );
+  }, [lots, assignments, orders]);
+
+  const productCommittedMap = useMemo(() => {
+    const committedByProduct = {};
+
+    orders.forEach((order) => {
+      if (String(order.status || "") === "Preparato") return;
+
+      (order.lines || []).forEach((line) => {
+        const productKey = String(line.productId);
+        committedByProduct[productKey] =
+          (committedByProduct[productKey] || 0) + Number(line.qtyOrdered || 0);
+      });
+    });
+
+    return committedByProduct;
+  }, [orders]);
+
+  const productStatsMap = useMemo(() => {
+    return Object.fromEntries(
+      products.map((product) => {
+        const productLots = lots.filter((lot) => String(lot.productId) === String(product.id));
+        const total = productLots.reduce((sum, lot) => sum + Number(lot.loadedQty || 0), 0);
+        const committed = Number(productCommittedMap[String(product.id)] || 0);
+        const available = Math.max(0, total - committed);
+
+        return [
+          String(product.id),
           {
             total,
             committed,
@@ -670,13 +706,13 @@ export default function App() {
         ];
       })
     );
-  }, [lots, assignments, orders]);
+  }, [products, lots, productCommittedMap]);
 
   const lotsAvailableMap = useMemo(() => {
     return Object.fromEntries(
-      lots.map((lot) => [String(lot.id), lotStatsMap[String(lot.id)]?.available || 0])
+      lots.map((lot) => [String(lot.id), lotAssignedMap[String(lot.id)]?.assignable || 0])
     );
-  }, [lots, lotStatsMap]);
+  }, [lots, lotAssignedMap]);
 
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
@@ -772,20 +808,19 @@ export default function App() {
     return products
       .map((product) => {
         const productLots = lots.filter((lot) => String(lot.productId) === String(product.id));
-        const totalLoaded = productLots.reduce(
-          (sum, lot) => sum + Number(lotStatsMap[String(lot.id)]?.total || 0),
-          0
-        );
-        const totalCommitted = productLots.reduce(
-          (sum, lot) => sum + Number(lotStatsMap[String(lot.id)]?.committed || 0),
-          0
-        );
-        const totalAvailable = productLots.reduce(
-          (sum, lot) => sum + Number(lotStatsMap[String(lot.id)]?.available || 0),
-          0
-        );
+        const productStats = productStatsMap[String(product.id)] || {
+          total: 0,
+          committed: 0,
+          available: 0,
+        };
 
-        return { ...product, productLots, totalLoaded, totalCommitted, totalAvailable };
+        return {
+          ...product,
+          productLots,
+          totalLoaded: productStats.total,
+          totalCommitted: productStats.committed,
+          totalAvailable: productStats.available,
+        };
       })
       .filter((product) => {
         const matchesSearch =
@@ -808,7 +843,7 @@ export default function App() {
     products,
     lots,
     lotsAvailableMap,
-    lotStatsMap,
+    productStatsMap,
     productSearch,
     productCategoryFilter,
     productSubcategoryFilter,
@@ -2784,18 +2819,12 @@ export default function App() {
                                                       style={{
                                                         display: "grid",
                                                         gap: 6,
-                                                        minWidth: 116,
+                                                        minWidth: 96,
                                                         textAlign: "right",
                                                       }}
                                                     >
                                                       <span style={badgeStyle("outline")}>
-                                                        Totale {lotStatsMap[String(lot.id)]?.total || 0}
-                                                      </span>
-                                                      <span style={badgeStyle("warning")}>
-                                                        Impegnati {lotStatsMap[String(lot.id)]?.committed || 0}
-                                                      </span>
-                                                      <span style={badgeStyle("success")}>
-                                                        Disponibili {lotStatsMap[String(lot.id)]?.available || 0}
+                                                        Totale lotto {Number(lot.loadedQty || 0)}
                                                       </span>
                                                     </div>
 
@@ -2803,7 +2832,7 @@ export default function App() {
                                                       style={btnStyle("outline")}
                                                       onClick={() => deleteLot(lot.id)}
                                                       disabled={
-                                                        (lotStatsMap[String(lot.id)]?.committed || 0) > 0
+                                                        (lotAssignedMap[String(lot.id)]?.assigned || 0) > 0
                                                       }
                                                     >
                                                       <Trash2 size={16} />
