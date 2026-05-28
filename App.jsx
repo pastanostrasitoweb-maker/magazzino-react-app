@@ -1,4 +1,4 @@
-// versione stock finale con riapertura ordine e ripristino lotti
+// versione finale elimina assegnazione ripristina - URL aggiornato
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwwn4BcSEAXI1hbTUuzP9h4ychnDmxmqP4V6vG-lBPVdhsz4m_MGR6E-4EtMem5evN-/exec";
+  "https://script.google.com/macros/s/AKfycbyGEKShjTUgt9q5knpaJr-i-z5rIb4UIpcZnILaWcgMRkdGzf6jzZowqFrI-O23Q3RX/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -1169,43 +1169,6 @@ export default function App() {
         prev.map((order) =>
           String(order.id) === String(selectedOrder.id)
             ? { ...order, status: "Preparato" }
-            : order
-        )
-      );
-
-      await loadDataFromSheets();
-    } catch (error) {
-      alert("Errore di collegamento con Google Sheet: " + String(error));
-    }
-  };
-
-  const reopenPreparedOrder = async () => {
-    if (!selectedOrder) return;
-
-    const conferma = window.confirm(
-      "Vuoi riaprire questo ordine? I lotti già scaricati verranno ripristinati e l'ordine tornerà Da preparare."
-    );
-
-    if (!conferma) return;
-
-    try {
-      const result = await callSheetsApi({
-        action: "reopenOrder",
-        orderId: selectedOrder.id,
-      });
-
-      if (!result || !result.success) {
-        alert(
-          "Errore nella riapertura ordine: " +
-            ((result && result.error) || "errore sconosciuto")
-        );
-        return;
-      }
-
-      setOrders((prev) =>
-        prev.map((order) =>
-          String(order.id) === String(selectedOrder.id)
-            ? { ...order, status: "Da preparare" }
             : order
         )
       );
@@ -2532,24 +2495,10 @@ export default function App() {
                     })}
                   </div>
 
-                  <div
-                    style={{
-                      marginTop: 18,
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      gap: 10,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    {String(selectedOrder.status || "").trim().toLowerCase() === "preparato" ? (
-                      <button style={btnStyle("outline")} onClick={reopenPreparedOrder}>
-                        <RefreshCw size={18} /> Riapri ordine
-                      </button>
-                    ) : (
-                      <button style={btnStyle("success")} onClick={markOrderPrepared}>
-                        <CheckCircle2 size={18} /> Segna ordine preparato
-                      </button>
-                    )}
+                  <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+                    <button style={btnStyle("success")} onClick={markOrderPrepared}>
+                      <CheckCircle2 size={18} /> Segna ordine preparato
+                    </button>
                   </div>
                 </>
               ) : (
