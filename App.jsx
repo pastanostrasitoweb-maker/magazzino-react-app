@@ -1,4 +1,4 @@
-// versione fix foglio bianco Clock - senza variabili inutilizzate
+// versione fixxx foglio bianco Clock - senza variabili inutilizzate
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
