@@ -1,4 +1,4 @@
-// versione righe fuori magazzino
+// versione assegnazione manuale generica e fuori magazzino
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbzbGzPXhRlfoE0QoCcaAPw_9G2QHwbjoWoOJ1h-2uXb3kOe4xuJ4wELLyXzcoYJsGO9/exec";
+  "https://script.google.com/macros/s/AKfycbwug9DkSIvFb-RKYxASguhM150HSxhuH59LyAXoJeSWcM3HyxUJfWtjmRVqpbK-DJ5j/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -803,9 +803,9 @@ export default function App() {
           0
         );
 
-        const assignedQty = requiresLots ? assignedFromAssignments : Number(line.qtyOrdered || 0);
+        const assignedQty = assignedFromAssignments;
 
-        const qtyToAssign = requiresLots ? Math.max(0, line.qtyOrdered - assignedQty) : 0;
+        const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
 
         return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock };
       });
@@ -1046,9 +1046,15 @@ export default function App() {
     if (!line) return;
 
     const form = getInlineAssignmentForm(line.lineId);
+    const requiresLots = line.requiresLots !== false;
 
-    if (!form.lotId || !form.qty) {
-      alert("Seleziona lotto e quantità");
+    if (requiresLots && !form.lotId) {
+      alert("Seleziona lotto");
+      return;
+    }
+
+    if (!form.qty) {
+      alert("Inserisci la quantità");
       return;
     }
 
@@ -1059,18 +1065,30 @@ export default function App() {
       return;
     }
 
-    const selectedLot = lots.find((lot) => String(lot.id) === String(form.lotId));
+    let selectedLot = null;
+    let lotId = "";
+    let lotCode = "";
 
-    if (!selectedLot) {
-      alert("Lotto non trovato");
-      return;
-    }
+    if (requiresLots) {
+      selectedLot = lots.find((lot) => String(lot.id) === String(form.lotId));
 
-    const available = lotsAvailableMap[String(form.lotId)] || 0;
+      if (!selectedLot) {
+        alert("Lotto non trovato");
+        return;
+      }
 
-    if (qty > available) {
-      alert("La quantità supera la disponibilità del lotto");
-      return;
+      const available = lotsAvailableMap[String(form.lotId)] || 0;
+
+      if (qty > available) {
+        alert("La quantità supera la disponibilità del lotto");
+        return;
+      }
+
+      lotId = String(form.lotId);
+      lotCode = selectedLot.lot;
+    } else {
+      lotId = isOutsideStockLine(line) ? "FUORI_MAGAZZINO" : "DISPONIBILITA";
+      lotCode = lotId;
     }
 
     if (qty > line.qtyToAssign) {
@@ -1081,8 +1099,8 @@ export default function App() {
     const newAssignment = {
       assignmentId: `ASS-${Date.now()}`,
       lineId: String(line.lineId),
-      lotId: String(form.lotId),
-      lotCode: selectedLot.lot,
+      lotId,
+      lotCode,
       qty,
     };
 
@@ -1091,7 +1109,7 @@ export default function App() {
       ...prev,
       [line.lineId]: [
         ...(prev[line.lineId] || []),
-        { assignmentId: newAssignment.assignmentId, lotId: String(form.lotId), qty },
+        { assignmentId: newAssignment.assignmentId, lotId, qty },
       ],
     }));
 
@@ -1147,6 +1165,7 @@ export default function App() {
       setSavingAssignmentLineId("");
     }
   };
+
 
   const confirmAssignment = async () => {
     if (!selectedLine || !selectedLotId || !assignQty) return;
@@ -2773,7 +2792,9 @@ export default function App() {
                                       lineHeight: 1.25,
                                     }}
                                   >
-                                    Quantità completata
+                                    {line.requiresLots === false
+                                      ? "Quantità assegnata"
+                                      : "Quantità completata"}
                                   </span>
                                   {isAdmin ? (
                                     <div
@@ -2839,13 +2860,53 @@ export default function App() {
                               ) : !line.requiresLots ? (
                                 <div
                                   style={{
-                                    ...cardStyle({ background: "#f8fafc" }),
-                                    padding: 12,
-                                    color: "#40516a",
-                                    fontSize: 14,
+                                    display: "grid",
+                                    gridTemplateColumns: isIPadLayout ? "1fr" : "minmax(0, 1fr) 76px 96px",
+                                    gap: 8,
+                                    alignItems: "center",
                                   }}
                                 >
-                                  Disponibilità generica: nessun lotto da assegnare per questo prodotto.
+                                  <div
+                                    style={{
+                                      ...compactInputStyle(),
+                                      display: "flex",
+                                      alignItems: "center",
+                                      color: "#40516a",
+                                      fontWeight: 800,
+                                      minWidth: 0,
+                                    }}
+                                  >
+                                    {isOutsideStockLine(line)
+                                      ? "Fuori magazzino"
+                                      : "Disponibilità generica"}
+                                  </div>
+
+                                  <input
+                                    style={{ ...compactInputStyle(), minWidth: 0 }}
+                                    type="number"
+                                    min="1"
+                                    value={form.qty}
+                                    onChange={(event) =>
+                                      updateInlineAssignmentForm(
+                                        line.lineId,
+                                        "qty",
+                                        event.target.value
+                                      )
+                                    }
+                                    placeholder="Qtà"
+                                  />
+
+                                  <button
+                                    style={{
+                                      ...compactBtnStyle("primary", savingThisLine),
+                                      minWidth: 0,
+                                      width: "100%",
+                                    }}
+                                    disabled={savingThisLine}
+                                    onClick={() => confirmInlineAssignment(line)}
+                                  >
+                                    {savingThisLine ? "Salvo..." : "Assegna"}
+                                  </button>
                                 </div>
                               ) : (
                                 <div
