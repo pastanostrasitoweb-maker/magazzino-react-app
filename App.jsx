@@ -1,4 +1,4 @@
-// versione assegnazione manuale generica e fuori magazzino
+// versione fix assegnazione fuori magazzino e blocco eliminazione
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwug9DkSIvFb-RKYxASguhM150HSxhuH59LyAXoJeSWcM3HyxUJfWtjmRVqpbK-DJ5j/exec";
+  "https://script.google.com/macros/s/AKfycbzTvl2UsFSVVoLBos58-GTqu3zJidWwEzPekZUgnQYC0R9VCNsCTWqUT21WEC2pLOG8/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -1559,6 +1559,26 @@ export default function App() {
   const deleteOrder = async (orderId) => {
     if (!orderId) return;
 
+    const orderToDelete = orders.find((order) => String(order.id) === String(orderId));
+
+    const assignedLines = (orderToDelete?.lines || []).filter(
+      (line) => (assignments[line.lineId] || []).length > 0
+    );
+
+    if (assignedLines.length > 0) {
+      alert(
+        "Prima di eliminare l'ordine devi eliminare le assegnazioni delle righe già assegnate."
+      );
+      return;
+    }
+
+    if (String(orderToDelete?.status || "").trim().toLowerCase() === "preparato") {
+      alert(
+        "Questo ordine è già preparato. Prima elimina eventuali assegnazioni e riportalo da preparare."
+      );
+      return;
+    }
+
     const conferma = window.confirm("Vuoi eliminare davvero questo ordine?");
     if (!conferma) return;
 
@@ -1578,7 +1598,6 @@ export default function App() {
 
       setAssignments((prev) => {
         const next = { ...prev };
-        const orderToDelete = orders.find((order) => String(order.id) === String(orderId));
 
         if (orderToDelete?.lines) {
           orderToDelete.lines.forEach((line) => {
@@ -1598,11 +1617,12 @@ export default function App() {
       setSelectedOrderId(nextOrder?.id ?? "");
       setSelectedLineId(nextOrder?.lines?.[0]?.lineId ?? "");
 
-      
+
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
+
 
   const createLot = async () => {
     if (!newLotProductId) {
@@ -2826,37 +2846,6 @@ export default function App() {
                                     </div>
                                   ) : null}
                                 </div>
-                              ) : availableLots.length === 0 ? (
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    justifyContent: "space-between",
-                                    alignItems: "center",
-                                    gap: 8,
-                                    flexWrap: "wrap",
-                                  }}
-                                >
-                                  <span style={{ color: "#b45309", fontWeight: 800, fontSize: 14 }}>
-                                    Nessun lotto disponibile
-                                  </span>
-                                  {isAdmin ? (
-                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                      <button
-                                        style={compactBtnStyle("outline")}
-                                        onClick={() => openEditLineDialog(line)}
-                                      >
-                                        Qtà
-                                      </button>
-
-                                      <button
-                                        style={compactBtnStyle("outline")}
-                                        onClick={() => deleteLine(selectedOrder.id, line.lineId)}
-                                      >
-                                        <Trash2 size={15} /> Riga
-                                      </button>
-                                    </div>
-                                  ) : null}
-                                </div>
                               ) : !line.requiresLots ? (
                                 <div
                                   style={{
@@ -2907,6 +2896,37 @@ export default function App() {
                                   >
                                     {savingThisLine ? "Salvo..." : "Assegna"}
                                   </button>
+                                </div>
+                              ) : availableLots.length === 0 ? (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  <span style={{ color: "#b45309", fontWeight: 800, fontSize: 14 }}>
+                                    Nessun lotto disponibile
+                                  </span>
+                                  {isAdmin ? (
+                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                      <button
+                                        style={compactBtnStyle("outline")}
+                                        onClick={() => openEditLineDialog(line)}
+                                      >
+                                        Qtà
+                                      </button>
+
+                                      <button
+                                        style={compactBtnStyle("outline")}
+                                        onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                      >
+                                        <Trash2 size={15} /> Riga
+                                      </button>
+                                    </div>
+                                  ) : null}
                                 </div>
                               ) : (
                                 <div
