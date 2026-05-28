@@ -1,4 +1,4 @@
-// versione archivio automatico mezzanotte
+// versione gestione lotti opzionale
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwkxtUc6HzafiTQQU9pHViCrKG3TZ0KgflToioKCZJAdOJpPU02uI1h85Oac-m5yNi_/exec";
+  "https://script.google.com/macros/s/AKfycbzsbIL4hmuYXNh-hdRntHUmuTfVAtzS6nq8tGOp-dOMqfeAwo-zw1lcZbn8GzQyQ0TO/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -250,6 +250,15 @@ function productOptionLabel(product) {
   return categoryLabel ? `${categoryLabel} · ${baseLabel}` : baseLabel;
 }
 
+
+function productManagesLots(product) {
+  return product?.managesLots !== false;
+}
+
+function productStockModeLabel(product) {
+  return productManagesLots(product) ? "Gestione lotti" : "Disponibilità generica";
+}
+
 function miniStatStyle(tone = "neutral") {
   const variants = {
     neutral: { background: "#f3f6fb", color: "#0f172a", border: "1px solid #dce4f0" },
@@ -299,6 +308,11 @@ function normalizeProducts(rows) {
           "Sottocategoria_Prodotto",
         ])
       ).trim(),
+      managesLots: !["no", "n", "false", "falso", "0", "generica", "solo disponibilita", "solo disponibilità"].includes(
+        String(getField(row, ["Gestione_Lotti", "Gestione lotti", "Lotti"]) || "SI")
+          .trim()
+          .toLowerCase()
+      ),
     }))
     .filter((product) => product.code || product.name);
 }
@@ -479,12 +493,18 @@ function Modal({ open, title, children, onClose, maxWidth = 720 }) {
 function applyStockMovementsToLots(lots, movements = []) {
   if (!Array.isArray(movements) || movements.length === 0) return lots;
 
+  const flattenedMovements = movements.flatMap((movement) =>
+    Array.isArray(movement?.movements) ? movement.movements : [movement]
+  );
+
   return lots.map((lot) => {
-    const movement = movements.find(
-      (item) =>
-        String(item.lot) === String(lot.lot) ||
-        String(item.lot) === String(lot.id)
-    );
+    const movement = flattenedMovements.find((item) => {
+      if (item.genericStock) {
+        return String(item.productId) === String(lot.productId);
+      }
+
+      return String(item.lot) === String(lot.lot) || String(item.lot) === String(lot.id);
+    });
 
     if (!movement || movement.newQty === undefined || movement.newQty === null) {
       return lot;
@@ -550,6 +570,7 @@ export default function App() {
   const [newProductCode, setNewProductCode] = useState("");
   const [newProductName, setNewProductName] = useState("");
   const [newProductUom, setNewProductUom] = useState("pz");
+  const [newProductManagesLots, setNewProductManagesLots] = useState(true);
   const [savingNewProduct, setSavingNewProduct] = useState(false);
 
   const [newLotProductId, setNewLotProductId] = useState("");
@@ -561,6 +582,7 @@ export default function App() {
   const [editProductCode, setEditProductCode] = useState("");
   const [editProductName, setEditProductName] = useState("");
   const [editProductUom, setEditProductUom] = useState("pz");
+  const [editProductManagesLots, setEditProductManagesLots] = useState(true);
   const [savingProduct, setSavingProduct] = useState(false);
   const [deletingProductId, setDeletingProductId] = useState("");
   const [inlineAssignmentForms, setInlineAssignmentForms] = useState({});
@@ -753,16 +775,19 @@ export default function App() {
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
       const lines = (order.lines || []).map((line) => {
+        const product = products.find((item) => String(item.id) === String(line.productId));
+        const requiresLots = productManagesLots(product);
+
         const assignedFromAssignments = (assignments[line.lineId] || []).reduce(
           (sum, assignment) => sum + assignment.qty,
           0
         );
 
-        const assignedQty = assignedFromAssignments;
+        const assignedQty = requiresLots ? assignedFromAssignments : Number(line.qtyOrdered || 0);
 
-        const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
+        const qtyToAssign = requiresLots ? Math.max(0, line.qtyOrdered - assignedQty) : 0;
 
-        return { ...line, assignedQty, qtyToAssign };
+        return { ...line, assignedQty, qtyToAssign, requiresLots };
       });
 
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
@@ -780,7 +805,7 @@ export default function App() {
 
       return { ...order, lines, totalToAssign, computedStatus };
     });
-  }, [orders, assignments]);
+  }, [orders, assignments, products]);
 
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
@@ -816,6 +841,10 @@ export default function App() {
   const selectedLine =
     selectedOrder?.lines.find((line) => String(line.lineId) === String(selectedLineId)) ||
     selectedOrder?.lines[0];
+
+  const selectedLotProduct = products.find(
+    (product) => String(product.id) === String(newLotProductId)
+  );
 
   const selectedOrderLines = useMemo(() => {
     if (!selectedOrder?.lines) return [];
@@ -1523,12 +1552,17 @@ export default function App() {
       return;
     }
 
-    if (!newLotCode.trim()) {
+    const selectedProduct = products.find(
+      (product) => String(product.id) === String(newLotProductId)
+    );
+    const managesLots = productManagesLots(selectedProduct);
+
+    if (managesLots && !newLotCode.trim()) {
       alert("Inserisci il codice lotto");
       return;
     }
 
-    if (!newLotExpiry) {
+    if (managesLots && !newLotExpiry) {
       alert("Inserisci la scadenza");
       return;
     }
@@ -1541,8 +1575,8 @@ export default function App() {
     const newLot = {
       id: `LOT-${Date.now()}`,
       productId: String(newLotProductId),
-      lot: newLotCode.trim(),
-      expiry: newLotExpiry,
+      lot: managesLots ? newLotCode.trim() : "DISPONIBILITA",
+      expiry: managesLots ? newLotExpiry : "",
       loadedQty: Number(newLotQty),
     };
 
@@ -1554,7 +1588,7 @@ export default function App() {
 
       if (!result || !result.success) {
         alert(
-          "Errore nel salvataggio lotto sul foglio: " +
+          "Errore nel salvataggio disponibilità sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
         return;
@@ -1568,11 +1602,12 @@ export default function App() {
       setLotDialogOpen(false);
       setPage("prodotti");
 
-      
+
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
+
 
   const createProduct = async () => {
     if (!newProductCode.trim()) {
@@ -1595,6 +1630,8 @@ export default function App() {
       Descrizione_Prodotto: newProductName.trim(),
       uom: newProductUom.trim() || "pz",
       UM: newProductUom.trim() || "pz",
+      managesLots: newProductManagesLots,
+      Gestione_Lotti: newProductManagesLots ? "SI" : "NO",
     };
 
     setSavingNewProduct(true);
@@ -1619,6 +1656,7 @@ export default function App() {
           code: newProduct.code,
           name: newProduct.name,
           uom: newProduct.uom,
+          managesLots: newProduct.managesLots,
         },
         ...prev,
       ]);
@@ -1626,6 +1664,7 @@ export default function App() {
       setNewProductCode("");
       setNewProductName("");
       setNewProductUom("pz");
+      setNewProductManagesLots(true);
       setProductDialogOpen(false);
       setPage("prodotti");
 
@@ -1644,6 +1683,7 @@ export default function App() {
     setEditProductCode(product.code);
     setEditProductName(product.name);
     setEditProductUom(product.uom || "pz");
+    setEditProductManagesLots(productManagesLots(product));
     setEditProductDialogOpen(true);
   };
 
@@ -1663,6 +1703,8 @@ export default function App() {
       Descrizione_Prodotto: editProductName.trim(),
       uom: editProductUom.trim() || "pz",
       UM: editProductUom.trim() || "pz",
+      managesLots: editProductManagesLots,
+      Gestione_Lotti: editProductManagesLots ? "SI" : "NO",
     };
 
     setSavingProduct(true);
@@ -1689,6 +1731,7 @@ export default function App() {
                 code: editProductCode.trim(),
                 name: editProductName.trim(),
                 uom: editProductUom.trim() || "pz",
+                managesLots: editProductManagesLots,
               }
             : product
         )
@@ -1699,6 +1742,7 @@ export default function App() {
       setEditProductCode("");
       setEditProductName("");
       setEditProductUom("pz");
+      setEditProductManagesLots(true);
 
       
     } catch (error) {
@@ -2721,6 +2765,17 @@ export default function App() {
                                     </div>
                                   ) : null}
                                 </div>
+                              ) : !line.requiresLots ? (
+                                <div
+                                  style={{
+                                    ...cardStyle({ background: "#f8fafc" }),
+                                    padding: 12,
+                                    color: "#40516a",
+                                    fontSize: 14,
+                                  }}
+                                >
+                                  Disponibilità generica: nessun lotto da assegnare per questo prodotto.
+                                </div>
                               ) : (
                                 <div
                                   style={{
@@ -3281,12 +3336,19 @@ export default function App() {
                                                 gap: 8,
                                               }}
                                             >
-                                              <AlertTriangle size={16} /> Nessun lotto disponibile
+                                              <AlertTriangle size={16} />{" "}
+                                              {productManagesLots(product)
+                                                ? "Nessun lotto disponibile"
+                                                : "Nessuna disponibilità caricata"}
                                             </div>
                                           </div>
                                         ) : (
                                           product.productLots
-                                            .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
+                                            .sort((a, b) =>
+                                              productManagesLots(product)
+                                                ? new Date(a.expiry || "2099-12-31") - new Date(b.expiry || "2099-12-31")
+                                                : 0
+                                            )
                                             .map((lot) => (
                                               <div
                                                 key={lot.id}
@@ -3304,11 +3366,15 @@ export default function App() {
                                                 >
                                                   <div>
                                                     <div style={{ fontWeight: 800 }}>
-                                                      Lotto {lot.lot}
+                                                      {productManagesLots(product)
+                                                        ? `Lotto ${lot.lot}`
+                                                        : "Disponibilità generica"}
                                                     </div>
-                                                    <div style={{ marginTop: 6, color: "#66758b" }}>
-                                                      Scadenza {fmtDate(lot.expiry)}
-                                                    </div>
+                                                    {productManagesLots(product) ? (
+                                                      <div style={{ marginTop: 6, color: "#66758b" }}>
+                                                        Scadenza {fmtDate(lot.expiry)}
+                                                      </div>
+                                                    ) : null}
                                                   </div>
 
                                                   <div
@@ -3612,6 +3678,26 @@ export default function App() {
               />
             </div>
 
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: 14,
+                border: "1px solid #dbe2ea",
+                borderRadius: 16,
+                background: "#f8fafc",
+                fontWeight: 800,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={editProductManagesLots}
+                onChange={(event) => setEditProductManagesLots(event.target.checked)}
+              />
+              Gestisci lotti e scadenze per questo prodotto
+            </label>
+
             <button
               style={btnStyle("primary", savingProduct)}
               disabled={savingProduct}
@@ -3733,6 +3819,26 @@ export default function App() {
               />
             </div>
 
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: 14,
+                border: "1px solid #dbe2ea",
+                borderRadius: 16,
+                background: "#f8fafc",
+                fontWeight: 800,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={newProductManagesLots}
+                onChange={(event) => setNewProductManagesLots(event.target.checked)}
+              />
+              Gestisci lotti e scadenze per questo prodotto
+            </label>
+
             <button
               style={btnStyle("primary", savingNewProduct)}
               disabled={savingNewProduct}
@@ -3745,7 +3851,7 @@ export default function App() {
 
         <Modal
           open={lotDialogOpen}
-          title="Carica lotto"
+          title={selectedLotProduct && !productManagesLots(selectedLotProduct) ? "Carica disponibilità" : "Carica lotto"}
           onClose={() => setLotDialogOpen(false)}
           maxWidth={560}
         >
@@ -3768,27 +3874,35 @@ export default function App() {
               </select>
             </div>
 
-            <div>
-              <label style={labelStyle()}>Codice lotto</label>
+            {selectedLotProduct && productManagesLots(selectedLotProduct) ? (
+              <>
+                <div>
+                  <label style={labelStyle()}>Codice lotto</label>
 
-              <input
-                style={inputStyle()}
-                value={newLotCode}
-                onChange={(event) => setNewLotCode(event.target.value)}
-                placeholder="Es. 2604110"
-              />
-            </div>
+                  <input
+                    style={inputStyle()}
+                    value={newLotCode}
+                    onChange={(event) => setNewLotCode(event.target.value)}
+                    placeholder="Es. 2604110"
+                  />
+                </div>
 
-            <div>
-              <label style={labelStyle()}>Scadenza</label>
+                <div>
+                  <label style={labelStyle()}>Scadenza</label>
 
-              <input
-                style={inputStyle()}
-                type="date"
-                value={newLotExpiry}
-                onChange={(event) => setNewLotExpiry(event.target.value)}
-              />
-            </div>
+                  <input
+                    style={inputStyle()}
+                    type="date"
+                    value={newLotExpiry}
+                    onChange={(event) => setNewLotExpiry(event.target.value)}
+                  />
+                </div>
+              </>
+            ) : (
+              <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 14, color: "#40516a" }}>
+                Questo prodotto è impostato su disponibilità generica: carichi solo una quantità, senza lotto e senza scadenza.
+              </div>
+            )}
 
             <div>
               <label style={labelStyle()}>Quantità caricata</label>
@@ -3804,7 +3918,7 @@ export default function App() {
             </div>
 
             <button style={btnStyle("primary")} onClick={createLot}>
-              Salva lotto
+              {selectedLotProduct && !productManagesLots(selectedLotProduct) ? "Salva disponibilità" : "Salva lotto"}
             </button>
           </div>
         </Modal>
