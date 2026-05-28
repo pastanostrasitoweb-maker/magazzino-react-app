@@ -1,4 +1,4 @@
-// versione gestione lotti opzionale
+// versione righe fuori magazzino
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbzsbIL4hmuYXNh-hdRntHUmuTfVAtzS6nq8tGOp-dOMqfeAwo-zw1lcZbn8GzQyQ0TO/exec";
+  "https://script.google.com/macros/s/AKfycbzbGzPXhRlfoE0QoCcaAPw_9G2QHwbjoWoOJ1h-2uXb3kOe4xuJ4wELLyXzcoYJsGO9/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -259,6 +259,15 @@ function productStockModeLabel(product) {
   return productManagesLots(product) ? "Gestione lotti" : "Disponibilità generica";
 }
 
+const OUTSIDE_STOCK_PRODUCT_ID = "FUORI_MAGAZZINO";
+
+function isOutsideStockLine(line) {
+  return (
+    line?.isOutsideStock ||
+    String(line?.productId || "").startsWith(OUTSIDE_STOCK_PRODUCT_ID)
+  );
+}
+
 function miniStatStyle(tone = "neutral") {
   const variants = {
     neutral: { background: "#f3f6fb", color: "#0f172a", border: "1px solid #dce4f0" },
@@ -384,10 +393,18 @@ function normalizeOrderLines(rows, products) {
         getField(row, ["ID_Prodotto", "Id_Prodotto", "ProductId"])
       ).trim();
 
+      const productName = String(
+        getField(row, ["Descrizione_Prodotto", "Descrizione prodotto", "Descrizione", "productName"])
+      ).trim();
+
+      const resolvedProductId = productByCode[productCode] || productById[productIdRaw] || productIdRaw;
+
       return {
         lineId: String(getField(row, ["ID_Riga", "Id_Riga", "id"]) || `RIGA-${index + 1}`),
         orderId: String(getField(row, ["ID_Ordine", "Id_Ordine", "Ordine"])).trim(),
-        productId: productByCode[productCode] || productById[productIdRaw] || productIdRaw,
+        productId: resolvedProductId,
+        productName,
+        isOutsideStock: String(resolvedProductId).startsWith(OUTSIDE_STOCK_PRODUCT_ID),
         qtyOrdered: Number(
           getField(row, [
             "Quantità_Ordinata",
@@ -552,7 +569,7 @@ export default function App() {
 
   const [newOrderCustomer, setNewOrderCustomer] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
-  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", qtyOrdered: "" }]);
+  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", customName: "", isOutsideStock: false, qtyOrdered: "" }]);
 
   const [editOrderDialogOpen, setEditOrderDialogOpen] = useState(false);
   const [editOrderCustomer, setEditOrderCustomer] = useState("");
@@ -560,6 +577,8 @@ export default function App() {
   const [savingEditedOrder, setSavingEditedOrder] = useState(false);
 
   const [newLineProductId, setNewLineProductId] = useState("");
+  const [newLineIsOutsideStock, setNewLineIsOutsideStock] = useState(false);
+  const [newLineCustomName, setNewLineCustomName] = useState("");
   const [newLineQty, setNewLineQty] = useState("");
   const [savingNewLine, setSavingNewLine] = useState(false);
 
@@ -776,7 +795,8 @@ export default function App() {
     return orders.map((order) => {
       const lines = (order.lines || []).map((line) => {
         const product = products.find((item) => String(item.id) === String(line.productId));
-        const requiresLots = productManagesLots(product);
+        const outsideStock = isOutsideStockLine(line);
+        const requiresLots = outsideStock ? false : productManagesLots(product);
 
         const assignedFromAssignments = (assignments[line.lineId] || []).reduce(
           (sum, assignment) => sum + assignment.qty,
@@ -787,7 +807,7 @@ export default function App() {
 
         const qtyToAssign = requiresLots ? Math.max(0, line.qtyOrdered - assignedQty) : 0;
 
-        return { ...line, assignedQty, qtyToAssign, requiresLots };
+        return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock };
       });
 
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
@@ -1415,7 +1435,7 @@ export default function App() {
   };
 
   const addEmptyOrderLine = () => {
-    setNewOrderLines((prev) => [...prev, { productId: "", qtyOrdered: "" }]);
+    setNewOrderLines((prev) => [...prev, { productId: "", customName: "", isOutsideStock: false, qtyOrdered: "" }]);
   };
 
   const updateNewOrderLine = (index, field, value) => {
@@ -1435,8 +1455,26 @@ export default function App() {
     }
 
     const validLines = newOrderLines
-      .filter((line) => line.productId && Number(line.qtyOrdered) > 0)
+      .filter((line) => {
+        const hasQty = Number(line.qtyOrdered) > 0;
+        const hasProduct = line.isOutsideStock
+          ? String(line.customName || "").trim()
+          : line.productId;
+
+        return hasQty && hasProduct;
+      })
       .map((line, index) => {
+        if (line.isOutsideStock) {
+          return {
+            lineId: `RIGA-${Date.now()}-${index}`,
+            productId: `${OUTSIDE_STOCK_PRODUCT_ID}-${Date.now()}-${index}`,
+            productCode: OUTSIDE_STOCK_PRODUCT_ID,
+            productName: String(line.customName || "").trim(),
+            isOutsideStock: true,
+            qtyOrdered: Number(line.qtyOrdered),
+          };
+        }
+
         const product = products.find((p) => String(p.id) === String(line.productId));
 
         return {
@@ -1444,12 +1482,13 @@ export default function App() {
           productId: String(line.productId),
           productCode: product?.code || "",
           productName: product?.name || "",
+          isOutsideStock: false,
           qtyOrdered: Number(line.qtyOrdered),
         };
       });
 
     if (validLines.length === 0) {
-      alert("Inserisci almeno una riga ordine valida con prodotto e quantità");
+      alert("Inserisci almeno una riga valida con articolo e quantità");
       return;
     }
 
@@ -1488,7 +1527,7 @@ export default function App() {
       setSelectedLineId(newOrder.lines[0]?.lineId || "");
       setNewOrderCustomer("");
       setNewOrderNotes("");
-      setNewOrderLines([{ productId: "", qtyOrdered: "" }]);
+      setNewOrderLines([{ productId: "", customName: "", isOutsideStock: false, qtyOrdered: "" }]);
       setOrderDialogOpen(false);
       setPage("ordini");
 
@@ -1838,11 +1877,6 @@ export default function App() {
   const createOrderLine = async () => {
     if (!isAdmin || !selectedOrder) return;
 
-    if (!newLineProductId) {
-      alert("Seleziona il prodotto");
-      return;
-    }
-
     const qtyOrdered = Number(newLineQty);
 
     if (!qtyOrdered || qtyOrdered <= 0) {
@@ -1850,21 +1884,48 @@ export default function App() {
       return;
     }
 
-    const product = products.find((item) => String(item.id) === String(newLineProductId));
+    let newLine;
 
-    if (!product) {
-      alert("Prodotto non trovato");
-      return;
+    if (newLineIsOutsideStock) {
+      if (!newLineCustomName.trim()) {
+        alert("Inserisci il nome dell'articolo fuori magazzino");
+        return;
+      }
+
+      newLine = {
+        lineId: `RIGA-${Date.now()}`,
+        orderId: selectedOrder.id,
+        productId: `${OUTSIDE_STOCK_PRODUCT_ID}-${Date.now()}`,
+        productCode: OUTSIDE_STOCK_PRODUCT_ID,
+        productName: newLineCustomName.trim(),
+        isOutsideStock: true,
+        qtyOrdered,
+        qtyAssignedFromSheet: 0,
+      };
+    } else {
+      if (!newLineProductId) {
+        alert("Seleziona il prodotto");
+        return;
+      }
+
+      const product = products.find((item) => String(item.id) === String(newLineProductId));
+
+      if (!product) {
+        alert("Prodotto non trovato");
+        return;
+      }
+
+      newLine = {
+        lineId: `RIGA-${Date.now()}`,
+        orderId: selectedOrder.id,
+        productId: String(product.id),
+        productCode: product.code || product.id,
+        productName: product.name || "",
+        isOutsideStock: false,
+        qtyOrdered,
+        qtyAssignedFromSheet: 0,
+      };
     }
-
-    const newLine = {
-      lineId: `RIGA-${Date.now()}`,
-      orderId: selectedOrder.id,
-      productId: String(product.id),
-      productCode: product.code || product.id,
-      qtyOrdered,
-      qtyAssignedFromSheet: 0,
-    };
 
     setSavingNewLine(true);
 
@@ -1878,6 +1939,8 @@ export default function App() {
 
     setAddLineDialogOpen(false);
     setNewLineProductId("");
+    setNewLineIsOutsideStock(false);
+    setNewLineCustomName("");
     setNewLineQty("");
 
     try {
@@ -1886,7 +1949,10 @@ export default function App() {
         payload: JSON.stringify({
           orderId: selectedOrder.id,
           lineId: newLine.lineId,
-          productId: product.code || product.id,
+          productId: newLine.productId,
+          productCode: newLine.productCode,
+          productName: newLine.productName,
+          isOutsideStock: newLine.isOutsideStock,
           qtyOrdered,
         }),
       });
@@ -2603,8 +2669,13 @@ export default function App() {
                                 }}
                               >
                                 <span style={{ fontSize: 17, fontWeight: 950, color: "#07153a" }}>
-                                  {product?.code || line.productId}
+                                  {isOutsideStockLine(line) ? "FUORI MAGAZZINO" : product?.code || line.productId}
                                 </span>
+                                {isOutsideStockLine(line) ? (
+                                  <span style={{ ...badgeStyle("warning"), padding: "4px 9px", fontSize: 12 }}>
+                                    Articolo libero
+                                  </span>
+                                ) : null}
                                 {completed ? (
                                   <span
                                     style={{
@@ -2627,7 +2698,7 @@ export default function App() {
                                   overflowWrap: "anywhere",
                                 }}
                               >
-                                {product?.name}
+                                {isOutsideStockLine(line) ? line.productName : product?.name}
                               </div>
                             </div>
 
@@ -3527,40 +3598,78 @@ export default function App() {
                     borderRadius: 18,
                     padding: 14,
                     display: "grid",
-                    gridTemplateColumns: responsiveOrderLineColumns,
                     gap: 12,
                   }}
                 >
-                  <select
-                    style={inputStyle()}
-                    value={line.productId}
-                    onChange={(event) =>
-                      updateNewOrderLine(index, "productId", event.target.value)
-                    }
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      fontWeight: 800,
+                      color: "#40516a",
+                    }}
                   >
-                    <option value="">Seleziona prodotto</option>
+                    <input
+                      type="checkbox"
+                      checked={!!line.isOutsideStock}
+                      onChange={(event) => {
+                        updateNewOrderLine(index, "isOutsideStock", event.target.checked);
+                        updateNewOrderLine(index, "productId", "");
+                      }}
+                    />
+                    Riga fuori magazzino
+                  </label>
 
-                    {products.map((product) => (
-                      <option key={product.id} value={String(product.id)}>
-                        {productOptionLabel(product)}
-                      </option>
-                    ))}
-                  </select>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: responsiveOrderLineColumns,
+                      gap: 12,
+                    }}
+                  >
+                    {line.isOutsideStock ? (
+                      <input
+                        style={inputStyle()}
+                        value={line.customName || ""}
+                        onChange={(event) =>
+                          updateNewOrderLine(index, "customName", event.target.value)
+                        }
+                        placeholder="Nome articolo fuori magazzino"
+                      />
+                    ) : (
+                      <select
+                        style={inputStyle()}
+                        value={line.productId}
+                        onChange={(event) =>
+                          updateNewOrderLine(index, "productId", event.target.value)
+                        }
+                      >
+                        <option value="">Seleziona prodotto</option>
 
-                  <input
-                    style={inputStyle()}
-                    type="number"
-                    min="1"
-                    value={line.qtyOrdered}
-                    onChange={(event) =>
-                      updateNewOrderLine(index, "qtyOrdered", event.target.value)
-                    }
-                    placeholder="Quantità"
-                  />
+                        {products.map((product) => (
+                          <option key={product.id} value={String(product.id)}>
+                            {productOptionLabel(product)}
+                          </option>
+                        ))}
+                      </select>
+                    )}
 
-                  <button style={btnStyle("outline")} onClick={() => removeNewOrderLine(index)}>
-                    Rimuovi
-                  </button>
+                    <input
+                      style={inputStyle()}
+                      type="number"
+                      min="1"
+                      value={line.qtyOrdered}
+                      onChange={(event) =>
+                        updateNewOrderLine(index, "qtyOrdered", event.target.value)
+                      }
+                      placeholder="Quantità"
+                    />
+
+                    <button style={btnStyle("outline")} onClick={() => removeNewOrderLine(index)}>
+                      Rimuovi
+                    </button>
+                  </div>
                 </div>
               ))}
 
@@ -3717,21 +3826,57 @@ export default function App() {
               </div>
             </div>
 
-            <div>
-              <label style={labelStyle()}>Prodotto</label>
-              <select
-                style={inputStyle()}
-                value={newLineProductId}
-                onChange={(event) => setNewLineProductId(event.target.value)}
-              >
-                <option value="">Seleziona prodotto</option>
-                {products.map((product) => (
-                  <option key={product.id} value={String(product.id)}>
-                    {productOptionLabel(product)}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: 14,
+                border: "1px solid #dbe2ea",
+                borderRadius: 16,
+                background: "#f8fafc",
+                fontWeight: 800,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={newLineIsOutsideStock}
+                onChange={(event) => {
+                  setNewLineIsOutsideStock(event.target.checked);
+                  setNewLineProductId("");
+                  setNewLineCustomName("");
+                }}
+              />
+              Riga fuori magazzino
+            </label>
+
+            {newLineIsOutsideStock ? (
+              <div>
+                <label style={labelStyle()}>Nome articolo fuori magazzino</label>
+                <input
+                  style={inputStyle()}
+                  value={newLineCustomName}
+                  onChange={(event) => setNewLineCustomName(event.target.value)}
+                  placeholder="Es. prodotto speciale / omaggio / extra"
+                />
+              </div>
+            ) : (
+              <div>
+                <label style={labelStyle()}>Prodotto</label>
+                <select
+                  style={inputStyle()}
+                  value={newLineProductId}
+                  onChange={(event) => setNewLineProductId(event.target.value)}
+                >
+                  <option value="">Seleziona prodotto</option>
+                  {products.map((product) => (
+                    <option key={product.id} value={String(product.id)}>
+                      {productOptionLabel(product)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <label style={labelStyle()}>Quantità ordinata</label>
