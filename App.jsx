@@ -1,4 +1,4 @@
-// versione ordine leggibile - titolo cliente e ID in secondo piano
+// versione admin modifica ordine nome note
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbzbasiffRt-634QNySY911w0dOoz6I4BeuucAM1Ti9_oK33df3K7G1SdklfrCpydxVm/exec";
+  "https://script.google.com/macros/s/AKfycbyXWX3I0GEc16xQKQJrZ4i90gbip77WNE_kRWK8u35QODmCnGjabIjABJB_g9s2S9j7/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -341,6 +341,7 @@ function normalizeOrders(rows) {
     .map((row, index) => ({
       id: String(getField(row, ["ID_Ordine", "Id_Ordine", "Ordine", "id"]) || `ORD-${index + 1}`),
       customer: String(getField(row, ["Cliente", "Customer", "cliente"])).trim(),
+      notes: String(getField(row, ["Note", "Note_Ordine", "Descrizione", "notes"])).trim(),
       status: String(getField(row, ["Stato", "status"]) || "Da preparare"),
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
       lines: [],
@@ -522,7 +523,13 @@ export default function App() {
   const [adminError, setAdminError] = useState("");
 
   const [newOrderCustomer, setNewOrderCustomer] = useState("");
+  const [newOrderNotes, setNewOrderNotes] = useState("");
   const [newOrderLines, setNewOrderLines] = useState([{ productId: "", qtyOrdered: "" }]);
+
+  const [editOrderDialogOpen, setEditOrderDialogOpen] = useState(false);
+  const [editOrderCustomer, setEditOrderCustomer] = useState("");
+  const [editOrderNotes, setEditOrderNotes] = useState("");
+  const [savingEditedOrder, setSavingEditedOrder] = useState(false);
 
   const [newLineProductId, setNewLineProductId] = useState("");
   const [newLineQty, setNewLineQty] = useState("");
@@ -1169,6 +1176,88 @@ export default function App() {
     }
   };
 
+  const openEditOrderDialog = () => {
+    if (!selectedOrder) return;
+
+    setEditOrderCustomer(selectedOrder.customer || "");
+    setEditOrderNotes(selectedOrder.notes || "");
+    setEditOrderDialogOpen(true);
+  };
+
+  const saveEditedOrder = async () => {
+    if (!selectedOrder) return;
+
+    if (!editOrderCustomer.trim()) {
+      alert("Inserisci il nome ordine/cliente");
+      return;
+    }
+
+    setSavingEditedOrder(true);
+
+    const previousOrder = selectedOrder;
+
+    setOrders((prev) =>
+      prev.map((order) =>
+        String(order.id) === String(selectedOrder.id)
+          ? {
+              ...order,
+              customer: editOrderCustomer.trim(),
+              notes: editOrderNotes.trim(),
+            }
+          : order
+      )
+    );
+
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({
+          orderId: selectedOrder.id,
+          customer: editOrderCustomer.trim(),
+          notes: editOrderNotes.trim(),
+        }),
+      });
+
+      if (!result || !result.success) {
+        setOrders((prev) =>
+          prev.map((order) =>
+            String(order.id) === String(previousOrder.id)
+              ? {
+                  ...order,
+                  customer: previousOrder.customer,
+                  notes: previousOrder.notes,
+                }
+              : order
+          )
+        );
+
+        alert(
+          "Errore nel salvataggio ordine sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setEditOrderDialogOpen(false);
+    } catch (error) {
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.id) === String(previousOrder.id)
+            ? {
+                ...order,
+                customer: previousOrder.customer,
+                notes: previousOrder.notes,
+              }
+            : order
+        )
+      );
+
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingEditedOrder(false);
+    }
+  };
+
   const markOrderPrepared = async () => {
     if (!selectedOrder) return;
 
@@ -1243,6 +1332,7 @@ export default function App() {
     const newOrder = {
       id: `ORD-${Date.now()}`,
       customer: newOrderCustomer.trim(),
+      notes: newOrderNotes.trim(),
       status: "Da preparare",
       date: new Date().toISOString().slice(0, 10),
       lines: validLines,
@@ -1254,6 +1344,7 @@ export default function App() {
         payload: JSON.stringify({
           id: newOrder.id,
           customer: newOrder.customer,
+          notes: newOrder.notes,
           status: newOrder.status,
           date: newOrder.date,
           lines: newOrder.lines,
@@ -1272,6 +1363,7 @@ export default function App() {
       setSelectedOrderId(newOrder.id);
       setSelectedLineId(newOrder.lines[0]?.lineId || "");
       setNewOrderCustomer("");
+      setNewOrderNotes("");
       setNewOrderLines([{ productId: "", qtyOrdered: "" }]);
       setOrderDialogOpen(false);
       setPage("ordini");
@@ -2119,6 +2211,11 @@ export default function App() {
                         <div style={{ color: "#66758b", marginTop: 4, fontSize: 12, overflowWrap: "anywhere" }}>
                           {fmtDate(order.date)} · ID {order.id}
                         </div>
+                        {order.notes ? (
+                          <div style={{ marginTop: 8, color: "#40516a", fontSize: 13, lineHeight: 1.35 }}>
+                            {order.notes}
+                          </div>
+                        ) : null}
                       </div>
 
                       <span style={badgeStyle(order.totalToAssign > 0 ? "warning" : "success")}>{order.computedStatus}</span>
@@ -2170,13 +2267,36 @@ export default function App() {
                         <div style={{ marginTop: 6, color: "#66758b", fontSize: 13, overflowWrap: "anywhere" }}>
                           {fmtDate(selectedOrder.date)} · ID ordine {selectedOrder.id}
                         </div>
+
+                        {selectedOrder.notes ? (
+                          <div
+                            style={{
+                              marginTop: 12,
+                              padding: 12,
+                              borderRadius: 16,
+                              background: "#f8fafc",
+                              border: "1px solid #e5edf6",
+                              color: "#40516a",
+                              lineHeight: 1.45,
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            {selectedOrder.notes}
+                          </div>
+                        ) : null}
                       </div>
 
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         {isAdmin ? (
-                          <button style={btnStyle("primary")} onClick={openAddLineDialog}>
-                            <Plus size={16} /> Riga
-                          </button>
+                          <>
+                            <button style={btnStyle("outline")} onClick={openEditOrderDialog}>
+                              <Pencil size={16} /> Modifica
+                            </button>
+
+                            <button style={btnStyle("primary")} onClick={openAddLineDialog}>
+                              <Plus size={16} /> Riga
+                            </button>
+                          </>
                         ) : null}
 
                         <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
@@ -2969,13 +3089,24 @@ export default function App() {
         >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
-              <label style={labelStyle()}>Cliente</label>
+              <label style={labelStyle()}>Nome ordine / cliente</label>
 
               <input
                 style={inputStyle()}
                 value={newOrderCustomer}
                 onChange={(event) => setNewOrderCustomer(event.target.value)}
-                placeholder="Nome cliente"
+                placeholder="Nome ordine o cliente"
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Note ordine</label>
+
+              <textarea
+                style={{ ...inputStyle(), minHeight: 94, resize: "vertical" }}
+                value={newOrderNotes}
+                onChange={(event) => setNewOrderNotes(event.target.value)}
+                placeholder="Es. urgenze, consegna, corriere, indicazioni operatore..."
               />
             </div>
 
@@ -3034,6 +3165,45 @@ export default function App() {
 
             <button style={btnStyle("primary")} onClick={createOrder}>
               Crea ordine
+            </button>
+          </div>
+        </Modal>
+
+        <Modal
+          open={editOrderDialogOpen}
+          title="Modifica ordine"
+          onClose={() => setEditOrderDialogOpen(false)}
+          maxWidth={620}
+        >
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <label style={labelStyle()}>Nome ordine / cliente</label>
+
+              <input
+                style={inputStyle()}
+                value={editOrderCustomer}
+                onChange={(event) => setEditOrderCustomer(event.target.value)}
+                placeholder="Nome ordine o cliente"
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Note ordine</label>
+
+              <textarea
+                style={{ ...inputStyle(), minHeight: 120, resize: "vertical" }}
+                value={editOrderNotes}
+                onChange={(event) => setEditOrderNotes(event.target.value)}
+                placeholder="Note descrittive per admin/operatore"
+              />
+            </div>
+
+            <button
+              style={btnStyle("primary", savingEditedOrder)}
+              disabled={savingEditedOrder}
+              onClick={saveEditedOrder}
+            >
+              {savingEditedOrder ? "Salvataggio..." : "Salva ordine"}
             </button>
           </div>
         </Modal>
