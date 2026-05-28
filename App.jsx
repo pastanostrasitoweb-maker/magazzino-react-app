@@ -1,4 +1,4 @@
-// versione finale elimina assegnazione ripristina - URL aggiornato
+// versione veloce - meno refresh completi e stock immediato
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -466,6 +466,27 @@ function Modal({ open, title, children, onClose, maxWidth = 720 }) {
       </div>
     </div>
   );
+}
+
+function applyStockMovementsToLots(lots, movements = []) {
+  if (!Array.isArray(movements) || movements.length === 0) return lots;
+
+  return lots.map((lot) => {
+    const movement = movements.find(
+      (item) =>
+        String(item.lot) === String(lot.lot) ||
+        String(item.lot) === String(lot.id)
+    );
+
+    if (!movement || movement.newQty === undefined || movement.newQty === null) {
+      return lot;
+    }
+
+    return {
+      ...lot,
+      loadedQty: Number(movement.newQty),
+    };
+  });
 }
 
 export default function App() {
@@ -1173,11 +1194,12 @@ export default function App() {
         )
       );
 
-      await loadDataFromSheets();
+      setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements || []));
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
+
 
   const addEmptyOrderLine = () => {
     setNewOrderLines((prev) => [...prev, { productId: "", qtyOrdered: "" }]);
@@ -1810,7 +1832,6 @@ export default function App() {
       (assignment) => String(assignment.assignmentId) === String(assignmentId)
     );
 
-    // Aggiornamento immediato dell'interfaccia: il residuo torna subito disponibile.
     setAssignments((prev) => ({
       ...prev,
       [lineId]: (prev[lineId] || []).filter(
@@ -1836,6 +1857,21 @@ export default function App() {
           "Errore nell'eliminazione assegnazione sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
+        return;
+      }
+
+      if (result.stockRestored) {
+        setLots((prev) => applyStockMovementsToLots(prev, [result.stockRestored]));
+      }
+
+      if (result.orderReopened && result.orderId) {
+        setOrders((prev) =>
+          prev.map((order) =>
+            String(order.id) === String(result.orderId)
+              ? { ...order, status: "Da preparare" }
+              : order
+          )
+        );
       }
     } catch (error) {
       if (assignmentToDelete) {
@@ -1848,6 +1884,7 @@ export default function App() {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
+
 
   const deleteLot = async (lotId) => {
     if (!lotId) return;
