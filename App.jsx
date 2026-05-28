@@ -1,4 +1,4 @@
-// versione ordini con stato pronto e bottone intelligente
+// versione fix foglio bianco Clock - build forzata v2
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,6 +18,7 @@ import {
 const SHEETS_API_URL =
   "https://script.google.com/macros/s/AKfycbyXWX3I0GEc16xQKQJrZ4i90gbip77WNE_kRWK8u35QODmCnGjabIjABJB_g9s2S9j7/exec";
 const ADMIN_PIN = "1234";
+const APP_BUILD_MARKER = "fix-bianco-clock-v2";
 
 const fallbackProducts = [
   { id: "1", code: "NFARMA 013", name: "Pici 250", uom: "pz", category: "", subcategory: "" },
