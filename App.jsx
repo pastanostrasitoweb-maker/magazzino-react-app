@@ -1,4 +1,4 @@
-// versione admin modifica ordine nome note
+// versione ordini con stato pronto e bottone intelligente
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -505,6 +505,7 @@ export default function App() {
   const [assignments, setAssignments] = useState({});
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [savingPreparedOrderId, setSavingPreparedOrderId] = useState("");
 
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [selectedLotId, setSelectedLotId] = useState("");
@@ -760,12 +761,12 @@ export default function App() {
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
       const totalOrdered = lines.reduce((sum, line) => sum + line.qtyOrdered, 0);
 
-      const explicitStatus = String(order.status || "");
+      const explicitStatus = String(order.status || "").trim();
       const computedStatus =
-        explicitStatus === "Preparato"
+        explicitStatus.toLowerCase() === "preparato"
           ? "Preparato"
           : totalToAssign === 0
-            ? "Preparato"
+            ? "Pronto"
             : totalToAssign < totalOrdered
               ? "Parziale"
               : "Da preparare";
@@ -1261,6 +1262,13 @@ export default function App() {
   const markOrderPrepared = async () => {
     if (!selectedOrder) return;
 
+    if (selectedOrder.totalToAssign > 0) {
+      alert("Prima assegna tutti i lotti dell'ordine.");
+      return;
+    }
+
+    setSavingPreparedOrderId(String(selectedOrder.id));
+
     try {
       const result = await callSheetsApi({
         action: "markOrderPrepared",
@@ -1286,9 +1294,10 @@ export default function App() {
       setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements || []));
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingPreparedOrderId("");
     }
   };
-
 
   const addEmptyOrderLine = () => {
     setNewOrderLines((prev) => [...prev, { productId: "", qtyOrdered: "" }]);
@@ -2659,9 +2668,26 @@ export default function App() {
                   </div>
 
                   <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-                    <button style={btnStyle("success")} onClick={markOrderPrepared}>
-                      <CheckCircle2 size={18} /> Segna ordine preparato
-                    </button>
+                    {String(selectedOrder.status || "").trim().toLowerCase() === "preparato" ? (
+                      <button style={btnStyle("success", true)} disabled>
+                        <CheckCircle2 size={18} /> Pronto
+                      </button>
+                    ) : selectedOrder.totalToAssign === 0 ? (
+                      <button
+                        style={btnStyle("success", savingPreparedOrderId === String(selectedOrder.id))}
+                        disabled={savingPreparedOrderId === String(selectedOrder.id)}
+                        onClick={markOrderPrepared}
+                      >
+                        <CheckCircle2 size={18} />
+                        {savingPreparedOrderId === String(selectedOrder.id)
+                          ? "Salvataggio..."
+                          : "Segna pronto"}
+                      </button>
+                    ) : (
+                      <button style={btnStyle("outline", true)} disabled>
+                        <Clock size={18} /> Completa i lotti
+                      </button>
+                    )}
                   </div>
                 </>
               ) : (
