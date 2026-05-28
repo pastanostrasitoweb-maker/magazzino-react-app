@@ -1,4 +1,4 @@
-// versione aesthetic header Gluten Free Experience
+// versione archivio automatico mezzanotte
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -13,10 +13,12 @@ import {
   Pencil,
   RefreshCw,
   Clock,
+  Archive,
+  RotateCcw,
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbyXWX3I0GEc16xQKQJrZ4i90gbip77WNE_kRWK8u35QODmCnGjabIjABJB_g9s2S9j7/exec";
+  "https://script.google.com/macros/s/AKfycbwkxtUc6HzafiTQQU9pHViCrKG3TZ0KgflToioKCZJAdOJpPU02uI1h85Oac-m5yNi_/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -343,6 +345,10 @@ function normalizeOrders(rows) {
       id: String(getField(row, ["ID_Ordine", "Id_Ordine", "Ordine", "id"]) || `ORD-${index + 1}`),
       customer: String(getField(row, ["Cliente", "Customer", "cliente"])).trim(),
       notes: String(getField(row, ["Note", "Note_Ordine", "Descrizione", "notes"])).trim(),
+      dataPrepared: getField(row, ["Data_Preparato", "Data preparato", "Prepared_At"]),
+      archived: ["si", "sì", "yes", "true"].includes(
+        String(getField(row, ["Archiviato", "Archivio", "Archived"])).trim().toLowerCase()
+      ),
       status: String(getField(row, ["Stato", "status"]) || "Da preparare"),
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
       lines: [],
@@ -779,6 +785,7 @@ export default function App() {
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
     const visibleOrders = ordersWithComputed
+      .filter((order) => !order.archived)
       .filter((order) => String(order.computedStatus) !== "Preparato" || !q)
       .sort((a, b) => {
         const aOpen = a.totalToAssign > 0 ? 0 : 1;
@@ -797,9 +804,14 @@ export default function App() {
     );
   }, [ordersWithComputed, orderSearch]);
 
+  const activeOrders = useMemo(
+    () => ordersWithComputed.filter((order) => !order.archived),
+    [ordersWithComputed]
+  );
+
   const selectedOrder =
-    ordersWithComputed.find((order) => String(order.id) === String(selectedOrderId)) ||
-    ordersWithComputed[0];
+    activeOrders.find((order) => String(order.id) === String(selectedOrderId)) ||
+    activeOrders[0];
 
   const selectedLine =
     selectedOrder?.lines.find((line) => String(line.lineId) === String(selectedLineId)) ||
@@ -1178,6 +1190,74 @@ export default function App() {
     }
   };
 
+  const archivedGroups = useMemo(() => {
+    const q = orderSearch.trim().toLowerCase();
+
+    const archivedOrders = ordersWithComputed
+      .filter((order) => order.archived)
+      .filter((order) => {
+        if (!q) return true;
+
+        return (
+          String(order.id).toLowerCase().includes(q) ||
+          String(order.customer).toLowerCase().includes(q) ||
+          String(order.notes).toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => String(b.dataPrepared || b.date || "").localeCompare(String(a.dataPrepared || a.date || "")));
+
+    const groups = {};
+
+    archivedOrders.forEach((order) => {
+      const key = fmtDate(order.dataPrepared || order.date || "Senza data");
+
+      if (!groups[key]) {
+        groups[key] = [];
+      }
+
+      groups[key].push(order);
+    });
+
+    return groups;
+  }, [ordersWithComputed, orderSearch]);
+
+  const unarchiveOrder = async (orderId) => {
+    if (!orderId) return;
+
+    const conferma = window.confirm("Vuoi disarchiviare questo ordine?");
+    if (!conferma) return;
+
+    const previousOrders = orders;
+
+    setOrders((prev) =>
+      prev.map((order) =>
+        String(order.id) === String(orderId) ? { ...order, archived: false } : order
+      )
+    );
+
+    try {
+      const result = await callSheetsApi({
+        action: "unarchiveOrder",
+        orderId,
+      });
+
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+        alert(
+          "Errore nel disarchiviare l'ordine: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setPage("ordini");
+      setSelectedOrderId(orderId);
+    } catch (error) {
+      setOrders(previousOrders);
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
+  };
+
   const openEditOrderDialog = () => {
     if (!selectedOrder) return;
 
@@ -1287,7 +1367,12 @@ export default function App() {
       setOrders((prev) =>
         prev.map((order) =>
           String(order.id) === String(selectedOrder.id)
-            ? { ...order, status: "Preparato" }
+            ? {
+                ...order,
+                status: "Preparato",
+                dataPrepared: new Date().toISOString(),
+                archived: false,
+              }
             : order
         )
       );
@@ -1970,7 +2055,12 @@ export default function App() {
         setOrders((prev) =>
           prev.map((order) =>
             String(order.id) === String(result.orderId)
-              ? { ...order, status: "Da preparare" }
+              ? {
+                  ...order,
+                  status: "Da preparare",
+                  dataPrepared: "",
+                  archived: false,
+                }
               : order
           )
         );
@@ -2154,6 +2244,17 @@ export default function App() {
                 onClick={() => setPage("prodotti")}
               >
                 <Package size={18} /> Prodotti
+              </button>
+
+              <button
+                style={{
+                  ...btnStyle(page === "archivio" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                }}
+                onClick={() => setPage("archivio")}
+              >
+                <Archive size={18} /> Archivio
               </button>
 
               <button
@@ -2792,6 +2893,119 @@ export default function App() {
                 </>
               ) : (
                 <div style={{ color: "#66758b" }}>Seleziona un ordine.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {page === "archivio" && (
+          <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "center",
+                flexWrap: "wrap",
+                marginBottom: 18,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>Archivio ordini</div>
+                <div style={{ marginTop: 4, color: "#66758b", fontSize: 14 }}>
+                  Ordini preparati archiviati automaticamente dopo la mezzanotte.
+                </div>
+              </div>
+
+              <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
+                <RefreshCw size={18} /> Aggiorna
+              </button>
+            </div>
+
+            <div style={{ position: "relative", marginBottom: 18 }}>
+              <Search
+                size={16}
+                style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+              />
+
+              <input
+                style={{ ...inputStyle(), paddingLeft: 40 }}
+                value={orderSearch}
+                onChange={(event) => setOrderSearch(event.target.value)}
+                placeholder="Cerca in archivio per nome, note o ID"
+              />
+            </div>
+
+            <div style={{ display: "grid", gap: 16 }}>
+              {Object.keys(archivedGroups).length === 0 ? (
+                <div style={{ color: "#66758b" }}>Nessun ordine archiviato.</div>
+              ) : (
+                Object.entries(archivedGroups).map(([dateLabel, dayOrders]) => (
+                  <div
+                    key={dateLabel}
+                    style={{
+                      border: "1px solid #e5edf6",
+                      borderRadius: 24,
+                      overflow: "hidden",
+                      background: "#fff",
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: 16,
+                        background: "#f8fafc",
+                        borderBottom: "1px solid #e5edf6",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div style={{ fontWeight: 900, color: "#07153a" }}>{dateLabel}</div>
+                      <div style={{ color: "#66758b", fontSize: 13 }}>
+                        {dayOrders.length} ordini
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gap: 10, padding: 14 }}>
+                      {dayOrders.map((order) => (
+                        <div
+                          key={order.id}
+                          style={{
+                            ...cardStyle({ background: "linear-gradient(135deg, #ffffff, #fbfdff)" }),
+                            padding: 16,
+                            display: "grid",
+                            gridTemplateColumns: isSmallLayout ? "1fr" : "1fr auto",
+                            gap: 12,
+                            alignItems: "center",
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontSize: 18, fontWeight: 950, color: "#07153a" }}>
+                              {order.customer || "Ordine senza nome"}
+                            </div>
+                            <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
+                              ID {order.id} · preparato {fmtDate(order.dataPrepared || order.date)}
+                            </div>
+                            {order.notes ? (
+                              <div style={{ marginTop: 8, color: "#40516a", fontSize: 13, lineHeight: 1.4 }}>
+                                {order.notes}
+                              </div>
+                            ) : null}
+                          </div>
+
+                          {isAdmin ? (
+                            <button style={btnStyle("outline")} onClick={() => unarchiveOrder(order.id)}>
+                              <RotateCcw size={16} /> Disarchivia
+                            </button>
+                          ) : (
+                            <span style={badgeStyle("success")}>Archiviato</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
               )}
             </div>
           </div>
