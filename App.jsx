@@ -1,4 +1,4 @@
-// versione fixxx foglio bianco Clock - senza variabili inutilizzate
+// versione aesthetic header Gluten Free Experience
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -2063,78 +2063,177 @@ export default function App() {
       <div style={{ maxWidth: 1320, margin: "0 auto", width: "100%", boxSizing: "border-box", minWidth: 0 }}>
         <div
           style={{
-            ...cardStyle({ background: "linear-gradient(135deg, #ffffff 0%, #f8fbff 100%)" }),
-            padding: isSmallLayout ? 16 : 22,
+            ...cardStyle({ background: "rgba(255,255,255,0.88)" }),
+            padding: isSmallLayout ? 14 : 18,
             marginBottom: 20,
             position: "sticky",
             top: 10,
             zIndex: 20,
+            backdropFilter: "blur(18px)",
+            border: "1px solid rgba(207,216,230,0.85)",
+            boxShadow: "0 18px 42px rgba(15,23,42,0.08)",
           }}
         >
           <div
             style={{
               display: "flex",
-              gap: 14,
               justifyContent: "space-between",
               alignItems: "center",
+              gap: 14,
+              marginBottom: 14,
               flexWrap: "wrap",
             }}
           >
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ fontSize: isSmallLayout ? 26 : 34, fontWeight: 950, color: "#07153a", letterSpacing: "-0.04em" }}>
-                  MAGAZZINO 2.0
-                </div>
-                <span style={badgeStyle(isAdmin ? "dark" : "outline")}>
-                  {isAdmin ? "ADMIN" : "OPERATORE"}
-                </span>
+              <div
+                style={{
+                  fontFamily: "Georgia, 'Times New Roman', serif",
+                  fontStyle: "italic",
+                  fontSize: isSmallLayout ? 20 : 24,
+                  fontWeight: 700,
+                  color: "#07153a",
+                  letterSpacing: "-0.03em",
+                  lineHeight: 1.05,
+                }}
+              >
+                Gluten Free Experience Srl
               </div>
-              <div style={{ marginTop: 6, color: "#65758f", fontSize: 14, fontWeight: 650 }}>
-                Preparazione ordini · lotti · disponibilità
+              <div
+                style={{
+                  marginTop: 4,
+                  color: "#7a8699",
+                  fontSize: 12,
+                  fontWeight: 750,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.12em",
+                }}
+              >
+                gestione ordini · lotti · disponibilità
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: isSmallLayout ? "stretch" : "flex-end", flex: 1 }}>
+            <span style={badgeStyle(isAdmin ? "dark" : "outline")}>
+              {isAdmin ? "ADMIN" : "OPERATORE"}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              alignItems: "center",
+              justifyContent: isSmallLayout ? "stretch" : "space-between",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                flex: "1 1 auto",
+              }}
+            >
               <button
-                style={btnStyle(page === "ordini" ? "primary" : "soft")}
+                style={{
+                  ...btnStyle(page === "ordini" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                }}
                 onClick={() => setPage("ordini")}
               >
                 <ClipboardList size={18} /> Ordini
               </button>
 
               <button
-                style={btnStyle(page === "prodotti" ? "primary" : "soft")}
+                style={{
+                  ...btnStyle(page === "prodotti" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                }}
                 onClick={() => setPage("prodotti")}
               >
                 <Package size={18} /> Prodotti
               </button>
 
-              <button style={btnStyle("primary")} onClick={() => setOrderDialogOpen(true)}>
+              <button
+                style={{
+                  ...btnStyle("primary"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "100%" : 154,
+                }}
+                onClick={() => setOrderDialogOpen(true)}
+              >
                 <Plus size={18} /> Nuovo ordine
               </button>
 
               {isAdmin && (
                 <>
-                  <button style={btnStyle("primary")} onClick={() => setProductDialogOpen(true)}>
+                  <button
+                    style={{
+                      ...btnStyle("soft"),
+                      borderRadius: 999,
+                      minWidth: isSmallLayout ? "calc(50% - 5px)" : 158,
+                    }}
+                    onClick={() => setProductDialogOpen(true)}
+                  >
                     <Plus size={18} /> Nuovo prodotto
                   </button>
 
-                  <button style={btnStyle("primary")} onClick={() => setLotDialogOpen(true)}>
+                  <button
+                    style={{
+                      ...btnStyle("soft"),
+                      borderRadius: 999,
+                      minWidth: isSmallLayout ? "calc(50% - 5px)" : 142,
+                    }}
+                    onClick={() => setLotDialogOpen(true)}
+                  >
                     <Boxes size={18} /> Carica lotto
                   </button>
                 </>
               )}
+            </div>
 
-              <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                justifyContent: isSmallLayout ? "stretch" : "flex-end",
+                flex: isSmallLayout ? "1 1 100%" : "0 0 auto",
+              }}
+            >
+              <button
+                style={{
+                  ...btnStyle("outline"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                }}
+                onClick={loadDataFromSheets}
+              >
                 <RefreshCw size={18} /> Aggiorna
               </button>
 
               {!isAdmin ? (
-                <button style={btnStyle("outline")} onClick={() => setAdminDialogOpen(true)}>
+                <button
+                  style={{
+                    ...btnStyle("outline"),
+                    borderRadius: 999,
+                    minWidth: isSmallLayout ? "calc(50% - 5px)" : 112,
+                  }}
+                  onClick={() => setAdminDialogOpen(true)}
+                >
                   <Lock size={18} /> Admin
                 </button>
               ) : (
-                <button style={btnStyle("outline")} onClick={exitAdminMode}>
+                <button
+                  style={{
+                    ...btnStyle("outline"),
+                    borderRadius: 999,
+                    minWidth: isSmallLayout ? "calc(50% - 5px)" : 132,
+                  }}
+                  onClick={exitAdminMode}
+                >
                   <Lock size={18} /> Esci admin
                 </button>
               )}
