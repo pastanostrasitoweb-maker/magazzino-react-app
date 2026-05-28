@@ -1,4 +1,4 @@
-// versione GitHub aggiornata - niente lotti demo se il foglio è vuoto
+// versione stock visibile - totale impegnati disponibili
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -632,23 +632,51 @@ export default function App() {
     ).sort();
   }, [products, productCategoryFilter]);
 
-  const lotsAvailableMap = useMemo(() => {
-    const usedByLot = {};
+  const lotStatsMap = useMemo(() => {
+    const openLineIds = new Set();
 
-    Object.values(assignments)
-      .flat()
-      .forEach((assignment) => {
-        usedByLot[String(assignment.lotId)] =
-          (usedByLot[String(assignment.lotId)] || 0) + assignment.qty;
+    orders.forEach((order) => {
+      if (String(order.status || "") === "Preparato") return;
+
+      (order.lines || []).forEach((line) => {
+        openLineIds.add(String(line.lineId));
       });
+    });
+
+    const committedByLot = {};
+
+    Object.entries(assignments).forEach(([lineId, lineAssignments]) => {
+      if (!openLineIds.has(String(lineId))) return;
+
+      (lineAssignments || []).forEach((assignment) => {
+        committedByLot[String(assignment.lotId)] =
+          (committedByLot[String(assignment.lotId)] || 0) + Number(assignment.qty || 0);
+      });
+    });
 
     return Object.fromEntries(
-      lots.map((lot) => [
-        String(lot.id),
-        Math.max(0, lot.loadedQty - (usedByLot[String(lot.id)] || 0)),
-      ])
+      lots.map((lot) => {
+        const total = Number(lot.loadedQty || 0);
+        const committed = Number(committedByLot[String(lot.id)] || 0);
+        const available = Math.max(0, total - committed);
+
+        return [
+          String(lot.id),
+          {
+            total,
+            committed,
+            available,
+          },
+        ];
+      })
     );
-  }, [lots, assignments]);
+  }, [lots, assignments, orders]);
+
+  const lotsAvailableMap = useMemo(() => {
+    return Object.fromEntries(
+      lots.map((lot) => [String(lot.id), lotStatsMap[String(lot.id)]?.available || 0])
+    );
+  }, [lots, lotStatsMap]);
 
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
@@ -744,12 +772,20 @@ export default function App() {
     return products
       .map((product) => {
         const productLots = lots.filter((lot) => String(lot.productId) === String(product.id));
+        const totalLoaded = productLots.reduce(
+          (sum, lot) => sum + Number(lotStatsMap[String(lot.id)]?.total || 0),
+          0
+        );
+        const totalCommitted = productLots.reduce(
+          (sum, lot) => sum + Number(lotStatsMap[String(lot.id)]?.committed || 0),
+          0
+        );
         const totalAvailable = productLots.reduce(
-          (sum, lot) => sum + (lotsAvailableMap[String(lot.id)] || 0),
+          (sum, lot) => sum + Number(lotStatsMap[String(lot.id)]?.available || 0),
           0
         );
 
-        return { ...product, productLots, totalAvailable };
+        return { ...product, productLots, totalLoaded, totalCommitted, totalAvailable };
       })
       .filter((product) => {
         const matchesSearch =
@@ -772,6 +808,7 @@ export default function App() {
     products,
     lots,
     lotsAvailableMap,
+    lotStatsMap,
     productSearch,
     productCategoryFilter,
     productSubcategoryFilter,
@@ -787,6 +824,8 @@ export default function App() {
         groups[category] = {
           category,
           products: [],
+          totalLoaded: 0,
+          totalCommitted: 0,
           totalAvailable: 0,
           totalLots: 0,
           subcategories: {},
@@ -794,6 +833,8 @@ export default function App() {
       }
 
       groups[category].products.push(product);
+      groups[category].totalLoaded += Number(product.totalLoaded || 0);
+      groups[category].totalCommitted += Number(product.totalCommitted || 0);
       groups[category].totalAvailable += Number(product.totalAvailable || 0);
       groups[category].totalLots += (product.productLots || []).length;
 
@@ -1097,7 +1138,7 @@ export default function App() {
         )
       );
 
-      
+      await loadDataFromSheets();
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
@@ -2550,7 +2591,7 @@ export default function App() {
                               fontSize: 14,
                             }}
                           >
-                            {group.products.length} prodotti · {group.totalLots} lotti · {group.totalAvailable} disponibili
+                            {group.products.length} prodotti · Totale {group.totalLoaded} · Impegnati {group.totalCommitted} · Disponibili {group.totalAvailable}
                           </div>
                         </div>
 
@@ -2653,6 +2694,12 @@ export default function App() {
                                           }}
                                         >
                                           <span style={badgeStyle("outline")}>
+                                            Totale {product.totalLoaded}
+                                          </span>
+                                          <span style={badgeStyle("warning")}>
+                                            Impegnati {product.totalCommitted}
+                                          </span>
+                                          <span style={badgeStyle("success")}>
                                             Disponibili {product.totalAvailable}
                                           </span>
 
@@ -2735,23 +2782,28 @@ export default function App() {
                                                   >
                                                     <div
                                                       style={{
-                                                        fontSize: 20,
-                                                        fontWeight: 900,
-                                                        color:
-                                                          lotsAvailableMap[String(lot.id)] <= 10
-                                                            ? "#dc2626"
-                                                            : "#0f172a",
+                                                        display: "grid",
+                                                        gap: 6,
+                                                        minWidth: 116,
+                                                        textAlign: "right",
                                                       }}
                                                     >
-                                                      {lotsAvailableMap[String(lot.id)]}
+                                                      <span style={badgeStyle("outline")}>
+                                                        Totale {lotStatsMap[String(lot.id)]?.total || 0}
+                                                      </span>
+                                                      <span style={badgeStyle("warning")}>
+                                                        Impegnati {lotStatsMap[String(lot.id)]?.committed || 0}
+                                                      </span>
+                                                      <span style={badgeStyle("success")}>
+                                                        Disponibili {lotStatsMap[String(lot.id)]?.available || 0}
+                                                      </span>
                                                     </div>
 
                                                     <button
                                                       style={btnStyle("outline")}
                                                       onClick={() => deleteLot(lot.id)}
                                                       disabled={
-                                                        lotsAvailableMap[String(lot.id)] !==
-                                                        lot.loadedQty
+                                                        (lotStatsMap[String(lot.id)]?.committed || 0) > 0
                                                       }
                                                     >
                                                       <Trash2 size={16} />
