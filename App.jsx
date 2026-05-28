@@ -1,4 +1,4 @@
-// versione stock prodotto: totale impegnati disponibili da ordini aperti
+// versione finale stock prodotto + scarico lotti - URL Apps Script aggiornato
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbz03HAwRq8U4kGqS196_q17WJ7ylTyComaNpG9GkjPZVB4I5nNGGtM7q_ulhBrb6QSF/exec";
+  "https://script.google.com/macros/s/AKfycbz3cANxkDKtqQEx9kLSZFN1H6eOMmNwKNvYltr_GHqxvqZDIpZyoSVjNPKh77BwdPW8/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -636,7 +636,7 @@ export default function App() {
     const openLineIds = new Set();
 
     orders.forEach((order) => {
-      if (String(order.status || "") === "Preparato") return;
+      if (String(order.status || "").trim().toLowerCase() === "preparato") return;
 
       (order.lines || []).forEach((line) => {
         openLineIds.add(String(line.lineId));
@@ -676,7 +676,7 @@ export default function App() {
     const committedByProduct = {};
 
     orders.forEach((order) => {
-      if (String(order.status || "") === "Preparato") return;
+      if (String(order.status || "").trim().toLowerCase() === "preparato") return;
 
       (order.lines || []).forEach((line) => {
         const productKey = String(line.productId);
