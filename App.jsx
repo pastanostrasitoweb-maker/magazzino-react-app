@@ -1,4 +1,4 @@
-// versione veloce - meno refresh completi e stock immediato
+// versione ordine leggibile - titolo cliente e ID in secondo piano
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -1217,7 +1217,7 @@ export default function App() {
 
   const createOrder = async () => {
     if (!newOrderCustomer.trim()) {
-      alert("Inserisci il cliente");
+      alert("Inserisci il nome ordine/cliente");
       return;
     }
 
@@ -2088,7 +2088,7 @@ export default function App() {
                   style={{ ...inputStyle(), paddingLeft: 40 }}
                   value={orderSearch}
                   onChange={(event) => setOrderSearch(event.target.value)}
-                  placeholder="Cerca ordine o cliente"
+                  placeholder="Cerca nome ordine, cliente o ID"
                 />
               </div>
 
@@ -2113,8 +2113,12 @@ export default function App() {
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                       <div>
-                        <div style={{ fontSize: 17, fontWeight: 950, color: "#07153a", overflowWrap: "anywhere" }}>{order.id}</div>
-                        <div style={{ color: "#66758b", marginTop: 4 }}>{order.customer}</div>
+                        <div style={{ fontSize: 18, fontWeight: 950, color: "#07153a", overflowWrap: "anywhere" }}>
+                          {order.customer || "Ordine senza nome"}
+                        </div>
+                        <div style={{ color: "#66758b", marginTop: 4, fontSize: 12, overflowWrap: "anywhere" }}>
+                          {fmtDate(order.date)} · ID {order.id}
+                        </div>
                       </div>
 
                       <span style={badgeStyle(order.totalToAssign > 0 ? "warning" : "success")}>{order.computedStatus}</span>
@@ -2159,10 +2163,12 @@ export default function App() {
                       }}
                     >
                       <div>
-                        <div style={{ fontSize: isSmallLayout ? 20 : 24, fontWeight: 950, color: "#07153a", overflowWrap: "anywhere" }}>{selectedOrder.id}</div>
+                        <div style={{ fontSize: isSmallLayout ? 24 : 30, fontWeight: 950, color: "#07153a", overflowWrap: "anywhere" }}>
+                          {selectedOrder.customer || "Ordine senza nome"}
+                        </div>
 
-                        <div style={{ marginTop: 6, color: "#66758b" }}>
-                          {selectedOrder.customer} · {fmtDate(selectedOrder.date)}
+                        <div style={{ marginTop: 6, color: "#66758b", fontSize: 13, overflowWrap: "anywhere" }}>
+                          {fmtDate(selectedOrder.date)} · ID ordine {selectedOrder.id}
                         </div>
                       </div>
 
