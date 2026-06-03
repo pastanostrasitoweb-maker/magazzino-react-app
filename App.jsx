@@ -1,4 +1,4 @@
-// versione ricerca prodotto in inserimento ordine
+// versione ordini fermi
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbzTvl2UsFSVVoLBos58-GTqu3zJidWwEzPekZUgnQYC0R9VCNsCTWqUT21WEC2pLOG8/exec";
+  "https://script.google.com/macros/s/AKfycbx2g7iZ8jnOuXK3ErW_HItcZOWXzONV8UiqoIlRtL79GBBs7Ie8x4r4nLG1HzbrCQop/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -942,14 +942,17 @@ export default function App() {
       const totalOrdered = lines.reduce((sum, line) => sum + line.qtyOrdered, 0);
 
       const explicitStatus = String(order.status || "").trim();
+      const explicitStatusLower = explicitStatus.toLowerCase();
       const computedStatus =
-        explicitStatus.toLowerCase() === "preparato"
-          ? "Preparato"
-          : totalToAssign === 0
-            ? "Pronto"
-            : totalToAssign < totalOrdered
-              ? "Parziale"
-              : "Da preparare";
+        explicitStatusLower === "fermo"
+          ? "Fermo"
+          : explicitStatusLower === "preparato"
+            ? "Preparato"
+            : totalToAssign === 0
+              ? "Pronto"
+              : totalToAssign < totalOrdered
+                ? "Parziale"
+                : "Da preparare";
 
       return { ...order, lines, totalToAssign, computedStatus };
     });
@@ -959,6 +962,7 @@ export default function App() {
     const q = orderSearch.trim().toLowerCase();
     const visibleOrders = ordersWithComputed
       .filter((order) => !order.archived)
+      .filter((order) => String(order.computedStatus) !== "Fermo")
       .filter((order) => String(order.computedStatus) !== "Preparato" || !q)
       .sort((a, b) => {
         const aOpen = a.totalToAssign > 0 ? 0 : 1;
@@ -978,9 +982,29 @@ export default function App() {
   }, [ordersWithComputed, orderSearch]);
 
   const activeOrders = useMemo(
-    () => ordersWithComputed.filter((order) => !order.archived),
+    () =>
+      ordersWithComputed.filter(
+        (order) => !order.archived && String(order.computedStatus) !== "Fermo"
+      ),
     [ordersWithComputed]
   );
+
+  const stoppedOrders = useMemo(() => {
+    const q = orderSearch.trim().toLowerCase();
+
+    const ordersToShow = ordersWithComputed
+      .filter((order) => !order.archived && String(order.computedStatus) === "Fermo")
+      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+    if (!q) return ordersToShow;
+
+    return ordersToShow.filter(
+      (order) =>
+        String(order.id).toLowerCase().includes(q) ||
+        String(order.customer).toLowerCase().includes(q) ||
+        String(order.notes).toLowerCase().includes(q)
+    );
+  }, [ordersWithComputed, orderSearch]);
 
   const selectedOrder =
     activeOrders.find((order) => String(order.id) === String(selectedOrderId)) ||
@@ -1533,6 +1557,81 @@ export default function App() {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
       setSavingEditedOrder(false);
+    }
+  };
+
+  const markOrderStopped = async () => {
+    if (!selectedOrder) return;
+
+    if (String(selectedOrder.status || "").trim().toLowerCase() === "preparato") {
+      alert("Non puoi mettere in fermo un ordine già preparato.");
+      return;
+    }
+
+    const conferma = window.confirm("Vuoi spostare questo ordine in Ordini fermi?");
+    if (!conferma) return;
+
+    try {
+      const result = await callSheetsApi({
+        action: "markOrderStopped",
+        orderId: selectedOrder.id,
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nello spostamento in Ordini fermi: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.id) === String(selectedOrder.id)
+            ? { ...order, status: "Fermo", dataPrepared: "", archived: false }
+            : order
+        )
+      );
+
+      const nextOrder = activeOrders.find((order) => String(order.id) !== String(selectedOrder.id));
+
+      setSelectedOrderId(nextOrder?.id || "");
+      setSelectedLineId(nextOrder?.lines?.[0]?.lineId || "");
+      setPage("fermi");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
+  };
+
+  const restoreStoppedOrder = async (orderId) => {
+    if (!orderId) return;
+
+    try {
+      const result = await callSheetsApi({
+        action: "reopenOrder",
+        orderId,
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nel riportare l'ordine da preparare: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.id) === String(orderId)
+            ? { ...order, status: "Da preparare", dataPrepared: "", archived: false }
+            : order
+        )
+      );
+
+      setSelectedOrderId(orderId);
+      setPage("ordini");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
 
@@ -2526,6 +2625,17 @@ export default function App() {
 
               <button
                 style={{
+                  ...btnStyle(page === "fermi" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 138,
+                }}
+                onClick={() => setPage("fermi")}
+              >
+                <AlertTriangle size={18} /> Ordini fermi
+              </button>
+
+              <button
+                style={{
                   ...btnStyle(page === "archivio" ? "primary" : "soft"),
                   borderRadius: 999,
                   minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
@@ -2784,6 +2894,12 @@ export default function App() {
                             <button style={btnStyle("primary")} onClick={openAddLineDialog}>
                               <Plus size={16} /> Riga
                             </button>
+
+                            {String(selectedOrder.status || "").trim().toLowerCase() !== "preparato" ? (
+                              <button style={btnStyle("warning")} onClick={markOrderStopped}>
+                                <AlertTriangle size={16} /> Fermo
+                              </button>
+                            ) : null}
                           </>
                         ) : null}
 
@@ -3229,6 +3345,98 @@ export default function App() {
                 </>
               ) : (
                 <div style={{ color: "#66758b" }}>Seleziona un ordine.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {page === "fermi" && (
+          <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "center",
+                flexWrap: "wrap",
+                marginBottom: 18,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>
+                  Ordini fermi
+                </div>
+                <div style={{ marginTop: 4, color: "#66758b", fontSize: 14 }}>
+                  Ordini bloccati per mancanze, problemi o verifiche prima dell’evasione.
+                </div>
+              </div>
+
+              <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
+                <RefreshCw size={18} /> Aggiorna
+              </button>
+            </div>
+
+            <div style={{ position: "relative", marginBottom: 18 }}>
+              <Search
+                size={16}
+                style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+              />
+
+              <input
+                style={{ ...inputStyle(), paddingLeft: 40 }}
+                value={orderSearch}
+                onChange={(event) => setOrderSearch(event.target.value)}
+                placeholder="Cerca ordine fermo per cliente, note o ID"
+              />
+            </div>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              {stoppedOrders.length === 0 ? (
+                <div style={{ color: "#66758b" }}>Nessun ordine fermo.</div>
+              ) : (
+                stoppedOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    style={{
+                      ...cardStyle({ background: "linear-gradient(135deg, #fff7ed, #ffffff)" }),
+                      padding: 16,
+                      borderLeft: "6px solid #f59e0b",
+                      display: "grid",
+                      gridTemplateColumns: isSmallLayout ? "1fr" : "1fr auto",
+                      gap: 12,
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <div style={{ fontSize: 19, fontWeight: 950, color: "#07153a" }}>
+                          {order.customer || "Ordine senza nome"}
+                        </div>
+                        <span style={badgeStyle("warning")}>Fermo</span>
+                      </div>
+
+                      <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
+                        {fmtDate(order.date)} · ID {order.id}
+                      </div>
+
+                      {order.notes ? (
+                        <div style={{ marginTop: 8, color: "#40516a", fontSize: 13, lineHeight: 1.4 }}>
+                          {order.notes}
+                        </div>
+                      ) : null}
+
+                      <div style={{ marginTop: 8, color: "#66758b", fontSize: 13 }}>
+                        {order.lines?.length || 0} righe · {order.totalToAssign || 0} pezzi ancora da completare
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <button style={btnStyle("success")} onClick={() => restoreStoppedOrder(order.id)}>
+                        <CheckCircle2 size={16} /> Riporta da preparare
+                      </button>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
           </div>
