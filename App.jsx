@@ -1,4 +1,4 @@
-// versione bottone fermo visibile a operatore
+// versione ricerca prodotto carica lotto
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -721,6 +721,7 @@ export default function App() {
   const [savingNewProduct, setSavingNewProduct] = useState(false);
 
   const [newLotProductId, setNewLotProductId] = useState("");
+  const [newLotProductSearch, setNewLotProductSearch] = useState("");
   const [newLotCode, setNewLotCode] = useState("");
   const [newLotExpiry, setNewLotExpiry] = useState("");
   const [newLotQty, setNewLotQty] = useState("");
@@ -1901,6 +1902,7 @@ export default function App() {
 
       setLots((prev) => [newLot, ...prev]);
       setNewLotProductId("");
+      setNewLotProductSearch("");
       setNewLotCode("");
       setNewLotExpiry("");
       setNewLotQty("");
@@ -4414,19 +4416,14 @@ export default function App() {
             <div>
               <label style={labelStyle()}>Prodotto</label>
 
-              <select
-                style={inputStyle()}
+              <ProductSearchSelect
+                products={products}
                 value={newLotProductId}
-                onChange={(event) => setNewLotProductId(event.target.value)}
-              >
-                <option value="">Seleziona prodotto</option>
-
-                {products.map((product) => (
-                  <option key={product.id} value={String(product.id)}>
-                    {productOptionLabel(product)}
-                  </option>
-                ))}
-              </select>
+                search={newLotProductSearch}
+                onSearchChange={setNewLotProductSearch}
+                onChange={setNewLotProductId}
+                placeholder="Cerca prodotto per codice o descrizione"
+              />
             </div>
 
             {selectedLotProduct && productManagesLots(selectedLotProduct) ? (
