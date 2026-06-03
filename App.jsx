@@ -1,4 +1,4 @@
-// versione ordini fermi
+// versione bottone fermo visibile a operatore
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -2895,12 +2895,13 @@ export default function App() {
                               <Plus size={16} /> Riga
                             </button>
 
-                            {String(selectedOrder.status || "").trim().toLowerCase() !== "preparato" ? (
-                              <button style={btnStyle("warning")} onClick={markOrderStopped}>
-                                <AlertTriangle size={16} /> Fermo
-                              </button>
-                            ) : null}
                           </>
+                        ) : null}
+
+                        {String(selectedOrder.status || "").trim().toLowerCase() !== "preparato" ? (
+                          <button style={btnStyle("warning")} onClick={markOrderStopped}>
+                            <AlertTriangle size={16} /> Fermo
+                          </button>
                         ) : null}
 
                         <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
