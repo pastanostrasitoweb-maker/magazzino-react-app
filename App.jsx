@@ -1,4 +1,4 @@
-// versione ricerca prodotto carica lotto
+// versione modifica lotto
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbx2g7iZ8jnOuXK3ErW_HItcZOWXzONV8UiqoIlRtL79GBBs7Ie8x4r4nLG1HzbrCQop/exec";
+  "https://script.google.com/macros/s/AKfycbx4CBSEPMCfC01WmUUwmPZYQIlo2VJAMTmkhbIkD6uA_TBcYSRQY7Gmo6fFpzmTW1J2/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -687,6 +687,7 @@ export default function App() {
   const [editLineDialogOpen, setEditLineDialogOpen] = useState(false);
   const [productDialogOpen, setProductDialogOpen] = useState(false);
   const [lotDialogOpen, setLotDialogOpen] = useState(false);
+  const [editLotDialogOpen, setEditLotDialogOpen] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
   const [editProductDialogOpen, setEditProductDialogOpen] = useState(false);
 
@@ -725,6 +726,12 @@ export default function App() {
   const [newLotCode, setNewLotCode] = useState("");
   const [newLotExpiry, setNewLotExpiry] = useState("");
   const [newLotQty, setNewLotQty] = useState("");
+
+  const [editingLotId, setEditingLotId] = useState("");
+  const [editingLotCode, setEditingLotCode] = useState("");
+  const [editingLotExpiry, setEditingLotExpiry] = useState("");
+  const [editingLotQty, setEditingLotQty] = useState("");
+  const [savingEditedLot, setSavingEditedLot] = useState(false);
 
   const [editingProductId, setEditingProductId] = useState(null);
   const [editProductCode, setEditProductCode] = useState("");
@@ -2457,6 +2464,74 @@ export default function App() {
   };
 
 
+  const openEditLotDialog = (lot) => {
+    if (!lot) return;
+
+    setEditingLotId(String(lot.id || lot.lot));
+    setEditingLotCode(String(lot.lot || ""));
+    setEditingLotExpiry(lot.expiry ? String(lot.expiry).slice(0, 10) : "");
+    setEditingLotQty(String(Number(lot.loadedQty || 0)));
+    setEditLotDialogOpen(true);
+  };
+
+  const saveEditedLot = async () => {
+    if (!editingLotId) return;
+
+    if (editingLotQty === "" || Number(editingLotQty) < 0 || isNaN(Number(editingLotQty))) {
+      alert("Inserisci una quantità valida");
+      return;
+    }
+
+    setSavingEditedLot(true);
+
+    const previousLots = lots;
+
+    setLots((prev) =>
+      prev.map((lot) =>
+        String(lot.id) === String(editingLotId) || String(lot.lot) === String(editingLotId)
+          ? {
+              ...lot,
+              lot: editingLotCode.trim() || lot.lot,
+              expiry: editingLotExpiry,
+              loadedQty: Number(editingLotQty),
+            }
+          : lot
+      )
+    );
+
+    try {
+      const result = await callSheetsApi({
+        action: "updateLot",
+        payload: JSON.stringify({
+          lotId: editingLotId,
+          newLotCode: editingLotCode.trim(),
+          expiry: editingLotExpiry,
+          loadedQty: Number(editingLotQty),
+        }),
+      });
+
+      if (!result || !result.success) {
+        setLots(previousLots);
+        alert(
+          "Errore nella modifica lotto sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setEditLotDialogOpen(false);
+      setEditingLotId("");
+      setEditingLotCode("");
+      setEditingLotExpiry("");
+      setEditingLotQty("");
+    } catch (error) {
+      setLots(previousLots);
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingEditedLot(false);
+    }
+  };
+
   const deleteLot = async (lotId) => {
     if (!lotId) return;
 
@@ -3891,6 +3966,13 @@ export default function App() {
 
                                                     <button
                                                       style={btnStyle("outline")}
+                                                      onClick={() => openEditLotDialog(lot)}
+                                                    >
+                                                      <Pencil size={16} />
+                                                    </button>
+
+                                                    <button
+                                                      style={btnStyle("outline")}
                                                       onClick={() => deleteLot(lot.id)}
                                                       disabled={
                                                         (lotAssignedMap[String(lot.id)]?.assigned || 0) > 0
@@ -4402,6 +4484,58 @@ export default function App() {
               onClick={createProduct}
             >
               {savingNewProduct ? "Salvataggio..." : "Salva prodotto"}
+            </button>
+          </div>
+        </Modal>
+
+        <Modal
+          open={editLotDialogOpen}
+          title="Modifica lotto / disponibilità"
+          onClose={() => setEditLotDialogOpen(false)}
+          maxWidth={560}
+        >
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <label style={labelStyle()}>Codice lotto</label>
+
+              <input
+                style={inputStyle()}
+                value={editingLotCode}
+                onChange={(event) => setEditingLotCode(event.target.value)}
+                placeholder="Es. 2604110 oppure DISPONIBILITA"
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Scadenza</label>
+
+              <input
+                style={inputStyle()}
+                type="date"
+                value={editingLotExpiry}
+                onChange={(event) => setEditingLotExpiry(event.target.value)}
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Quantità presente</label>
+
+              <input
+                style={inputStyle()}
+                type="number"
+                min="0"
+                value={editingLotQty}
+                onChange={(event) => setEditingLotQty(event.target.value)}
+                placeholder="0"
+              />
+            </div>
+
+            <button
+              style={btnStyle("primary", savingEditedLot)}
+              disabled={savingEditedLot}
+              onClick={saveEditedLot}
+            >
+              {savingEditedLot ? "Salvataggio..." : "Salva modifiche lotto"}
             </button>
           </div>
         </Modal>
