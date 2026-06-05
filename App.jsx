@@ -1,4 +1,4 @@
-// versione fix stesso lotto su prodotti diversi
+// versione stabile lotti no duplicati
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbxWhH6rtjq_KzmGmaszfU1wp8Z3hRbdoEVfQ5eFWLrk0or0i1Iy3m1JX-uC8yMR5QAi/exec";
+  "https://script.google.com/macros/s/AKfycbze-SoD73LqUqmR3nyGoo1V_bUxWx8919ehG9MK417_Wewd4PVgD4IOLQTjsGZyYpdh/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -757,6 +757,7 @@ export default function App() {
   const [newLotCode, setNewLotCode] = useState("");
   const [newLotExpiry, setNewLotExpiry] = useState("");
   const [newLotQty, setNewLotQty] = useState("");
+  const [savingNewLot, setSavingNewLot] = useState(false);
 
   const [editingLotId, setEditingLotId] = useState("");
   const [editingLotCode, setEditingLotCode] = useState("");
@@ -1893,6 +1894,8 @@ export default function App() {
 
 
   const createLot = async () => {
+    if (savingNewLot) return;
+
     if (!newLotProductId) {
       alert("Seleziona il prodotto");
       return;
@@ -1926,6 +1929,8 @@ export default function App() {
       loadedQty: Number(newLotQty),
     };
 
+    setSavingNewLot(true);
+
     try {
       const result = await callSheetsApi({
         action: "createLot",
@@ -1940,7 +1945,48 @@ export default function App() {
         return;
       }
 
-      setLots((prev) => [newLot, ...prev]);
+      const returnedLotId = String(result.lotId || newLot.id);
+      const returnedLotCode = String(result.lotCode || newLot.lot);
+      const returnedQty =
+        result.newQty !== undefined && result.newQty !== null && result.newQty !== ""
+          ? Number(result.newQty)
+          : Number(newLot.loadedQty);
+
+      setLots((prev) => {
+        const exists = prev.some(
+          (lot) =>
+            String(lot.id) === returnedLotId ||
+            (String(lot.productId) === String(newLot.productId) &&
+              String(lot.lot) === returnedLotCode)
+        );
+
+        if (exists) {
+          return prev.map((lot) =>
+            String(lot.id) === returnedLotId ||
+            (String(lot.productId) === String(newLot.productId) &&
+              String(lot.lot) === returnedLotCode)
+              ? {
+                  ...lot,
+                  id: returnedLotId || lot.id,
+                  lot: returnedLotCode || lot.lot,
+                  expiry: newLot.expiry || lot.expiry,
+                  loadedQty: returnedQty,
+                }
+              : lot
+          );
+        }
+
+        return [
+          {
+            ...newLot,
+            id: returnedLotId,
+            lot: returnedLotCode,
+            loadedQty: returnedQty,
+          },
+          ...prev,
+        ];
+      });
+
       setNewLotProductId("");
       setNewLotProductSearch("");
       setNewLotCode("");
@@ -1948,10 +1994,10 @@ export default function App() {
       setNewLotQty("");
       setLotDialogOpen(false);
       setPage("prodotti");
-
-
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingNewLot(false);
     }
   };
 
@@ -2596,15 +2642,6 @@ export default function App() {
         action: "deleteLot",
         lotId: lotIdToDelete,
       });
-
-      // Alcuni fogli hanno come chiave ID_Lotto, altri Codice_Lotto.
-      // Se il primo tentativo non trova la riga, riproviamo con il codice lotto visibile.
-      if ((!result || !result.success) && String(lotCodeToDelete) !== String(lotIdToDelete)) {
-        result = await callSheetsApi({
-          action: "deleteLot",
-          lotId: lotCodeToDelete,
-        });
-      }
 
       if (!result || !result.success) {
         alert(
