@@ -1,4 +1,4 @@
-// versione modifica lotto
+// versione fix stesso lotto su prodotti diversi
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbx4CBSEPMCfC01WmUUwmPZYQIlo2VJAMTmkhbIkD6uA_TBcYSRQY7Gmo6fFpzmTW1J2/exec";
+  "https://script.google.com/macros/s/AKfycbxWhH6rtjq_KzmGmaszfU1wp8Z3hRbdoEVfQ5eFWLrk0or0i1Iy3m1JX-uC8yMR5QAi/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -428,18 +428,40 @@ function normalizeOrderLines(rows, products) {
 
 function normalizeAssignments(rows, lines, lots) {
   const lineIds = new Set(lines.map((line) => String(line.lineId)));
-  const lotByCode = Object.fromEntries(lots.map((lot) => [String(lot.lot), lot.id]));
+  const lineById = Object.fromEntries(lines.map((line) => [String(line.lineId), line]));
+  const lotById = Object.fromEntries(lots.map((lot) => [String(lot.id), lot]));
+  const lotsByCode = {};
+
+  lots.forEach((lot) => {
+    const code = String(lot.lot || "");
+
+    if (!lotsByCode[code]) lotsByCode[code] = [];
+    lotsByCode[code].push(lot);
+  });
+
   const grouped = {};
 
   rows.forEach((row, index) => {
     const lineId = String(getField(row, ["ID_Riga", "Id_Riga", "Riga"])).trim();
     if (!lineIds.has(lineId)) return;
 
+    const line = lineById[lineId];
+
+    const lotIdRaw = String(getField(row, ["ID_Lotto", "Id_Lotto", "id"])).trim();
     const lotCode = String(
-      getField(row, ["Lotto", "Codice_Lotto", "Codice lotto", "ID_Lotto"])
+      getField(row, ["Codice_Lotto", "Codice lotto", "Lotto"])
     ).trim();
 
-    const lotId = lotByCode[lotCode] || lotCode;
+    let lot = lotById[lotIdRaw];
+
+    if (!lot && lotCode) {
+      const candidates = lotsByCode[lotCode] || [];
+      lot =
+        candidates.find((candidate) => String(candidate.productId) === String(line.productId)) ||
+        (candidates.length === 1 ? candidates[0] : null);
+    }
+
+    const lotId = lot?.id || lotIdRaw || lotCode;
     if (!lotId) return;
 
     const item = {
@@ -447,6 +469,7 @@ function normalizeAssignments(rows, lines, lots) {
         getField(row, ["ID_Assegnazione", "Id_Assegnazione", "id"]) || `ASS-${index + 1}`
       ),
       lotId,
+      productId: String(line.productId),
       qty: Number(
         getField(row, [
           "Quantità_Assegnata",
@@ -464,6 +487,7 @@ function normalizeAssignments(rows, lines, lots) {
 
   return grouped;
 }
+
 
 function buildOrdersWithLines(orders, lines) {
   return orders.map((order) => ({
@@ -647,7 +671,14 @@ function applyStockMovementsToLots(lots, movements = []) {
         return String(item.productId) === String(lot.productId);
       }
 
-      return String(item.lot) === String(lot.lot) || String(item.lot) === String(lot.id);
+      if (item.lotId) {
+        return String(item.lotId) === String(lot.id);
+      }
+
+      const sameLot = String(item.lot) === String(lot.lot) || String(item.lot) === String(lot.id);
+      const sameProduct = !item.productId || String(item.productId) === String(lot.productId);
+
+      return sameLot && sameProduct;
     });
 
     if (!movement || movement.newQty === undefined || movement.newQty === null) {
@@ -1261,6 +1292,7 @@ export default function App() {
       lineId: String(line.lineId),
       lotId,
       lotCode,
+      productId: String(line.productId),
       qty,
     };
 
@@ -1269,7 +1301,7 @@ export default function App() {
       ...prev,
       [line.lineId]: [
         ...(prev[line.lineId] || []),
-        { assignmentId: newAssignment.assignmentId, lotId, qty },
+        { assignmentId: newAssignment.assignmentId, lotId, productId: String(line.productId), qty },
       ],
     }));
 
@@ -1361,6 +1393,7 @@ export default function App() {
       lineId: String(selectedLine.lineId),
       lotId: String(selectedLotId),
       lotCode: selectedLot.lot,
+      productId: String(selectedLine.productId),
       qty,
     };
 
@@ -1371,7 +1404,7 @@ export default function App() {
       ...prev,
       [selectedLine.lineId]: [
         ...(prev[selectedLine.lineId] || []),
-        { assignmentId: newAssignment.assignmentId, lotId: String(selectedLotId), qty },
+        { assignmentId: newAssignment.assignmentId, lotId: String(selectedLotId), productId: String(selectedLine.productId), qty },
       ],
     }));
 
