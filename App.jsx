@@ -1,4 +1,4 @@
-// versione nuovi ordini evidenziati e righe ordinate
+// versione archivia lotti a zero
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwwmnvzSkniw5hKWw4rdf32Pf3AU_PC77Q-ffDTGTjjibpcagCDv6YUxnXwJe7sijGJ/exec";
+  "https://script.google.com/macros/s/AKfycby3xh0ctm952yAL1QL8oDJm02TZGWmGINZORtEYfx-HvoZtnTb9xOkGKfMS_WAemEVW/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -342,12 +342,14 @@ function normalizeLots(rows, products) {
 
       return {
         id: String(
-          getField(row, ["ID_Lotto", "Id_Lotto", "id", "Lotto", "Codice_Lotto", "Codice lotto"]) ||
-            `LOT-${index + 1}`
+          getField(row, ["ID_Lotto", "Id_Lotto", "id"]) || `LOT-MISSING-${index + 1}`
         ),
         productId: productByCode[productCode] || productById[productIdRaw] || productIdRaw,
         lot: String(getField(row, ["Codice_Lotto", "Codice lotto", "Lotto"])).trim(),
         expiry: getField(row, ["Scadenza", "Data_Scadenza", "Data scadenza"]),
+        archived: ["si", "sì", "yes", "true"].includes(
+          String(getField(row, ["Lotto_Archiviato", "Archiviato_Lotto", "Archived_Lot", "Archiviato"])).trim().toLowerCase()
+        ),
         loadedQty: Number(
           getField(row, [
             "Quantità_Caricata",
@@ -374,7 +376,7 @@ function normalizeOrders(rows) {
       ),
       status: String(getField(row, ["Stato", "status"]) || "Da preparare"),
       workStatus: String(
-        getField(row, ["Stato_Lavorazione", "Stato lavorazione", "WorkStatus"]) || "Nuovo"
+        getField(row, ["Stato_Lavorazione", "Stato lavorazione", "WorkStatus"]) || "In lavorazione"
       ),
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
       lines: [],
@@ -943,7 +945,7 @@ export default function App() {
   const productStatsMap = useMemo(() => {
     return Object.fromEntries(
       products.map((product) => {
-        const productLots = lots.filter((lot) => String(lot.productId) === String(product.id));
+        const productLots = activeLots.filter((lot) => String(lot.productId) === String(product.id));
         const total = productLots.reduce((sum, lot) => sum + Number(lot.loadedQty || 0), 0);
         const committed = Number(productCommittedMap[String(product.id)] || 0);
         const available = Math.max(0, total - committed);
@@ -965,6 +967,9 @@ export default function App() {
       lots.map((lot) => [String(lot.id), lotAssignedMap[String(lot.id)]?.assignable || 0])
     );
   }, [lots, lotAssignedMap]);
+
+  const activeLots = useMemo(() => lots.filter((lot) => !lot.archived), [lots]);
+
 
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
@@ -1119,7 +1124,7 @@ export default function App() {
   const availableLotsForSelectedLine = useMemo(() => {
     if (!selectedLine) return [];
 
-    return lots
+    return activeLots
       .filter(
         (lot) =>
           String(lot.productId) === String(selectedLine.productId) &&
@@ -1133,7 +1138,7 @@ export default function App() {
 
     return products
       .map((product) => {
-        const productLots = lots.filter((lot) => String(lot.productId) === String(product.id));
+        const productLots = activeLots.filter((lot) => String(lot.productId) === String(product.id));
         const productStats = productStatsMap[String(product.id)] || {
           total: 0,
           committed: 0,
@@ -1167,7 +1172,7 @@ export default function App() {
       });
   }, [
     products,
-    lots,
+    activeLots,
     lotsAvailableMap,
     productStatsMap,
     productSearch,
@@ -1253,7 +1258,7 @@ export default function App() {
   const getAvailableLotsForLine = (line) => {
     if (!line) return [];
 
-    return lots
+    return activeLots
       .filter(
         (lot) =>
           String(lot.productId) === String(line.productId) &&
@@ -2780,7 +2785,6 @@ export default function App() {
         action: "updateLot",
         payload: JSON.stringify({
           lotId: editingLotId,
-          newLotCode: editingLotCode.trim(),
           expiry: editingLotExpiry,
           loadedQty: Number(editingLotQty),
         }),
@@ -2805,6 +2809,54 @@ export default function App() {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
       setSavingEditedLot(false);
+    }
+  };
+
+  const archiveLot = async (lotId) => {
+    if (!lotId) return;
+
+    const lotToArchive = lots.find((lot) => String(lot.id) === String(lotId));
+    const lotCode = lotToArchive?.lot || lotId;
+    const qty = Number(lotToArchive?.loadedQty || 0);
+    const assigned = Number(lotAssignedMap[String(lotId)]?.assigned || 0);
+
+    if (qty > 0) {
+      alert("Puoi archiviare solo lotti con quantità a zero.");
+      return;
+    }
+
+    if (assigned > 0) {
+      alert("Non puoi archiviare un lotto ancora impegnato in ordini non preparati.");
+      return;
+    }
+
+    const conferma = window.confirm(
+      `Vuoi archiviare il lotto ${lotCode}? Non sarà più visibile nel magazzino attivo.`
+    );
+
+    if (!conferma) return;
+
+    try {
+      const result = await callSheetsApi({
+        action: "archiveLot",
+        lotId,
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nell'archiviazione lotto sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setLots((prev) =>
+        prev.map((lot) =>
+          String(lot.id) === String(lotId) ? { ...lot, archived: true } : lot
+        )
+      );
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
 
@@ -4464,6 +4516,19 @@ export default function App() {
                                                       <Pencil size={16} />
                                                     </button>
 
+                                                    {Number(lot.loadedQty || 0) <= 0 ? (
+                                                      <button
+                                                        style={btnStyle("outline")}
+                                                        onClick={() => archiveLot(lot.id)}
+                                                        disabled={
+                                                          (lotAssignedMap[String(lot.id)]?.assigned || 0) > 0
+                                                        }
+                                                        title="Archivia lotto a zero"
+                                                      >
+                                                        <Archive size={16} />
+                                                      </button>
+                                                    ) : null}
+
                                                     <button
                                                       style={btnStyle("outline")}
                                                       onClick={() => deleteLot(lot.id)}
@@ -4989,13 +5054,13 @@ export default function App() {
         >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
-              <label style={labelStyle()}>Codice lotto</label>
+              <label style={labelStyle()}>Codice lotto (solo lettura)</label>
 
               <input
                 style={inputStyle()}
                 value={editingLotCode}
-                onChange={(event) => setEditingLotCode(event.target.value)}
-                placeholder="Es. 2604110 oppure DISPONIBILITA"
+                readOnly
+                placeholder="Codice lotto non modificabile dall'app"
               />
             </div>
 
