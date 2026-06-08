@@ -1,4 +1,4 @@
-// versione archivia lotti a zero
+// versione fix lettura ordini persistente
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycby3xh0ctm952yAL1QL8oDJm02TZGWmGINZORtEYfx-HvoZtnTb9xOkGKfMS_WAemEVW/exec";
+  "https://script.google.com/macros/s/AKfycbz2-7YQdV809spYG_TppqICbO-3KgJMu4Bkm_GnX7ebVr4tR-D8Lz52dRQuUIlt5GkV/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -854,6 +854,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!selectedOrderId || orders.length === 0) return;
+
+    const selected = orders.find((order) => String(order.id) === String(selectedOrderId));
+
+    if (String(selected?.workStatus || "").trim().toLowerCase() === "nuovo") {
+      persistOrderViewed(selectedOrderId);
+    }
+  }, [selectedOrderId, orders]);
+
+  useEffect(() => {
     setProductSubcategoryFilter("");
   }, [productCategoryFilter]);
 
@@ -1656,23 +1666,44 @@ export default function App() {
     setSelectedOrderId(order.id);
     setSelectedLineId(order.lines?.[0]?.lineId || "");
 
-    if (String(order.workStatus || "").trim().toLowerCase() !== "nuovo") {
+    if (String(order.workStatus || "").trim().toLowerCase() === "nuovo") {
+      persistOrderViewed(order.id);
+    }
+  };
+
+  const markVisibleOrdersAsViewed = async () => {
+    const visibleNewOrders = filteredOrders.filter(
+      (order) => String(order.workStatus || "").trim().toLowerCase() === "nuovo"
+    );
+
+    if (visibleNewOrders.length === 0) {
+      alert("Non ci sono ordini nuovi da segnare come letti.");
       return;
     }
 
+    const conferma = window.confirm(
+      `Vuoi segnare come letti ${visibleNewOrders.length} ordini visibili?`
+    );
+
+    if (!conferma) return;
+
     setOrders((prev) =>
-      prev.map((item) =>
-        String(item.id) === String(order.id) ? { ...item, workStatus: "In lavorazione" } : item
+      prev.map((order) =>
+        visibleNewOrders.some((visible) => String(visible.id) === String(order.id))
+          ? { ...order, workStatus: "In lavorazione" }
+          : order
       )
     );
 
-    try {
-      await callSheetsApi({
-        action: "markOrderViewed",
-        orderId: order.id,
-      });
-    } catch (error) {
-      // Non blocchiamo l'operatore: al massimo resterà Nuovo fino al prossimo aggiornamento.
+    for (const order of visibleNewOrders) {
+      try {
+        await callSheetsApi({
+          action: "markOrderViewed",
+          orderId: order.id,
+        });
+      } catch (error) {
+        console.warn("Errore markOrderViewed bulk", order.id, error);
+      }
     }
   };
 
@@ -3169,6 +3200,10 @@ export default function App() {
                 }}
               >
                 <div style={{ fontSize: 20, fontWeight: 800 }}>Ordini</div>
+
+                <button style={btnStyle("outline")} onClick={markVisibleOrdersAsViewed}>
+                  Letti
+                </button>
 
                 <button style={btnStyle("primary")} onClick={() => setOrderDialogOpen(true)}>
                   <Plus size={16} /> Nuovo
