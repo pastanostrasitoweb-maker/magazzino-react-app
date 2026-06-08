@@ -1,4 +1,4 @@
-// hotfix schermata bianca: activeLots prima dell'uso
+// hotfix assegnazione prodotti senza lotto su ID disponibilità reale
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbwWdHZ7E5MBK9Qz_pffTGOwVTts3DRPy5U0ETccj9J4D9Pvo7F6fM6m0F_kOr_e1uig/exec";
+  "https://script.google.com/macros/s/AKfycbxNom4UmYHZhcUNKBJt5BOtDEWzRiCKdiiXl-_3Na3qAONmzLqTRpxyU0gOaLLuffQE/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -1337,8 +1337,39 @@ export default function App() {
       lotId = String(form.lotId);
       lotCode = selectedLot.lot;
     } else {
-      lotId = isOutsideStockLine(line) ? "FUORI_MAGAZZINO" : "DISPONIBILITA";
-      lotCode = lotId;
+      if (isOutsideStockLine(line)) {
+        lotId = "FUORI_MAGAZZINO";
+        lotCode = "FUORI_MAGAZZINO";
+      } else {
+        const genericLots = activeLots
+          .filter(
+            (lot) =>
+              String(lot.productId) === String(line.productId) &&
+              String(lot.lot || "").trim().toLowerCase() === "disponibilita"
+          )
+          .sort((a, b) => Number(lotsAvailableMap[String(b.id)] || 0) - Number(lotsAvailableMap[String(a.id)] || 0));
+
+        const genericLot = genericLots.find(
+          (lot) => Number(lotsAvailableMap[String(lot.id)] || 0) >= qty
+        );
+
+        const totalGenericAvailable = genericLots.reduce(
+          (sum, lot) => sum + Number(lotsAvailableMap[String(lot.id)] || 0),
+          0
+        );
+
+        if (!genericLot) {
+          alert(
+            totalGenericAvailable > 0
+              ? "Disponibilità generica insufficiente per questo prodotto. Disponibile: " + totalGenericAvailable
+              : "Disponibilità generica non caricata per questo prodotto. Caricala prima dal magazzino."
+          );
+          return;
+        }
+
+        lotId = String(genericLot.id);
+        lotCode = "DISPONIBILITA";
+      }
     }
 
     if (qty > line.qtyToAssign) {
