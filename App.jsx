@@ -1,4 +1,4 @@
-// versione ordini chiari archivio automatico e righe generiche eliminabili
+// versione preparati dettaglio e archivia singolo
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbxLSB9h-vRRJwgKyGbPou-VioVztTb7xp7wer_7zNKWSQg7NH6xsTT-5DY14W4kfBO_/exec";
+  "https://script.google.com/macros/s/AKfycbxyVax6AAooD-QHl0SB2w-c3WxbVsL27eIPoF-HuI8LNT_h52QaD0dW43bEzqSTMiG-/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -708,6 +708,7 @@ export default function App() {
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [savingPreparedOrderId, setSavingPreparedOrderId] = useState("");
+  const [expandedPreparedOrders, setExpandedPreparedOrders] = useState({});
 
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [selectedLotId, setSelectedLotId] = useState("");
@@ -1656,6 +1657,43 @@ export default function App() {
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
+  };
+
+  const archivePreparedOrder = async (orderId) => {
+    if (!orderId) return;
+
+    const conferma = window.confirm("Vuoi archiviare questo ordine preparato?");
+    if (!conferma) return;
+
+    try {
+      const result = await callSheetsApi({
+        action: "archiveOrder",
+        orderId,
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nell'archiviazione ordine: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.id) === String(orderId) ? { ...order, archived: true } : order
+        )
+      );
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
+  };
+
+  const togglePreparedDetails = (orderId) => {
+    setExpandedPreparedOrders((prev) => ({
+      ...prev,
+      [String(orderId)]: !prev[String(orderId)],
+    }));
   };
 
   const markOrderStopped = async () => {
@@ -3627,43 +3665,139 @@ export default function App() {
               {preparedOrders.length === 0 ? (
                 <div style={{ color: "#66758b" }}>Nessun ordine preparato non archiviato.</div>
               ) : (
-                preparedOrders.map((order) => (
-                  <div
-                    key={order.id}
-                    style={{
-                      ...cardStyle({ background: "linear-gradient(135deg, #eefbf2, #ffffff)" }),
-                      padding: 16,
-                      borderLeft: "6px solid #22c55e",
-                      display: "grid",
-                      gridTemplateColumns: isSmallLayout ? "1fr" : "1fr auto",
-                      gap: 12,
-                      alignItems: "center",
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                        <div style={{ fontSize: 19, fontWeight: 950, color: "#07153a" }}>
-                          {order.customer || "Ordine senza nome"}
+                preparedOrders.map((order) => {
+                  const expanded = !!expandedPreparedOrders[String(order.id)];
+
+                  return (
+                    <div
+                      key={order.id}
+                      style={{
+                        ...cardStyle({ background: "linear-gradient(135deg, #eefbf2, #ffffff)" }),
+                        padding: 16,
+                        borderLeft: "6px solid #22c55e",
+                        display: "grid",
+                        gap: 14,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: isSmallLayout ? "1fr" : "1fr auto",
+                          gap: 12,
+                          alignItems: "center",
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <div style={{ fontSize: 19, fontWeight: 950, color: "#07153a" }}>
+                              {order.customer || "Ordine senza nome"}
+                            </div>
+                            <span style={badgeStyle("success")}>Preparato</span>
+                          </div>
+
+                          <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
+                            {fmtDate(order.dataPrepared || order.date)} · ID {order.id}
+                          </div>
+
+                          {order.notes ? (
+                            <div style={{ marginTop: 8, color: "#40516a", fontSize: 13, lineHeight: 1.4 }}>
+                              {order.notes}
+                            </div>
+                          ) : null}
+
+                          <div style={{ marginTop: 8, color: "#66758b", fontSize: 13 }}>
+                            {order.lines?.length || 0} righe
+                          </div>
                         </div>
-                        <span style={badgeStyle("success")}>Preparato</span>
+
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                          <button style={btnStyle("outline")} onClick={() => togglePreparedDetails(order.id)}>
+                            {expanded ? "Nascondi" : "Apri"} dettagli
+                          </button>
+
+                          <button style={btnStyle("primary")} onClick={() => archivePreparedOrder(order.id)}>
+                            <Archive size={16} /> Archivia
+                          </button>
+                        </div>
                       </div>
 
-                      <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
-                        {fmtDate(order.dataPrepared || order.date)} · ID {order.id}
-                      </div>
+                      {expanded ? (
+                        <div
+                          style={{
+                            borderTop: "1px solid #dbeafe",
+                            paddingTop: 14,
+                            display: "grid",
+                            gap: 10,
+                          }}
+                        >
+                          {(order.lines || []).map((line) => {
+                            const product = productMap[String(line.productId)];
+                            const lineAssignments = assignments[line.lineId] || [];
 
-                      {order.notes ? (
-                        <div style={{ marginTop: 8, color: "#40516a", fontSize: 13, lineHeight: 1.4 }}>
-                          {order.notes}
+                            return (
+                              <div
+                                key={line.lineId}
+                                style={{
+                                  ...cardStyle({ background: "#fff" }),
+                                  padding: 12,
+                                  display: "grid",
+                                  gap: 8,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    gap: 12,
+                                    flexWrap: "wrap",
+                                    alignItems: "center",
+                                  }}
+                                >
+                                  <div>
+                                    <div style={{ fontWeight: 950, color: "#07153a" }}>
+                                      {isOutsideStockLine(line)
+                                        ? line.productName
+                                        : product?.name || line.productName || line.productId}
+                                    </div>
+                                    <div style={{ marginTop: 3, color: "#66758b", fontSize: 12 }}>
+                                      {isOutsideStockLine(line)
+                                        ? "FUORI MAGAZZINO"
+                                        : product?.code || line.productId}
+                                    </div>
+                                  </div>
+
+                                  <span style={badgeStyle("outline")}>
+                                    Ordinati {Number(line.qtyOrdered || 0)}
+                                  </span>
+                                </div>
+
+                                {lineAssignments.length > 0 ? (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {lineAssignments.map((assignment) => {
+                                      const assignedLot = lots.find(
+                                        (lot) => String(lot.id) === String(assignment.lotId)
+                                      );
+
+                                      return (
+                                        <span key={assignment.assignmentId} style={badgeStyle("success")}>
+                                          {assignedLot?.lot || assignment.lotId} · {Number(assignment.qty || 0)}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <div style={{ color: "#66758b", fontSize: 13 }}>
+                                    Nessuna assegnazione lotto collegata a questa riga.
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : null}
-
-                      <div style={{ marginTop: 8, color: "#66758b", fontSize: 13 }}>
-                        {order.lines?.length || 0} righe
-                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })                ))
               )}
             </div>
           </div>
