@@ -1,4 +1,4 @@
-// versione preparati dettaglio e archivia singolo
+// versione nuovi ordini evidenziati e righe ordinate
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbxyVax6AAooD-QHl0SB2w-c3WxbVsL27eIPoF-HuI8LNT_h52QaD0dW43bEzqSTMiG-/exec";
+  "https://script.google.com/macros/s/AKfycbwwmnvzSkniw5hKWw4rdf32Pf3AU_PC77Q-ffDTGTjjibpcagCDv6YUxnXwJe7sijGJ/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -373,6 +373,9 @@ function normalizeOrders(rows) {
         String(getField(row, ["Archiviato", "Archivio", "Archived"])).trim().toLowerCase()
       ),
       status: String(getField(row, ["Stato", "status"]) || "Da preparare"),
+      workStatus: String(
+        getField(row, ["Stato_Lavorazione", "Stato lavorazione", "WorkStatus"]) || "Nuovo"
+      ),
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
       lines: [],
     }))
@@ -404,6 +407,7 @@ function normalizeOrderLines(rows, products) {
         orderId: String(getField(row, ["ID_Ordine", "Id_Ordine", "Ordine"])).trim(),
         productId: resolvedProductId,
         productName,
+        rowOrder: Number(getField(row, ["Ordine_Riga", "Ordine riga", "Row_Order"]) || index + 1),
         isOutsideStock: String(resolvedProductId).startsWith(OUTSIDE_STOCK_PRODUCT_ID),
         qtyOrdered: Number(
           getField(row, [
@@ -1008,9 +1012,20 @@ export default function App() {
       .filter((order) => String(order.computedStatus) !== "Fermo")
       .filter((order) => String(order.computedStatus) !== "Preparato")
       .sort((a, b) => {
+        const rankOrder = (order) => {
+          const work = String(order.workStatus || "").trim().toLowerCase();
+          if (work === "nuovo") return 0;
+          if (order.totalToAssign > 0) return 1;
+          return 2;
+        };
+
+        const rankDiff = rankOrder(a) - rankOrder(b);
+        if (rankDiff !== 0) return rankDiff;
+
         const aOpen = a.totalToAssign > 0 ? 0 : 1;
         const bOpen = b.totalToAssign > 0 ? 0 : 1;
         if (aOpen !== bOpen) return aOpen - bOpen;
+
         return String(b.date || "").localeCompare(String(a.date || ""));
       });
 
@@ -1088,6 +1103,11 @@ export default function App() {
       const aDone = a.qtyToAssign <= 0 ? 1 : 0;
       const bDone = b.qtyToAssign <= 0 ? 1 : 0;
       if (aDone !== bDone) return aDone - bDone;
+
+      const aOrder = Number(a.rowOrder || 0);
+      const bOrder = Number(b.rowOrder || 0);
+      if (aOrder !== bOrder) return aOrder - bOrder;
+
       return String(a.lineId).localeCompare(String(b.lineId));
     });
   }, [selectedOrder]);
@@ -1625,6 +1645,32 @@ export default function App() {
     }
   };
 
+  const openOrderFromList = async (order) => {
+    if (!order) return;
+
+    setSelectedOrderId(order.id);
+    setSelectedLineId(order.lines?.[0]?.lineId || "");
+
+    if (String(order.workStatus || "").trim().toLowerCase() !== "nuovo") {
+      return;
+    }
+
+    setOrders((prev) =>
+      prev.map((item) =>
+        String(item.id) === String(order.id) ? { ...item, workStatus: "In lavorazione" } : item
+      )
+    );
+
+    try {
+      await callSheetsApi({
+        action: "markOrderViewed",
+        orderId: order.id,
+      });
+    } catch (error) {
+      // Non blocchiamo l'operatore: al massimo resterà Nuovo fino al prossimo aggiornamento.
+    }
+  };
+
   const archiveAllPreparedOrders = async () => {
     const conferma = window.confirm(
       "Vuoi archiviare tutti gli ordini preparati non ancora archiviati?"
@@ -1759,10 +1805,57 @@ export default function App() {
       setOrders((prev) =>
         prev.map((order) =>
           String(order.id) === String(orderId)
-            ? { ...order, status: "Da preparare", dataPrepared: "", archived: false }
+            ? { ...order, status: "Da preparare", workStatus: "In lavorazione", dataPrepared: "", archived: false }
             : order
         )
       );
+
+      setSelectedOrderId(orderId);
+      setPage("ordini");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    }
+  };
+
+  const reopenPreparedOrderForEditing = async (orderId) => {
+    if (!orderId) return;
+
+    const conferma = window.confirm(
+      "Vuoi modificare questo ordine preparato? Verrà riportato in Da preparare e le quantità già scaricate verranno ripristinate."
+    );
+
+    if (!conferma) return;
+
+    try {
+      const result = await callSheetsApi({
+        action: "reopenOrder",
+        orderId,
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nel riaprire l'ordine preparato: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.id) === String(orderId)
+            ? {
+                ...order,
+                status: "Da preparare",
+                dataPrepared: "",
+                archived: false,
+              }
+            : order
+        )
+      );
+
+      if (result.stockMovements && result.stockMovements.length) {
+        setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements || []));
+      }
 
       setSelectedOrderId(orderId);
       setPage("ordini");
@@ -1853,6 +1946,7 @@ export default function App() {
             productCode: OUTSIDE_STOCK_PRODUCT_ID,
             productName: String(line.customName || "").trim(),
             isOutsideStock: true,
+            rowOrder: index + 1,
             qtyOrdered: Number(line.qtyOrdered),
           };
         }
@@ -1865,6 +1959,7 @@ export default function App() {
           productCode: product?.code || "",
           productName: product?.name || "",
           isOutsideStock: false,
+          rowOrder: index + 1,
           qtyOrdered: Number(line.qtyOrdered),
         };
       });
@@ -1879,6 +1974,7 @@ export default function App() {
       customer: newOrderCustomer.trim(),
       notes: newOrderNotes.trim(),
       status: "Da preparare",
+      workStatus: "Nuovo",
       date: new Date().toISOString().slice(0, 10),
       lines: validLines,
     };
@@ -1891,6 +1987,7 @@ export default function App() {
           customer: newOrder.customer,
           notes: newOrder.notes,
           status: newOrder.status,
+          workStatus: newOrder.workStatus,
           date: newOrder.date,
           lines: newOrder.lines,
         }),
@@ -2332,6 +2429,9 @@ export default function App() {
       return;
     }
 
+    const nextRowOrder =
+      Math.max(0, ...((selectedOrder.lines || []).map((line) => Number(line.rowOrder || 0)))) + 1;
+
     let newLine;
 
     if (newLineIsOutsideStock) {
@@ -2347,6 +2447,7 @@ export default function App() {
         productCode: OUTSIDE_STOCK_PRODUCT_ID,
         productName: newLineCustomName.trim(),
         isOutsideStock: true,
+        rowOrder: nextRowOrder,
         qtyOrdered,
         qtyAssignedFromSheet: 0,
       };
@@ -2370,6 +2471,7 @@ export default function App() {
         productCode: product.code || product.id,
         productName: product.name || "",
         isOutsideStock: false,
+        rowOrder: nextRowOrder,
         qtyOrdered,
         qtyAssignedFromSheet: 0,
       };
@@ -2402,6 +2504,7 @@ export default function App() {
           productCode: newLine.productCode,
           productName: newLine.productName,
           isOutsideStock: newLine.isOutsideStock,
+          rowOrder: newLine.rowOrder,
           qtyOrdered,
         }),
       });
@@ -3038,17 +3141,23 @@ export default function App() {
                 {filteredOrders.map((order) => (
                   <button
                     key={order.id}
-                    onClick={() => {
-                      setSelectedOrderId(order.id);
-                      setSelectedLineId(order.lines[0]?.lineId || "");
-                    }}
+                    onClick={() => openOrderFromList(order)}
                     style={{
                       textAlign: "left",
                       padding: 18,
                       borderRadius: 24,
                       border:
-                        selectedOrderId === order.id ? "2px solid #07153a" : "1px solid #dbe2ea",
-                      background: selectedOrderId === order.id ? "linear-gradient(135deg, #f8fbff, #eef4ff)" : "#fff",
+                        selectedOrderId === order.id
+                          ? "2px solid #07153a"
+                          : String(order.workStatus || "").trim().toLowerCase() === "nuovo"
+                            ? "2px solid #f59e0b"
+                            : "1px solid #dbe2ea",
+                      background:
+                        selectedOrderId === order.id
+                          ? "linear-gradient(135deg, #f8fbff, #eef4ff)"
+                          : String(order.workStatus || "").trim().toLowerCase() === "nuovo"
+                            ? "linear-gradient(135deg, #fff7ed, #ffffff)"
+                            : "#fff",
                       cursor: "pointer",
                       boxShadow: selectedOrderId === order.id ? "0 12px 24px rgba(7,21,58,0.10)" : "0 5px 14px rgba(15,23,42,0.04)",
                     }}
@@ -3068,7 +3177,12 @@ export default function App() {
                         ) : null}
                       </div>
 
-                      <span style={badgeStyle(order.totalToAssign > 0 ? "warning" : "success")}>{order.computedStatus}</span>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        {String(order.workStatus || "").trim().toLowerCase() === "nuovo" ? (
+                          <span style={badgeStyle("warning")}>NUOVO</span>
+                        ) : null}
+                        <span style={badgeStyle(order.totalToAssign > 0 ? "warning" : "success")}>{order.computedStatus}</span>
+                      </div>
                     </div>
 
                     <div style={{ marginTop: 14, color: "#66758b" }}>
@@ -3633,7 +3747,7 @@ export default function App() {
                   Ordini preparati non archiviati
                 </div>
                 <div style={{ marginTop: 4, color: "#66758b", fontSize: 14 }}>
-                  Qui trovi gli ordini già usciti/preparati. La pagina Ordini ora mostra solo ciò che resta da evadere.
+                  Qui trovi gli ordini già usciti/preparati. Puoi aprirli, controllare le righe e riaprirli per modificarli: se aggiungi una riga tornano da preparare.
                 </div>
               </div>
 
@@ -3713,6 +3827,10 @@ export default function App() {
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                           <button style={btnStyle("outline")} onClick={() => togglePreparedDetails(order.id)}>
                             {expanded ? "Nascondi" : "Apri"} dettagli
+                          </button>
+
+                          <button style={btnStyle("warning")} onClick={() => reopenPreparedOrderForEditing(order.id)}>
+                            <Pencil size={16} /> Modifica
                           </button>
 
                           <button style={btnStyle("primary")} onClick={() => archivePreparedOrder(order.id)}>
