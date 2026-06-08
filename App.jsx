@@ -1,4 +1,4 @@
-// versione stabile lotti no duplicati
+// versione ordini chiari archivio automatico e righe generiche eliminabili
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbze-SoD73LqUqmR3nyGoo1V_bUxWx8919ehG9MK417_Wewd4PVgD4IOLQTjsGZyYpdh/exec";
+  "https://script.google.com/macros/s/AKfycbxLSB9h-vRRJwgKyGbPou-VioVztTb7xp7wer_7zNKWSQg7NH6xsTT-5DY14W4kfBO_/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -804,6 +804,8 @@ export default function App() {
     setLoadError("");
 
     try {
+      await callSheetsApi({ action: "archivePreparedOrders" }).catch(() => null);
+
       const raw = await callSheetsApi();
 
       const normalizedProducts = normalizeProducts(raw.prodotti || []);
@@ -1003,7 +1005,7 @@ export default function App() {
     const visibleOrders = ordersWithComputed
       .filter((order) => !order.archived)
       .filter((order) => String(order.computedStatus) !== "Fermo")
-      .filter((order) => String(order.computedStatus) !== "Preparato" || !q)
+      .filter((order) => String(order.computedStatus) !== "Preparato")
       .sort((a, b) => {
         const aOpen = a.totalToAssign > 0 ? 0 : 1;
         const bOpen = b.totalToAssign > 0 ? 0 : 1;
@@ -1024,7 +1026,10 @@ export default function App() {
   const activeOrders = useMemo(
     () =>
       ordersWithComputed.filter(
-        (order) => !order.archived && String(order.computedStatus) !== "Fermo"
+        (order) =>
+          !order.archived &&
+          String(order.computedStatus) !== "Fermo" &&
+          String(order.computedStatus) !== "Preparato"
       ),
     [ordersWithComputed]
   );
@@ -1035,6 +1040,23 @@ export default function App() {
     const ordersToShow = ordersWithComputed
       .filter((order) => !order.archived && String(order.computedStatus) === "Fermo")
       .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+    if (!q) return ordersToShow;
+
+    return ordersToShow.filter(
+      (order) =>
+        String(order.id).toLowerCase().includes(q) ||
+        String(order.customer).toLowerCase().includes(q) ||
+        String(order.notes).toLowerCase().includes(q)
+    );
+  }, [ordersWithComputed, orderSearch]);
+
+  const preparedOrders = useMemo(() => {
+    const q = orderSearch.trim().toLowerCase();
+
+    const ordersToShow = ordersWithComputed
+      .filter((order) => !order.archived && String(order.computedStatus) === "Preparato")
+      .sort((a, b) => String(b.dataPrepared || b.date || "").localeCompare(String(a.dataPrepared || a.date || "")));
 
     if (!q) return ordersToShow;
 
@@ -1599,6 +1621,40 @@ export default function App() {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
       setSavingEditedOrder(false);
+    }
+  };
+
+  const archiveAllPreparedOrders = async () => {
+    const conferma = window.confirm(
+      "Vuoi archiviare tutti gli ordini preparati non ancora archiviati?"
+    );
+
+    if (!conferma) return;
+
+    try {
+      const result = await callSheetsApi({
+        action: "archiveAllPreparedOrders",
+      });
+
+      if (!result || !result.success) {
+        alert(
+          "Errore nell'archiviazione ordini preparati: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.status || "").trim().toLowerCase() === "preparato"
+            ? { ...order, archived: true }
+            : order
+        )
+      );
+
+      setPage("archivio");
+    } catch (error) {
+      alert("Errore di collegamento con Google Sheet: " + String(error));
     }
   };
 
@@ -2783,6 +2839,17 @@ export default function App() {
 
               <button
                 style={{
+                  ...btnStyle(page === "preparati" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                }}
+                onClick={() => setPage("preparati")}
+              >
+                <CheckCircle2 size={18} /> Preparati
+              </button>
+
+              <button
+                style={{
                   ...btnStyle(page === "archivio" ? "primary" : "soft"),
                   borderRadius: 999,
                   minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
@@ -3209,7 +3276,7 @@ export default function App() {
                                       ? "Quantità assegnata"
                                       : "Quantità completata"}
                                   </span>
-                                  {isAdmin ? (
+                                  {(isAdmin || line.requiresLots === false) ? (
                                     <div
                                       style={{
                                         display: "flex",
@@ -3217,15 +3284,17 @@ export default function App() {
                                         width: isSmallLayout ? "100%" : "auto",
                                       }}
                                     >
-                                      <button
-                                        style={{
-                                          ...compactBtnStyle("outline"),
-                                          width: isSmallLayout ? "100%" : "auto",
-                                        }}
-                                        onClick={() => openEditLineDialog(line)}
-                                      >
-                                        Qtà
-                                      </button>
+                                      {isAdmin ? (
+                                        <button
+                                          style={{
+                                            ...compactBtnStyle("outline"),
+                                            width: isSmallLayout ? "100%" : "auto",
+                                          }}
+                                          onClick={() => openEditLineDialog(line)}
+                                        >
+                                          Qtà
+                                        </button>
+                                      ) : null}
 
                                       <button
                                         style={{
@@ -3243,7 +3312,7 @@ export default function App() {
                                 <div
                                   style={{
                                     display: "grid",
-                                    gridTemplateColumns: isIPadLayout ? "1fr" : "minmax(0, 1fr) 76px 96px",
+                                    gridTemplateColumns: isIPadLayout ? "1fr" : "minmax(0, 1fr) 76px 96px 92px",
                                     gap: 8,
                                     alignItems: "center",
                                   }}
@@ -3288,6 +3357,17 @@ export default function App() {
                                     onClick={() => confirmInlineAssignment(line)}
                                   >
                                     {savingThisLine ? "Salvo..." : "Assegna"}
+                                  </button>
+
+                                  <button
+                                    style={{
+                                      ...compactBtnStyle("outline"),
+                                      minWidth: 0,
+                                      width: "100%",
+                                    }}
+                                    onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                  >
+                                    <Trash2 size={15} /> Riga
                                   </button>
                                 </div>
                               ) : availableLots.length === 0 ? (
@@ -3493,6 +3573,97 @@ export default function App() {
                 </>
               ) : (
                 <div style={{ color: "#66758b" }}>Seleziona un ordine.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {page === "preparati" && (
+          <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "center",
+                flexWrap: "wrap",
+                marginBottom: 18,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>
+                  Ordini preparati non archiviati
+                </div>
+                <div style={{ marginTop: 4, color: "#66758b", fontSize: 14 }}>
+                  Qui trovi gli ordini già usciti/preparati. La pagina Ordini ora mostra solo ciò che resta da evadere.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
+                  <RefreshCw size={18} /> Aggiorna
+                </button>
+                <button style={btnStyle("primary")} onClick={archiveAllPreparedOrders}>
+                  <Archive size={18} /> Archivia preparati
+                </button>
+              </div>
+            </div>
+
+            <div style={{ position: "relative", marginBottom: 18 }}>
+              <Search
+                size={16}
+                style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+              />
+
+              <input
+                style={{ ...inputStyle(), paddingLeft: 40 }}
+                value={orderSearch}
+                onChange={(event) => setOrderSearch(event.target.value)}
+                placeholder="Cerca ordine preparato per cliente, note o ID"
+              />
+            </div>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              {preparedOrders.length === 0 ? (
+                <div style={{ color: "#66758b" }}>Nessun ordine preparato non archiviato.</div>
+              ) : (
+                preparedOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    style={{
+                      ...cardStyle({ background: "linear-gradient(135deg, #eefbf2, #ffffff)" }),
+                      padding: 16,
+                      borderLeft: "6px solid #22c55e",
+                      display: "grid",
+                      gridTemplateColumns: isSmallLayout ? "1fr" : "1fr auto",
+                      gap: 12,
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <div style={{ fontSize: 19, fontWeight: 950, color: "#07153a" }}>
+                          {order.customer || "Ordine senza nome"}
+                        </div>
+                        <span style={badgeStyle("success")}>Preparato</span>
+                      </div>
+
+                      <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
+                        {fmtDate(order.dataPrepared || order.date)} · ID {order.id}
+                      </div>
+
+                      {order.notes ? (
+                        <div style={{ marginTop: 8, color: "#40516a", fontSize: 13, lineHeight: 1.4 }}>
+                          {order.notes}
+                        </div>
+                      ) : null}
+
+                      <div style={{ marginTop: 8, color: "#66758b", fontSize: 13 }}>
+                        {order.lines?.length || 0} righe
+                      </div>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
           </div>
