@@ -1,4 +1,4 @@
-// versione fix lettura ordini persistente
+// hotfix schermata bianca: activeLots prima dell'uso
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Package,
@@ -952,6 +952,9 @@ export default function App() {
     return committedByProduct;
   }, [orders]);
 
+  const activeLots = useMemo(() => lots.filter((lot) => !lot.archived), [lots]);
+
+
   const productStatsMap = useMemo(() => {
     return Object.fromEntries(
       products.map((product) => {
@@ -970,16 +973,13 @@ export default function App() {
         ];
       })
     );
-  }, [products, lots, productCommittedMap]);
+  }, [products, activeLots, productCommittedMap]);
 
   const lotsAvailableMap = useMemo(() => {
     return Object.fromEntries(
       lots.map((lot) => [String(lot.id), lotAssignedMap[String(lot.id)]?.assignable || 0])
     );
   }, [lots, lotAssignedMap]);
-
-  const activeLots = useMemo(() => lots.filter((lot) => !lot.archived), [lots]);
-
 
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
