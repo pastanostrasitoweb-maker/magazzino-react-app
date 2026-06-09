@@ -1009,6 +1009,7 @@ export default function App() {
           category: product?.category || "",
           expiry: lot.expiry ? String(lot.expiry).slice(0, 10) : "",
           loaded: Number(info.total ?? lot.loadedQty ?? 0),
+          committed: Number(info.assigned ?? 0),
           available: Number(info.assignable ?? 0),
         };
       })
@@ -1203,14 +1204,17 @@ export default function App() {
   const availableLotsForSelectedLine = useMemo(() => {
     if (!selectedLine) return [];
 
+    // Mostriamo tutti i lotti con giacenza fisica (total > 0), anche se la
+    // disponibilita' e' a 0 perche' impegnata in altri ordini non ancora evasi.
+    // L'operatore decide se assegnare comunque (la merce potrebbe essere presente).
     return activeLots
       .filter(
         (lot) =>
           String(lot.productId) === String(selectedLine.productId) &&
-          lotsAvailableMap[String(lot.id)] > 0
+          (lotAssignedMap[String(lot.id)]?.total || 0) > 0
       )
       .sort((a, b) => new Date(a.expiry) - new Date(b.expiry));
-  }, [selectedLine, lots, lotsAvailableMap]);
+  }, [selectedLine, lots, lotAssignedMap]);
 
   const filteredProducts = useMemo(() => {
     const q = productSearch.trim().toLowerCase();
@@ -1337,11 +1341,13 @@ export default function App() {
   const getAvailableLotsForLine = (line) => {
     if (!line) return [];
 
+    // Stesso criterio della vista dettaglio: lotti con giacenza fisica > 0,
+    // anche se la disponibilita' calcolata e' 0 (impegnata altrove).
     return activeLots
       .filter(
         (lot) =>
           String(lot.productId) === String(line.productId) &&
-          lotsAvailableMap[String(lot.id)] > 0
+          (lotAssignedMap[String(lot.id)]?.total || 0) > 0
       )
       .sort((a, b) => new Date(a.expiry) - new Date(b.expiry));
   };
@@ -1396,11 +1402,20 @@ export default function App() {
         return;
       }
 
-      const available = lotsAvailableMap[String(form.lotId)] || 0;
+      const lotInfo = lotAssignedMap[String(form.lotId)] || {};
+      const available = Number(lotInfo.assignable ?? (lotsAvailableMap[String(form.lotId)] || 0));
 
       if (qty > available) {
-        alert("La quantità supera la disponibilità del lotto");
-        return;
+        const giacenza = Number(lotInfo.total || 0);
+        const impegnato = Number(lotInfo.assigned || 0);
+        const ok = window.confirm(
+          "Disponibili solo " + available + " pz di questo lotto (giacenza " + giacenza +
+            ", gia' impegnati " + impegnato + " in altri ordini non ancora evasi).\n\n" +
+            "La disponibilita' a 0 non vuol dire giacenza a 0: se la merce e' fisicamente presente " +
+            "puoi assegnarne comunque " + qty + ". Gli altri ordini impegnati potrebbero non uscire prima di questo.\n\n" +
+            "Assegnare comunque " + qty + " pz?"
+        );
+        if (!ok) return;
       }
 
       lotId = String(form.lotId);
@@ -1535,11 +1550,20 @@ export default function App() {
       return;
     }
 
-    const available = lotsAvailableMap[String(selectedLotId)] || 0;
+    const lotInfo = lotAssignedMap[String(selectedLotId)] || {};
+    const available = Number(lotInfo.assignable ?? (lotsAvailableMap[String(selectedLotId)] || 0));
 
     if (qty > available) {
-      alert("La quantità supera la disponibilità del lotto");
-      return;
+      const giacenza = Number(lotInfo.total || 0);
+      const impegnato = Number(lotInfo.assigned || 0);
+      const ok = window.confirm(
+        "Disponibili solo " + available + " pz di questo lotto (giacenza " + giacenza +
+          ", gia' impegnati " + impegnato + " in altri ordini non ancora evasi).\n\n" +
+          "La disponibilita' a 0 non vuol dire giacenza a 0: se la merce e' fisicamente presente " +
+          "puoi assegnarne comunque " + qty + ". Gli altri ordini impegnati potrebbero non uscire prima di questo.\n\n" +
+          "Assegnare comunque " + qty + " pz?"
+      );
+      if (!ok) return;
     }
 
     if (qty > selectedLine.qtyToAssign) {
@@ -2117,6 +2141,26 @@ export default function App() {
       );
 
       setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements || []));
+
+      // L'ordine viene evaso anche se per qualche lotto la giacenza fisica era
+      // inferiore (es. merce gia' uscita ma non scaricata). Avvisiamo l'operatore
+      // di quali lotti sono andati sotto zero cosi' puo' sistemare la giacenza.
+      const warnings = Array.isArray(result.stockWarnings) ? result.stockWarnings : [];
+      if (warnings.length > 0) {
+        const righe = warnings
+          .map((w) => {
+            const prod = products.find((p) => String(p.id) === String(w.productId));
+            const nome = prod ? prod.name : String(w.productId);
+            const lotto = w.lot ? " (lotto " + w.lot + ")" : "";
+            return "- " + nome + lotto + ": mancavano " + w.shortfall + " pz";
+          })
+          .join("\n");
+        alert(
+          "Ordine evaso. Attenzione: alcuni lotti non avevano giacenza sufficiente e sono stati " +
+            "portati a 0 (scarico forzato):\n\n" + righe + "\n\n" +
+            "Controlla la giacenza di questi lotti dalla pagina Magazzino e correggila se necessario."
+        );
+      }
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
@@ -3918,12 +3962,17 @@ export default function App() {
                                     }
                                   >
                                     <option value="">Lotto</option>
-                                    {availableLots.map((lot) => (
-                                      <option key={lot.id} value={String(lot.id)}>
-                                        {lot.lot} · scad. {fmtDate(lot.expiry)} · disp.{" "}
-                                        {lotsAvailableMap[String(lot.id)]}
-                                      </option>
-                                    ))}
+                                    {availableLots.map((lot) => {
+                                      const info = lotAssignedMap[String(lot.id)] || {};
+                                      const disp = Number(info.assignable ?? 0);
+                                      const giac = Number(info.total || 0);
+                                      return (
+                                        <option key={lot.id} value={String(lot.id)}>
+                                          {lot.lot} · scad. {fmtDate(lot.expiry)} · disp. {disp}
+                                          {disp === 0 && giac > 0 ? ` (giac. ${giac})` : ""}
+                                        </option>
+                                      );
+                                    })}
                                   </select>
 
                                   <input
@@ -4556,7 +4605,7 @@ export default function App() {
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 110px",
+                      gridTemplateColumns: "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 90px 110px",
                       gap: 10,
                       padding: "12px 16px",
                       background: "#07153a",
@@ -4568,7 +4617,8 @@ export default function App() {
                     <div>Referenza</div>
                     <div>Lotto</div>
                     <div>Scadenza</div>
-                    <div style={{ textAlign: "right" }}>Caricato</div>
+                    <div style={{ textAlign: "right" }}>Giacenza</div>
+                    <div style={{ textAlign: "right" }}>Impegnato</div>
                     <div style={{ textAlign: "right" }}>Disponibile</div>
                   </div>
                 )}
@@ -4580,7 +4630,7 @@ export default function App() {
                       display: "grid",
                       gridTemplateColumns: isSmallLayout
                         ? "1fr auto"
-                        : "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 110px",
+                        : "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 90px 110px",
                       gap: 10,
                       padding: isSmallLayout ? "12px 14px" : "12px 16px",
                       alignItems: "center",
@@ -4594,6 +4644,7 @@ export default function App() {
                         {row.productCode}
                         {isSmallLayout ? ` · Lotto ${row.lotCode || "—"}` : ""}
                         {isSmallLayout && row.expiry ? ` · Scad. ${row.expiry}` : ""}
+                        {isSmallLayout ? ` · Giac. ${row.loaded} · Imp. ${row.committed}` : ""}
                       </div>
                     </div>
 
@@ -4601,6 +4652,11 @@ export default function App() {
                     {!isSmallLayout && <div style={{ color: "#3a4658" }}>{row.expiry || "—"}</div>}
                     {!isSmallLayout && (
                       <div style={{ textAlign: "right", color: "#55657a" }}>{row.loaded}</div>
+                    )}
+                    {!isSmallLayout && (
+                      <div style={{ textAlign: "right", color: row.committed > 0 ? "#b45309" : "#9aa7b8" }}>
+                        {row.committed}
+                      </div>
                     )}
 
                     <div
@@ -5033,12 +5089,17 @@ export default function App() {
                 >
                   <option value="">Seleziona lotto</option>
 
-                  {availableLotsForSelectedLine.map((lot) => (
-                    <option key={lot.id} value={String(lot.id)}>
-                      {lot.lot} · scad. {fmtDate(lot.expiry)} · disp.{" "}
-                      {lotsAvailableMap[String(lot.id)]}
-                    </option>
-                  ))}
+                  {availableLotsForSelectedLine.map((lot) => {
+                    const info = lotAssignedMap[String(lot.id)] || {};
+                    const disp = Number(info.assignable ?? 0);
+                    const giac = Number(info.total || 0);
+                    return (
+                      <option key={lot.id} value={String(lot.id)}>
+                        {lot.lot} · scad. {fmtDate(lot.expiry)} · disp. {disp}
+                        {disp === 0 && giac > 0 ? ` (giac. ${giac})` : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
