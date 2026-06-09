@@ -379,6 +379,12 @@ function normalizeOrders(rows) {
         getField(row, ["Stato_Lavorazione", "Stato lavorazione", "WorkStatus"]) || "In lavorazione"
       ),
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
+      colliManual: (() => {
+        const raw = getField(row, ["Colli", "Numero_Colli", "Colli_Ordine"]);
+        if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+        const n = Number(raw);
+        return Number.isFinite(n) && n >= 0 ? n : null;
+      })(),
       lines: [],
     }))
     .filter((order) => order.id);
@@ -710,6 +716,7 @@ export default function App() {
   const [productSubcategoryFilter, setProductSubcategoryFilter] = useState("");
   const [openProductSections, setOpenProductSections] = useState({});
   const [orderSearch, setOrderSearch] = useState("");
+  const [magazzinoSearch, setMagazzinoSearch] = useState("");
   const [assignments, setAssignments] = useState({});
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -741,6 +748,8 @@ export default function App() {
   const [editOrderCustomer, setEditOrderCustomer] = useState("");
   const [editOrderNotes, setEditOrderNotes] = useState("");
   const [savingEditedOrder, setSavingEditedOrder] = useState(false);
+  const [colliDrafts, setColliDrafts] = useState({});
+  const [savingColliOrderId, setSavingColliOrderId] = useState("");
 
   const [newLineProductId, setNewLineProductId] = useState("");
   const [newLineProductSearch, setNewLineProductSearch] = useState("");
@@ -981,6 +990,47 @@ export default function App() {
     );
   }, [lots, lotAssignedMap]);
 
+  // Vista "magazzino a prima vista": una riga per lotto attivo con la referenza
+  // e accanto la quantita' disponibile secondo il lotto (come il modulo cartaceo).
+  const magazzinoRows = useMemo(() => {
+    return lots
+      .filter((lot) => !lot.archived)
+      .map((lot) => {
+        const product = products.find(
+          (item) => String(item.id) === String(lot.productId)
+        );
+        const info = lotAssignedMap[String(lot.id)] || {};
+        return {
+          lotId: String(lot.id),
+          lotCode: String(lot.lot || ""),
+          productId: String(lot.productId || ""),
+          productName: product?.name || "(prodotto sconosciuto)",
+          productCode: product?.code || "",
+          category: product?.category || "",
+          expiry: lot.expiry ? String(lot.expiry).slice(0, 10) : "",
+          loaded: Number(info.total ?? lot.loadedQty ?? 0),
+          available: Number(info.assignable ?? 0),
+        };
+      })
+      .sort((a, b) => {
+        const byName = a.productName.localeCompare(b.productName);
+        if (byName !== 0) return byName;
+        return String(a.expiry).localeCompare(String(b.expiry));
+      });
+  }, [lots, products, lotAssignedMap]);
+
+  const filteredMagazzinoRows = useMemo(() => {
+    const q = magazzinoSearch.trim().toLowerCase();
+    if (!q) return magazzinoRows;
+    return magazzinoRows.filter(
+      (row) =>
+        row.productName.toLowerCase().includes(q) ||
+        row.productCode.toLowerCase().includes(q) ||
+        row.lotCode.toLowerCase().includes(q) ||
+        row.category.toLowerCase().includes(q)
+    );
+  }, [magazzinoRows, magazzinoSearch]);
+
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
       const lines = (order.lines || []).map((line) => {
@@ -1003,6 +1053,17 @@ export default function App() {
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
       const totalOrdered = lines.reduce((sum, line) => sum + line.qtyOrdered, 0);
 
+      // Colli: suggerito = somma delle quantità di tutte le righe. Se l'utente ha
+      // inserito un valore manuale (colliManual) quello prevale.
+      const colliSuggested = lines.reduce(
+        (sum, line) => sum + Number(line.qtyOrdered || 0),
+        0
+      );
+      const colli =
+        order.colliManual !== null && order.colliManual !== undefined
+          ? Number(order.colliManual)
+          : colliSuggested;
+
       const explicitStatus = String(order.status || "").trim();
       const explicitStatusLower = explicitStatus.toLowerCase();
       const computedStatus =
@@ -1016,7 +1077,15 @@ export default function App() {
                 ? "Parziale"
                 : "Da preparare";
 
-      return { ...order, lines, totalToAssign, computedStatus };
+      return {
+        ...order,
+        lines,
+        totalToAssign,
+        computedStatus,
+        colliSuggested,
+        colli,
+        colliIsManual: order.colliManual !== null && order.colliManual !== undefined,
+      };
     });
   }, [orders, assignments, products]);
 
@@ -1688,6 +1757,62 @@ export default function App() {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
       setSavingEditedOrder(false);
+    }
+  };
+
+  const saveOrderColli = async (orderId, rawValue) => {
+    if (!orderId) return;
+
+    const trimmed = String(rawValue ?? "").trim();
+    // Vuoto = ripristina il valore suggerito (cancella il manuale).
+    let colliManual = null;
+    let payloadColli = "";
+
+    if (trimmed !== "") {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n < 0) {
+        alert("Inserisci un numero di colli valido.");
+        return;
+      }
+      colliManual = Math.round(n);
+      payloadColli = colliManual;
+    }
+
+    const previousOrders = orders;
+    setSavingColliOrderId(orderId);
+
+    setOrders((prev) =>
+      prev.map((order) =>
+        String(order.id) === String(orderId) ? { ...order, colliManual } : order
+      )
+    );
+
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId, colli: payloadColli }),
+      });
+
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+        alert(
+          "Errore nel salvataggio colli sul foglio: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+        return;
+      }
+
+      // Allinea il draft al valore salvato.
+      setColliDrafts((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+    } catch (error) {
+      setOrders(previousOrders);
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingColliOrderId("");
     }
   };
 
@@ -3134,6 +3259,17 @@ export default function App() {
 
               <button
                 style={{
+                  ...btnStyle(page === "magazzino" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 158,
+                }}
+                onClick={() => setPage("magazzino")}
+              >
+                <Boxes size={18} /> Magazzino
+              </button>
+
+              <button
+                style={{
                   ...btnStyle("primary"),
                   borderRadius: 999,
                   minWidth: isSmallLayout ? "100%" : 154,
@@ -3384,6 +3520,82 @@ export default function App() {
                             {selectedOrder.notes}
                           </div>
                         ) : null}
+
+                        <div
+                          style={{
+                            marginTop: 12,
+                            padding: 12,
+                            borderRadius: 16,
+                            background: "#eef6ff",
+                            border: "1px solid #d3e6fb",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Boxes size={18} style={{ color: "#1d6fd0" }} />
+                            <span style={{ fontWeight: 800, color: "#0f3b73" }}>Colli</span>
+                          </div>
+
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            style={{
+                              ...inputStyle(),
+                              width: 90,
+                              padding: "8px 10px",
+                              fontWeight: 800,
+                              fontSize: 18,
+                              textAlign: "center",
+                            }}
+                            value={
+                              colliDrafts[selectedOrder.id] !== undefined
+                                ? colliDrafts[selectedOrder.id]
+                                : String(selectedOrder.colli)
+                            }
+                            onChange={(event) =>
+                              setColliDrafts((prev) => ({
+                                ...prev,
+                                [selectedOrder.id]: event.target.value,
+                              }))
+                            }
+                          />
+
+                          <span style={{ color: "#5b6b82", fontSize: 13 }}>
+                            suggerito {selectedOrder.colliSuggested}
+                            {selectedOrder.colliIsManual ? " · modificato a mano" : ""}
+                          </span>
+
+                          <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+                            <button
+                              style={btnStyle("primary", savingColliOrderId === String(selectedOrder.id))}
+                              disabled={savingColliOrderId === String(selectedOrder.id)}
+                              onClick={() =>
+                                saveOrderColli(
+                                  selectedOrder.id,
+                                  colliDrafts[selectedOrder.id] !== undefined
+                                    ? colliDrafts[selectedOrder.id]
+                                    : String(selectedOrder.colli)
+                                )
+                              }
+                            >
+                              {savingColliOrderId === String(selectedOrder.id) ? "Salvo..." : "Salva colli"}
+                            </button>
+
+                            {selectedOrder.colliIsManual ? (
+                              <button
+                                style={btnStyle("outline")}
+                                disabled={savingColliOrderId === String(selectedOrder.id)}
+                                onClick={() => saveOrderColli(selectedOrder.id, "")}
+                              >
+                                Usa suggerito
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
                       </div>
 
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -3958,6 +4170,56 @@ export default function App() {
                           <div style={{ marginTop: 8, color: "#66758b", fontSize: 13 }}>
                             {order.lines?.length || 0} righe
                           </div>
+
+                          <div
+                            style={{
+                              marginTop: 10,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            <Boxes size={16} style={{ color: "#1d6fd0" }} />
+                            <span style={{ fontWeight: 800, color: "#0f3b73", fontSize: 13 }}>Colli</span>
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              style={{
+                                ...inputStyle(),
+                                width: 76,
+                                padding: "6px 8px",
+                                fontWeight: 800,
+                                textAlign: "center",
+                              }}
+                              value={
+                                colliDrafts[order.id] !== undefined
+                                  ? colliDrafts[order.id]
+                                  : String(order.colli)
+                              }
+                              onChange={(event) =>
+                                setColliDrafts((prev) => ({ ...prev, [order.id]: event.target.value }))
+                              }
+                            />
+                            <button
+                              style={btnStyle("primary", savingColliOrderId === String(order.id))}
+                              disabled={savingColliOrderId === String(order.id)}
+                              onClick={() =>
+                                saveOrderColli(
+                                  order.id,
+                                  colliDrafts[order.id] !== undefined
+                                    ? colliDrafts[order.id]
+                                    : String(order.colli)
+                                )
+                              }
+                            >
+                              {savingColliOrderId === String(order.id) ? "Salvo..." : "Salva"}
+                            </button>
+                            <span style={{ color: "#5b6b82", fontSize: 12 }}>
+                              suggerito {order.colliSuggested}
+                            </span>
+                          </div>
                         </div>
 
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -4258,6 +4520,107 @@ export default function App() {
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        )}
+
+        {page === "magazzino" && (
+          <div style={{ ...cardStyle(), padding: 20 }}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>Magazzino a prima vista</div>
+              <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
+                Una riga per lotto: referenza e disponibilità immediata, come il modulo cartaceo.
+              </div>
+            </div>
+
+            <div style={{ position: "relative", marginBottom: 16, maxWidth: 420 }}>
+              <Search
+                size={16}
+                style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }}
+              />
+              <input
+                style={{ ...inputStyle(), paddingLeft: 40 }}
+                value={magazzinoSearch}
+                onChange={(event) => setMagazzinoSearch(event.target.value)}
+                placeholder="Cerca referenza, codice o lotto"
+              />
+            </div>
+
+            {filteredMagazzinoRows.length === 0 ? (
+              <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 18, color: "#b45309" }}>
+                Nessun lotto trovato.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 0, border: "1px solid #e7ecf3", borderRadius: 12, overflow: "hidden" }}>
+                {!isSmallLayout && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 110px",
+                      gap: 10,
+                      padding: "12px 16px",
+                      background: "#07153a",
+                      color: "#fff",
+                      fontWeight: 800,
+                      fontSize: 13,
+                    }}
+                  >
+                    <div>Referenza</div>
+                    <div>Lotto</div>
+                    <div>Scadenza</div>
+                    <div style={{ textAlign: "right" }}>Caricato</div>
+                    <div style={{ textAlign: "right" }}>Disponibile</div>
+                  </div>
+                )}
+
+                {filteredMagazzinoRows.map((row, index) => (
+                  <div
+                    key={row.lotId}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: isSmallLayout
+                        ? "1fr auto"
+                        : "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 110px",
+                      gap: 10,
+                      padding: isSmallLayout ? "12px 14px" : "12px 16px",
+                      alignItems: "center",
+                      background: index % 2 === 0 ? "#fff" : "#f7f9fc",
+                      borderTop: index === 0 && isSmallLayout ? "none" : "1px solid #eef2f7",
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 800, color: "#1c2738" }}>{row.productName}</div>
+                      <div style={{ fontSize: 12, color: "#7c8aa0", marginTop: 2 }}>
+                        {row.productCode}
+                        {isSmallLayout ? ` · Lotto ${row.lotCode || "—"}` : ""}
+                        {isSmallLayout && row.expiry ? ` · Scad. ${row.expiry}` : ""}
+                      </div>
+                    </div>
+
+                    {!isSmallLayout && <div style={{ color: "#3a4658" }}>{row.lotCode || "—"}</div>}
+                    {!isSmallLayout && <div style={{ color: "#3a4658" }}>{row.expiry || "—"}</div>}
+                    {!isSmallLayout && (
+                      <div style={{ textAlign: "right", color: "#55657a" }}>{row.loaded}</div>
+                    )}
+
+                    <div
+                      style={{
+                        textAlign: "right",
+                        fontWeight: 900,
+                        fontSize: isSmallLayout ? 20 : 18,
+                        color: row.available > 0 ? "#0a7d34" : "#b91c1c",
+                      }}
+                    >
+                      {row.available}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ marginTop: 14, color: "#617086", fontSize: 13 }}>
+              {filteredMagazzinoRows.length} lotti · Disponibili totali{" "}
+              {filteredMagazzinoRows.reduce((sum, row) => sum + row.available, 0)}
             </div>
           </div>
         )}
