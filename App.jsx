@@ -1,5 +1,6 @@
 // hotfix assegnazione prodotti senza lotto su ID disponibilità reale
 import React, { useEffect, useMemo, useState } from "react";
+import { callSheetsApi } from "./src/supabase-adapter.js";
 import {
   Package,
   ClipboardList,
@@ -17,8 +18,11 @@ import {
   RotateCcw,
 } from "lucide-react";
 
-const SHEETS_API_URL =
-  "https://script.google.com/macros/s/AKfycbxNom4UmYHZhcUNKBJt5BOtDEWzRiCKdiiXl-_3Na3qAONmzLqTRpxyU0gOaLLuffQE/exec";
+// Storico: backend Apps Script (JSONP) usato fino al 2026-06-09, ora sostituito
+// da Supabase via ./src/supabase-adapter.js. URL mantenuto come riferimento
+// per il commit history e per eventuale rollback.
+// const SHEETS_API_URL =
+//   "https://script.google.com/macros/s/AKfycbxNom4UmYHZhcUNKBJt5BOtDEWzRiCKdiiXl-_3Na3qAONmzLqTRpxyU0gOaLLuffQE/exec";
 const ADMIN_PIN = "1234";
 
 const fallbackProducts = [
@@ -31,52 +35,11 @@ const fallbackLots = [
   { id: "2", productId: "2", lot: "2604108", expiry: "2026-05-08", loadedQty: 18 },
 ];
 
-function callSheetsApi(params = {}) {
-  return new Promise((resolve, reject) => {
-    const callbackName = `jsonpCallback_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-    let script;
-
-    const cleanup = () => {
-      try {
-        delete window[callbackName];
-      } catch (error) {
-        // Ignora errori di pulizia del callback.
-      }
-
-      if (script && script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-    };
-
-    window[callbackName] = (data) => {
-      cleanup();
-      resolve(data);
-    };
-
-    const queryParts = [];
-
-    Object.keys(params).forEach((key) => {
-      const value = params[key];
-
-      if (value !== undefined && value !== null && value !== "") {
-        queryParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
-      }
-    });
-
-    queryParts.push(`callback=${encodeURIComponent(callbackName)}`);
-
-    script = document.createElement("script");
-    script.src = `${SHEETS_API_URL}?${queryParts.join("&")}`;
-    script.async = true;
-
-    script.onerror = () => {
-      cleanup();
-      reject(new Error("Errore di collegamento con Google Sheet"));
-    };
-
-    document.body.appendChild(script);
-  });
-}
+// callSheetsApi è ora importato da ./src/supabase-adapter.js (vedi top file).
+// Mantiene la firma originale: chiamata senza args = bulk load, con
+// { action, ...payload } = singola azione. Il body interno è cambiato (Supabase
+// invece di JSONP→Apps Script) ma lo shape di risposta è identico, quindi i
+// 27 call sites non richiedono modifiche.
 
 function getField(row, keys) {
   for (const key of keys) {
