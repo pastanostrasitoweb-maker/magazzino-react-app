@@ -2799,23 +2799,18 @@ export default function App() {
         return;
       }
 
-      if (result.stockRestored) {
-        setLots((prev) => applyStockMovementsToLots(prev, [result.stockRestored]));
+      // Se l'ordine era "preparato" ed e' stato riaperto, il backend ha
+      // ripristinato lo stock di TUTTE le assegnazioni dell'ordine. Per evitare
+      // qualsiasi disallineamento (causa del bug "tutto non disponibile"),
+      // ricarichiamo lo stato completo dal foglio invece di applicare le patch
+      // ottimistiche una per una.
+      if (result.orderReopened) {
+        await loadDataFromSheets();
+        return;
       }
 
-      if (result.orderReopened && result.orderId) {
-        setOrders((prev) =>
-          prev.map((order) =>
-            String(order.id) === String(result.orderId)
-              ? {
-                  ...order,
-                  status: "Da preparare",
-                  dataPrepared: "",
-                  archived: false,
-                }
-              : order
-          )
-        );
+      if (result.stockRestored) {
+        setLots((prev) => applyStockMovementsToLots(prev, [result.stockRestored]));
       }
     } catch (error) {
       if (assignmentToDelete) {
