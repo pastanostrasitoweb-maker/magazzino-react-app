@@ -1691,6 +1691,29 @@ export default function App() {
     }
   };
 
+  const persistOrderViewed = async (orderId) => {
+    if (!orderId) return;
+
+    // Aggiorna subito lo stato locale: l'ordine non e' piu' "nuovo".
+    setOrders((prev) =>
+      prev.map((order) =>
+        String(order.id) === String(orderId)
+          ? { ...order, workStatus: "In lavorazione" }
+          : order
+      )
+    );
+
+    // Salva sul foglio. Se fallisce non deve mai far crollare la pagina.
+    try {
+      await callSheetsApi({
+        action: "markOrderViewed",
+        orderId,
+      });
+    } catch (error) {
+      console.warn("Errore markOrderViewed", orderId, error);
+    }
+  };
+
   const openOrderFromList = async (order) => {
     if (!order) return;
 
