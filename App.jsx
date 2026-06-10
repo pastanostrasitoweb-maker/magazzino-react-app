@@ -219,7 +219,7 @@ function productManagesLots(product) {
 }
 
 function productStockModeLabel(product) {
-  return productManagesLots(product) ? "Gestione lotti" : "Disponibilità generica";
+  return productManagesLots(product) ? "Gestione lotti" : "Lotto DISPONIBILITA";
 }
 
 const OUTSIDE_STOCK_PRODUCT_ID = "FUORI_MAGAZZINO";
@@ -1444,8 +1444,8 @@ export default function App() {
         if (!genericLot) {
           alert(
             totalGenericAvailable > 0
-              ? "Disponibilità generica insufficiente per questo prodotto. Disponibile: " + totalGenericAvailable
-              : "Disponibilità generica non caricata per questo prodotto. Caricala prima dal magazzino."
+              ? "Lotto DISPONIBILITA insufficiente per questo prodotto. Disponibile: " + totalGenericAvailable
+              : "Lotto DISPONIBILITA non caricato per questo prodotto. Caricalo prima dal magazzino."
           );
           return;
         }
@@ -3906,7 +3906,7 @@ export default function App() {
                                   >
                                     {isOutsideStockLine(line)
                                       ? "Fuori magazzino"
-                                      : "Disponibilità generica"}
+                                      : "Lotto DISPONIBILITA"}
                                   </div>
 
                                   <input
