@@ -955,6 +955,9 @@ export default function App() {
 
   // Vista "magazzino a prima vista": una riga per lotto attivo con la referenza
   // e accanto la quantita' disponibile secondo il lotto (come il modulo cartaceo).
+  // Lotti esauriti (giacenza=0 E impegnato=0, ovvero "tutto evaso") esclusi:
+  // sono lotti morti, non servono in vista. Restano visibili quelli con
+  // giacenza > 0 anche se completamente impegnati (utile sapere che ci sono).
   const magazzinoRows = useMemo(() => {
     return lots
       .filter((lot) => !lot.archived)
@@ -976,6 +979,7 @@ export default function App() {
           available: Number(info.assignable ?? 0),
         };
       })
+      .filter((row) => row.loaded > 0 || row.committed > 0)
       .sort((a, b) => {
         const byName = a.productName.localeCompare(b.productName);
         if (byName !== 0) return byName;
@@ -5329,6 +5333,7 @@ export default function App() {
                           available: Number(info.assignable ?? lot.loadedQty ?? 0),
                         };
                       })
+                      .filter((l) => l.available > 0)
                       .sort((a, b) => String(a.expiry).localeCompare(String(b.expiry)));
                     const qtyN = Number(line.qtyOrdered) || 0;
                     const selectedLot = productLots.find((l) => l.id === String(line.lotId));
