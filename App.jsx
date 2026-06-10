@@ -5064,11 +5064,9 @@ export default function App() {
                                                 >
                                                   <div>
                                                     <div style={{ fontWeight: 800 }}>
-                                                      {productManagesLots(product)
-                                                        ? `Lotto ${lot.lot}`
-                                                        : "Disponibilità generica"}
+                                                      Lotto {lot.lot || "(senza codice)"}
                                                     </div>
-                                                    {productManagesLots(product) ? (
+                                                    {lot.expiry ? (
                                                       <div style={{ marginTop: 6, color: "#66758b" }}>
                                                         Scadenza {fmtDate(lot.expiry)}
                                                       </div>
