@@ -88,9 +88,23 @@ async function bulkLoad() {
     Gestione_Lotti: boolToSiNo(row.gestione_lotti),
   }));
 
+  // Mappa id_prodotto -> codice_prodotto (dai prodotti caricati).
+  // Serve a passare anche Codice_Prodotto al normalizeLots/normalizeOrderLines,
+  // così i lotti il cui id_prodotto e' un codice testuale (es. "NFARMA 054")
+  // vengono comunque risolti via productByCode invece di restare orfani.
+  const codiceByIdProd = new Map();
+  for (const p of prodottiR.data || []) {
+    codiceByIdProd.set(String(p.id_prodotto), p.codice_prodotto ?? "");
+  }
+  const codiceFor = (idProd) => {
+    const raw = String(idProd ?? "");
+    return codiceByIdProd.get(raw) || raw; // se non risolve, raw e' gia' il codice testuale
+  };
+
   const lotti = (lottiR.data || []).map((row) => ({
     ID_Lotto: String(row.id_lotto ?? ""),
     ID_Prodotto: String(row.id_prodotto ?? ""),
+    Codice_Prodotto: codiceFor(row.id_prodotto),
     Codice_Lotto: row.codice_lotto ?? row.lotto ?? "",
     Scadenza: toIsoString(row.scadenza),
     Archiviato: boolToSiNo(row.archiviato),

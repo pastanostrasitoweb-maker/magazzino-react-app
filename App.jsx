@@ -995,6 +995,34 @@ export default function App() {
     );
   }, [magazzinoRows, magazzinoSearch]);
 
+  // Raggruppa per prodotto: 1 header con totali + righe lotto sotto.
+  // I lotti orfani (productId che non aggancia nessun prodotto in catalogo)
+  // restano in un gruppo a se' col loro productName originale.
+  const magazzinoGrouped = useMemo(() => {
+    const groups = new Map();
+    for (const row of filteredMagazzinoRows) {
+      const key = row.productId || row.productCode || row.productName;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          productId: row.productId,
+          productName: row.productName,
+          productCode: row.productCode,
+          category: row.category,
+          lots: [],
+          totalLoaded: 0,
+          totalCommitted: 0,
+          totalAvailable: 0,
+        });
+      }
+      const g = groups.get(key);
+      g.lots.push(row);
+      g.totalLoaded += Number(row.loaded || 0);
+      g.totalCommitted += Number(row.committed || 0);
+      g.totalAvailable += Number(row.available || 0);
+    }
+    return [...groups.values()].sort((a, b) => a.productName.localeCompare(b.productName));
+  }, [filteredMagazzinoRows]);
+
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
       const lines = (order.lines || []).map((line) => {
@@ -4541,7 +4569,7 @@ export default function App() {
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 22, fontWeight: 800 }}>Magazzino a prima vista</div>
               <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
-                Una riga per lotto: referenza e disponibilità immediata, come il modulo cartaceo.
+                Raggruppato per prodotto: totale complessivo + dettaglio per ciascun lotto.
               </div>
             </div>
 
@@ -4586,60 +4614,110 @@ export default function App() {
                   </div>
                 )}
 
-                {filteredMagazzinoRows.map((row, index) => (
-                  <div
-                    key={row.lotId}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: isSmallLayout
-                        ? "1fr auto"
-                        : "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 90px 110px",
-                      gap: 10,
-                      padding: isSmallLayout ? "12px 14px" : "12px 16px",
-                      alignItems: "center",
-                      background: index % 2 === 0 ? "#fff" : "#f7f9fc",
-                      borderTop: index === 0 && isSmallLayout ? "none" : "1px solid #eef2f7",
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, color: "#1c2738" }}>{row.productName}</div>
-                      <div style={{ fontSize: 12, color: "#7c8aa0", marginTop: 2 }}>
-                        {row.productCode}
-                        {isSmallLayout ? ` · Lotto ${row.lotCode || "—"}` : ""}
-                        {isSmallLayout && row.expiry ? ` · Scad. ${row.expiry}` : ""}
-                        {isSmallLayout ? ` · Giac. ${row.loaded} · Imp. ${row.committed}` : ""}
-                      </div>
-                    </div>
-
-                    {!isSmallLayout && <div style={{ color: "#3a4658" }}>{row.lotCode || "—"}</div>}
-                    {!isSmallLayout && <div style={{ color: "#3a4658" }}>{row.expiry || "—"}</div>}
-                    {!isSmallLayout && (
-                      <div style={{ textAlign: "right", color: "#55657a" }}>{row.loaded}</div>
-                    )}
-                    {!isSmallLayout && (
-                      <div style={{ textAlign: "right", color: row.committed > 0 ? "#b45309" : "#9aa7b8" }}>
-                        {row.committed}
-                      </div>
-                    )}
-
+                {magazzinoGrouped.map((group, gIndex) => (
+                  <React.Fragment key={`${group.productId}-${gIndex}`}>
+                    {/* Riga prodotto: totali aggregati. Sfondo evidenziato. */}
                     <div
                       style={{
-                        textAlign: "right",
-                        fontWeight: 900,
-                        fontSize: isSmallLayout ? 20 : 18,
-                        color: row.available > 0 ? "#0a7d34" : "#b91c1c",
+                        display: "grid",
+                        gridTemplateColumns: isSmallLayout
+                          ? "1fr auto"
+                          : "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 90px 110px",
+                        gap: 10,
+                        padding: isSmallLayout ? "12px 14px" : "12px 16px",
+                        alignItems: "center",
+                        background: "#e8eef9",
+                        borderTop: gIndex === 0 ? "none" : "2px solid #c6d0e2",
                       }}
                     >
-                      {row.available}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 900, color: "#07153a", fontSize: 15 }}>{group.productName}</div>
+                        <div style={{ fontSize: 12, color: "#5a6e90", marginTop: 2 }}>
+                          {group.productCode}
+                          {` · ${group.lots.length} ${group.lots.length === 1 ? "lotto" : "lotti"}`}
+                          {isSmallLayout ? ` · Giac. ${group.totalLoaded} · Imp. ${group.totalCommitted}` : ""}
+                        </div>
+                      </div>
+
+                      {!isSmallLayout && <div />}
+                      {!isSmallLayout && <div />}
+                      {!isSmallLayout && (
+                        <div style={{ textAlign: "right", color: "#07153a", fontWeight: 800 }}>{group.totalLoaded}</div>
+                      )}
+                      {!isSmallLayout && (
+                        <div style={{ textAlign: "right", color: group.totalCommitted > 0 ? "#b45309" : "#9aa7b8", fontWeight: 800 }}>
+                          {group.totalCommitted}
+                        </div>
+                      )}
+
+                      <div
+                        style={{
+                          textAlign: "right",
+                          fontWeight: 900,
+                          fontSize: isSmallLayout ? 20 : 18,
+                          color: group.totalAvailable > 0 ? "#0a7d34" : "#b91c1c",
+                        }}
+                      >
+                        {group.totalAvailable}
+                      </div>
                     </div>
-                  </div>
+
+                    {/* Righe lotto sotto al prodotto */}
+                    {group.lots.map((row, index) => (
+                      <div
+                        key={row.lotId}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: isSmallLayout
+                            ? "1fr auto"
+                            : "minmax(220px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 90px 90px 110px",
+                          gap: 10,
+                          padding: isSmallLayout ? "10px 14px 10px 26px" : "10px 16px 10px 32px",
+                          alignItems: "center",
+                          background: index % 2 === 0 ? "#fff" : "#f7f9fc",
+                          borderTop: "1px solid #eef2f7",
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ color: "#3a4658", fontSize: 13 }}>
+                            ↳ Lotto {row.lotCode || "—"}
+                            {row.expiry ? ` · Scad. ${row.expiry}` : ""}
+                            {isSmallLayout ? ` · Giac. ${row.loaded} · Imp. ${row.committed}` : ""}
+                          </div>
+                        </div>
+
+                        {!isSmallLayout && <div style={{ color: "#3a4658" }}>{row.lotCode || "—"}</div>}
+                        {!isSmallLayout && <div style={{ color: "#3a4658" }}>{row.expiry || "—"}</div>}
+                        {!isSmallLayout && (
+                          <div style={{ textAlign: "right", color: "#55657a" }}>{row.loaded}</div>
+                        )}
+                        {!isSmallLayout && (
+                          <div style={{ textAlign: "right", color: row.committed > 0 ? "#b45309" : "#9aa7b8" }}>
+                            {row.committed}
+                          </div>
+                        )}
+
+                        <div
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 700,
+                            fontSize: isSmallLayout ? 18 : 16,
+                            color: row.available > 0 ? "#0a7d34" : "#b91c1c",
+                          }}
+                        >
+                          {row.available}
+                        </div>
+                      </div>
+                    ))}
+                  </React.Fragment>
                 ))}
               </div>
             )}
 
             <div style={{ marginTop: 14, color: "#617086", fontSize: 13 }}>
+              {magazzinoGrouped.length} {magazzinoGrouped.length === 1 ? "prodotto" : "prodotti"} ·{" "}
               {filteredMagazzinoRows.length} lotti · Disponibili totali{" "}
-              {filteredMagazzinoRows.reduce((sum, row) => sum + row.available, 0)}
+              {magazzinoGrouped.reduce((sum, g) => sum + g.totalAvailable, 0)}
             </div>
           </div>
         )}
