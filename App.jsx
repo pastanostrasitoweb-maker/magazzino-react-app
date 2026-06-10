@@ -3288,21 +3288,18 @@ export default function App() {
     const lotCodeToDelete = lotToDelete?.lot || lotId;
     const lotIdToDelete = lotToDelete?.id || lotId;
 
-    const isUsed = Object.values(assignments)
-      .flat()
-      .some(
-        (assignment) =>
-          String(assignment.lotId) === String(lotIdToDelete) ||
-          String(assignment.lotId) === String(lotCodeToDelete)
-      );
-
-    if (isUsed) {
-      alert("Impossibile eliminare questo lotto perché è già assegnato a un ordine.");
+    // Blocco SOLO se il lotto e' assegnato a ordini NON ancora preparati
+    // (lotAssignedMap.assigned filtra gia' su questo). Le assegnazioni
+    // storiche su ordini preparati/usciti sono normali: l'adapter le pulisce
+    // automaticamente quando si elimina il lotto.
+    const activeAssigned = Number(lotAssignedMap[String(lotIdToDelete)]?.assigned || 0);
+    if (activeAssigned > 0) {
+      alert("Impossibile eliminare questo lotto: è assegnato a un ordine non ancora preparato.");
       return;
     }
 
     const conferma = window.confirm(
-      `Vuoi eliminare davvero il lotto ${lotCodeToDelete} dal Google Sheet?`
+      `Vuoi eliminare davvero il lotto ${lotCodeToDelete}? Verranno rimosse anche le sue assegnazioni storiche su ordini già preparati (lo storico ordine resta intatto).`
     );
 
     if (!conferma) return;
