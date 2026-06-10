@@ -1032,7 +1032,11 @@ export default function App() {
       const lines = (order.lines || []).map((line) => {
         const product = products.find((item) => String(item.id) === String(line.productId));
         const outsideStock = isOutsideStockLine(line);
-        const requiresLots = outsideStock ? false : productManagesLots(product);
+        // Sempre selettore lotti per le righe di magazzino. Anche i prodotti
+        // a "disponibilita' generica" hanno il loro lotto DISPONIBILITA da
+        // scegliere esplicitamente: cosi' su TUTTI gli ordini Luca puo' vedere
+        // e selezionare il lotto. Solo le righe fuori magazzino sono escluse.
+        const requiresLots = !outsideStock;
 
         const assignedFromAssignments = (assignments[line.lineId] || []).reduce(
           (sum, assignment) => sum + assignment.qty,
