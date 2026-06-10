@@ -742,6 +742,7 @@ export default function App() {
   const [editingLotCode, setEditingLotCode] = useState("");
   const [editingLotExpiry, setEditingLotExpiry] = useState("");
   const [editingLotQty, setEditingLotQty] = useState("");
+  const [addProductionQty, setAddProductionQty] = useState("");
   const [savingEditedLot, setSavingEditedLot] = useState(false);
 
   const [editingProductId, setEditingProductId] = useState(null);
@@ -1398,14 +1399,14 @@ export default function App() {
 
     setSavingLotOnFly(true);
     try {
-      // 1) Crea il lotto con qty caricata = qty da assegnare. expiry opzionale.
+      // 1) Crea il lotto con giacenza fisica = 0 (la produzione vera arrivera' dopo).
       const created = await callSheetsApi({
         action: "createLot",
         payload: JSON.stringify({
           idProdotto: String(line.productId),
           codiceLotto: codeTrim,
           scadenza: expiry || "",
-          quantita: qtyN,
+          quantita: 0,
         }),
       });
       if (!created?.success) {
@@ -1419,7 +1420,8 @@ export default function App() {
         return;
       }
 
-      // 2) Assegna subito tutta la quantita al nuovo lotto.
+      // 2) Assegna subito tutta la quantita al nuovo lotto (allowNegative=true:
+      // il lotto andra' in negativo dopo prepara_ordine, e' voluto).
       const assigned = await callSheetsApi({
         action: "assignLot",
         payload: JSON.stringify({
@@ -1427,6 +1429,7 @@ export default function App() {
           lotId: String(newLotId),
           qty: qtyN,
           operatore: "lotto al volo",
+          allowNegative: true,
         }),
       });
       if (!assigned?.success) {
@@ -3159,10 +3162,24 @@ export default function App() {
     setEditLotDialogOpen(true);
   };
 
+  // Aggiunge alla giacenza del lotto la produzione appena fatta.
+  // Esempio: giacenza attuale -3, produzione +20 -> giacenza nuova = 17.
+  const addProductionToLot = () => {
+    const delta = Number(addProductionQty);
+    if (!delta || delta <= 0 || isNaN(delta)) {
+      alert("Inserisci una quantità prodotta positiva");
+      return;
+    }
+    const current = Number(editingLotQty) || 0;
+    const next = current + delta;
+    setEditingLotQty(String(next));
+    setAddProductionQty("");
+  };
+
   const saveEditedLot = async () => {
     if (!editingLotId) return;
 
-    if (editingLotQty === "" || Number(editingLotQty) < 0 || isNaN(Number(editingLotQty))) {
+    if (editingLotQty === "" || isNaN(Number(editingLotQty))) {
       alert("Inserisci una quantità valida");
       return;
     }
@@ -5893,16 +5910,38 @@ export default function App() {
             </div>
 
             <div>
-              <label style={labelStyle()}>Quantità presente</label>
+              <label style={labelStyle()}>Quantità presente (giacenza)</label>
 
               <input
                 style={inputStyle()}
                 type="number"
-                min="0"
                 value={editingLotQty}
                 onChange={(event) => setEditingLotQty(event.target.value)}
                 placeholder="0"
               />
+              <div style={{ fontSize: 12, color: "#617086", marginTop: 6 }}>
+                Imposta direttamente la giacenza (può essere anche negativa se il lotto è stato evaso prima di essere caricato).
+              </div>
+            </div>
+
+            <div style={{ background: "#eefbf2", border: "1px solid #bfe7c8", padding: 12, borderRadius: 12 }}>
+              <label style={{ ...labelStyle(), color: "#166534" }}>Aggiungi produzione</label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+                <input
+                  style={inputStyle()}
+                  type="number"
+                  min="1"
+                  value={addProductionQty}
+                  onChange={(e) => setAddProductionQty(e.target.value)}
+                  placeholder="Quantità prodotta da aggiungere"
+                />
+                <button style={btnStyle("outline")} onClick={addProductionToLot} type="button">
+                  + Aggiungi
+                </button>
+              </div>
+              <div style={{ fontSize: 12, color: "#166534", marginTop: 6 }}>
+                Esempio: giacenza attuale {Number(editingLotQty) || 0}, produzione +N → nuova giacenza {Number(editingLotQty) || 0} + N. Poi premi "Salva" per confermare.
+              </div>
             </div>
 
             <button
