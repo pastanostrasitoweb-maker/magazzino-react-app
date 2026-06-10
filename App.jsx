@@ -1648,6 +1648,21 @@ export default function App() {
           "Errore nel salvataggio assegnazione sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
+      } else if (
+        result.assignmentId &&
+        String(result.assignmentId) !== String(newAssignment.assignmentId)
+      ) {
+        // Bug fix: il backend ha generato un suo id_assegnazione (diverso da
+        // quello locale ottimistico). Sostituisco l'id locale con quello reale,
+        // altrimenti la successiva deleteAssignment fallisce con "inesistente".
+        setAssignments((prev) => ({
+          ...prev,
+          [line.lineId]: (prev[line.lineId] || []).map((assignment) =>
+            String(assignment.assignmentId) === String(newAssignment.assignmentId)
+              ? { ...assignment, assignmentId: String(result.assignmentId) }
+              : assignment
+          ),
+        }));
       }
     } catch (error) {
       setAssignments((prev) => ({
@@ -1754,6 +1769,20 @@ export default function App() {
           "Errore nel salvataggio assegnazione sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
+      } else if (
+        result.assignmentId &&
+        String(result.assignmentId) !== String(newAssignment.assignmentId)
+      ) {
+        // Stesso fix dell'inline: sostituisco l'id locale ottimistico con
+        // quello reale ritornato dal DB cosi' la successiva delete funziona.
+        setAssignments((prev) => ({
+          ...prev,
+          [selectedLine.lineId]: (prev[selectedLine.lineId] || []).map((assignment) =>
+            String(assignment.assignmentId) === String(newAssignment.assignmentId)
+              ? { ...assignment, assignmentId: String(result.assignmentId) }
+              : assignment
+          ),
+        }));
       }
     } catch (error) {
       setAssignments((prev) => ({
