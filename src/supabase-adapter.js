@@ -504,6 +504,24 @@ async function createLot(params) {
   const scadenza = p.expiry || p.scadenza || null;
   const qty = Number(p.loadedQty ?? p.quantita ?? p.quantitaCaricata ?? 0);
 
+  // REGOLA: per i prodotti con gestione_lotti=true e' VIETATO creare un
+  // lotto generico "DISPONIBILITA". I prodotti con gestione_lotti=false
+  // possono averlo. Source of truth: colonna prodotti.gestione_lotti.
+  const isGenericCode = String(codiceLotto).trim().toLowerCase() === "disponibilita";
+  if (isGenericCode && idProdotto) {
+    const prodR = await supabase
+      .from("prodotti")
+      .select("gestione_lotti, codice_prodotto, descrizione_prodotto")
+      .eq("id_prodotto", isNaN(+idProdotto) ? -1 : +idProdotto)
+      .maybeSingle();
+    if (prodR.data?.gestione_lotti === true) {
+      return {
+        success: false,
+        error: `Il prodotto ${prodR.data.codice_prodotto || idProdotto} (${prodR.data.descrizione_prodotto || ""}) ha gestione lotti attiva: non puoi creare un lotto generico DISPONIBILITA. Crea un lotto con codice reale.`,
+      };
+    }
+  }
+
   const { data, error } = await supabase
     .from("lotti")
     .insert({

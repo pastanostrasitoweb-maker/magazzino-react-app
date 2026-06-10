@@ -1391,6 +1391,19 @@ export default function App() {
       alert("Inserisci il codice del lotto");
       return;
     }
+    // REGOLA: per prodotti a gestione lotti il codice 'DISPONIBILITA' e'
+    // vietato. La gestione generica e' riservata ai soli prodotti che hanno
+    // gestione_lotti=NO nella matrice.
+    if (codeTrim.toLowerCase() === "disponibilita") {
+      const prod = products.find((p) => String(p.id) === String(line.productId));
+      if (prod && productManagesLots(prod)) {
+        alert(
+          `Questo prodotto (${prod.code} ${prod.name}) ha gestione lotti attiva. ` +
+          `Non puoi usare il codice generico DISPONIBILITA: inserisci un codice lotto reale.`
+        );
+        return;
+      }
+    }
     const qtyN = Number(qty);
     if (!qtyN || qtyN <= 0) {
       alert("Inserisci la quantita da assegnare (>0)");
