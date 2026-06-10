@@ -705,7 +705,7 @@ export default function App() {
 
   const [newOrderCustomer, setNewOrderCustomer] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
-  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "" }]);
+  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
 
   const [editOrderDialogOpen, setEditOrderDialogOpen] = useState(false);
   const [editOrderCustomer, setEditOrderCustomer] = useState("");
@@ -2160,7 +2160,7 @@ export default function App() {
   };
 
   const addEmptyOrderLine = () => {
-    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "" }]);
+    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
   };
 
   const updateNewOrderLine = (index, field, value) => {
@@ -2211,6 +2211,7 @@ export default function App() {
           isOutsideStock: false,
           rowOrder: index + 1,
           qtyOrdered: Number(line.qtyOrdered),
+          preassignedLotId: line.lotId ? String(line.lotId) : "",
         };
       });
 
@@ -2256,11 +2257,44 @@ export default function App() {
       setSelectedLineId(newOrder.lines[0]?.lineId || "");
       setNewOrderCustomer("");
       setNewOrderNotes("");
-      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "" }]);
+      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
       setOrderDialogOpen(false);
       setPage("ordini");
 
-      
+      // Auto-assegnazione lotti pre-selezionati al volo. Se la disp del lotto
+      // non basta, assegno il minimo possibile e lascio il resto da assegnare
+      // manualmente; segnalo a fine ciclo con un alert riepilogativo.
+      const preassignedTasks = validLines.filter((l) => l.preassignedLotId && Number(l.qtyOrdered) > 0);
+      if (preassignedTasks.length > 0) {
+        const errorsRecap = [];
+        for (const task of preassignedTasks) {
+          try {
+            const r = await callSheetsApi({
+              action: "assignLot",
+              payload: JSON.stringify({
+                lineId: task.lineId,
+                lotId: task.preassignedLotId,
+                qty: task.qtyOrdered,
+                operatore: "creazione ordine",
+              }),
+            });
+            if (!r?.success) {
+              errorsRecap.push(`- ${task.productName}: ${r?.error || "assegnazione fallita"}`);
+            }
+          } catch (err) {
+            errorsRecap.push(`- ${task.productName}: ${String(err)}`);
+          }
+        }
+        // Refresh dati: il piu' affidabile dopo assegnazioni multiple e' ricaricare.
+        await loadDataFromSheets();
+        if (errorsRecap.length > 0) {
+          alert(
+            "Ordine creato. Alcuni lotti non sono stati assegnati automaticamente:\n\n" +
+              errorsRecap.join("\n") +
+              "\n\nPuoi assegnarli a mano dalla pagina Ordini."
+          );
+        }
+      }
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
@@ -5256,7 +5290,11 @@ export default function App() {
                         onSearchChange={(value) =>
                           updateNewOrderLine(index, "productSearch", value)
                         }
-                        onChange={(value) => updateNewOrderLine(index, "productId", value)}
+                        onChange={(value) => {
+                          updateNewOrderLine(index, "productId", value);
+                          // se cambio prodotto, resetto la selezione lotto.
+                          updateNewOrderLine(index, "lotId", "");
+                        }}
                       />
                     )}
 
@@ -5275,6 +5313,57 @@ export default function App() {
                       Rimuovi
                     </button>
                   </div>
+
+                  {/* Selettore lotto: visibile solo per righe di magazzino con prodotto scelto. */}
+                  {!line.isOutsideStock && line.productId && (() => {
+                    const prod = products.find((p) => String(p.id) === String(line.productId));
+                    if (!prod || !productManagesLots(prod)) return null;
+                    const productLots = lots
+                      .filter((lot) => !lot.archived && String(lot.productId) === String(line.productId))
+                      .map((lot) => {
+                        const info = lotAssignedMap[String(lot.id)] || {};
+                        return {
+                          id: String(lot.id),
+                          lot: lot.lot || "",
+                          expiry: lot.expiry ? String(lot.expiry).slice(0, 10) : "",
+                          available: Number(info.assignable ?? lot.loadedQty ?? 0),
+                        };
+                      })
+                      .sort((a, b) => String(a.expiry).localeCompare(String(b.expiry)));
+                    const qtyN = Number(line.qtyOrdered) || 0;
+                    const selectedLot = productLots.find((l) => l.id === String(line.lotId));
+                    const tooLittle = selectedLot && qtyN > 0 && selectedLot.available < qtyN;
+                    return (
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <label style={{ fontSize: 12, color: "#5a6e90", fontWeight: 700 }}>
+                          Lotto da assegnare (opzionale, scadenza più vicina prima)
+                        </label>
+                        <select
+                          style={inputStyle()}
+                          value={line.lotId || ""}
+                          onChange={(event) => updateNewOrderLine(index, "lotId", event.target.value)}
+                        >
+                          <option value="">— Assegna dopo (lasciamo libero) —</option>
+                          {productLots.map((l) => (
+                            <option key={l.id} value={l.id} disabled={l.available <= 0}>
+                              {l.lot || "(senza codice)"} {l.expiry ? `· scad. ${l.expiry}` : ""} · disp. {l.available}
+                              {l.available <= 0 ? " (esaurito)" : ""}
+                            </option>
+                          ))}
+                          {productLots.length === 0 && (
+                            <option value="" disabled>
+                              Nessun lotto disponibile per questo prodotto
+                            </option>
+                          )}
+                        </select>
+                        {tooLittle && (
+                          <div style={{ fontSize: 12, color: "#b45309" }}>
+                            Disponibilità del lotto selezionato ({selectedLot.available}) inferiore alla quantità richiesta ({qtyN}). Verrà assegnato il massimo possibile, il resto resta da assegnare.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
 
