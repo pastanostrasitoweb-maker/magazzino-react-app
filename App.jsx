@@ -753,6 +753,20 @@ export default function App() {
   const [deletingProductId, setDeletingProductId] = useState("");
   const [inlineAssignmentForms, setInlineAssignmentForms] = useState({});
   const [savingAssignmentLineId, setSavingAssignmentLineId] = useState("");
+
+  // "Lotto al volo": dialog per creare un nuovo lotto al momento dell'evasione,
+  // anche con quantita' fisica non ancora caricata. Il lotto viene creato con
+  // quantita = quantita da assegnare (workaround senza modificare la rpc),
+  // assegnato subito, e l'operatore aggiusta la quantita caricata reale piu'
+  // tardi dalla pagina Prodotti/Magazzino.
+  const [lotOnFlyDialog, setLotOnFlyDialog] = useState({
+    open: false,
+    lineId: "",
+    code: "",
+    expiry: "",
+    qty: "",
+  });
+  const [savingLotOnFly, setSavingLotOnFly] = useState(false);
   const [windowWidth, setWindowWidth] = useState(
     typeof window !== "undefined" ? window.innerWidth : 1280
   );
@@ -1000,8 +1014,12 @@ export default function App() {
   }, [magazzinoRows, magazzinoSearch]);
 
   // Raggruppa per prodotto: 1 header con totali + righe lotto sotto.
-  // I lotti orfani (productId che non aggancia nessun prodotto in catalogo)
-  // restano in un gruppo a se' col loro productName originale.
+  // L'IMPEGNATO del PRODOTTO e' la somma delle qtyOrdered su righe in ordini
+  // non preparati (productCommittedMap), indipendentemente da quanto e' gia'
+  // stato assegnato a un lotto. L'impegnato del singolo LOTTO resta la quota
+  // gia' assegnata al lotto (row.committed). DISPONIBILE prodotto = giacenza
+  // totale - impegnato del prodotto (puo' essere negativo se sono stati
+  // ordinati piu' pezzi di quanti ce ne sono fisicamente: utile per accorgersene).
   const magazzinoGrouped = useMemo(() => {
     const groups = new Map();
     for (const row of filteredMagazzinoRows) {
@@ -1014,18 +1032,29 @@ export default function App() {
           category: row.category,
           lots: [],
           totalLoaded: 0,
-          totalCommitted: 0,
+          totalCommitted: 0, // ricalcolato da productCommittedMap dopo
           totalAvailable: 0,
         });
       }
       const g = groups.get(key);
       g.lots.push(row);
       g.totalLoaded += Number(row.loaded || 0);
-      g.totalCommitted += Number(row.committed || 0);
-      g.totalAvailable += Number(row.available || 0);
     }
-    return [...groups.values()].sort((a, b) => a.productName.localeCompare(b.productName));
-  }, [filteredMagazzinoRows]);
+    // Ricalcolo totalCommitted e totalAvailable usando productCommittedMap.
+    const out = [...groups.values()].map((g) => {
+      const productCommitted = Number(productCommittedMap[String(g.productId)] || 0);
+      return {
+        ...g,
+        totalCommitted: productCommitted,
+        totalAvailable: g.totalLoaded - productCommitted,
+      };
+    });
+    return out.sort((a, b) => {
+      const byCat = (a.category || "ZZZ Senza categoria").localeCompare(b.category || "ZZZ Senza categoria");
+      if (byCat !== 0) return byCat;
+      return a.productName.localeCompare(b.productName);
+    });
+  }, [filteredMagazzinoRows, productCommittedMap]);
 
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
@@ -1325,6 +1354,99 @@ export default function App() {
 
   const getInlineAssignmentForm = (lineId) => {
     return inlineAssignmentForms[String(lineId)] || { lotId: "", qty: "" };
+  };
+
+  // Apri il dialog "lotto al volo" per la riga: la qty di default e' il
+  // residuo da assegnare. Resta editabile.
+  const openLotOnFlyDialog = (line) => {
+    const form = getInlineAssignmentForm(line.lineId);
+    const defaultQty = Number(form.qty) > 0 ? form.qty : String(line.qtyToAssign || "");
+    setLotOnFlyDialog({
+      open: true,
+      lineId: String(line.lineId),
+      code: "",
+      expiry: "",
+      qty: defaultQty,
+    });
+  };
+
+  // Crea lotto al volo + assegnazione immediata. Il lotto nasce con qty
+  // caricata = qty da assegnare cosi' assegna_lotto non rifiuta per
+  // disponibilita' insufficiente. Dopo prepara_ordine la giacenza va a 0;
+  // operatore corregge la giacenza reale dalla pagina Prodotti (puo' anche
+  // diventare negativa se ne ha consegnati piu' di quanti ne ha prodotti).
+  const createLotOnFly = async () => {
+    const { lineId, code, expiry, qty } = lotOnFlyDialog;
+    if (!lineId) return;
+    const line = ordersWithComputed
+      .flatMap((o) => o.lines)
+      .find((l) => String(l.lineId) === String(lineId));
+    if (!line) {
+      alert("Riga non trovata");
+      return;
+    }
+    const codeTrim = String(code || "").trim();
+    if (!codeTrim) {
+      alert("Inserisci il codice del lotto");
+      return;
+    }
+    const qtyN = Number(qty);
+    if (!qtyN || qtyN <= 0) {
+      alert("Inserisci la quantita da assegnare (>0)");
+      return;
+    }
+
+    setSavingLotOnFly(true);
+    try {
+      // 1) Crea il lotto con qty caricata = qty da assegnare. expiry opzionale.
+      const created = await callSheetsApi({
+        action: "createLot",
+        payload: JSON.stringify({
+          idProdotto: String(line.productId),
+          codiceLotto: codeTrim,
+          scadenza: expiry || "",
+          quantita: qtyN,
+        }),
+      });
+      if (!created?.success) {
+        alert("Errore creazione lotto: " + (created?.error || "sconosciuto"));
+        return;
+      }
+      const newLotId = created.idLotto || created.id_lotto;
+      if (!newLotId) {
+        alert("Lotto creato ma id mancante. Ricarico i dati e riprova.");
+        await loadDataFromSheets();
+        return;
+      }
+
+      // 2) Assegna subito tutta la quantita al nuovo lotto.
+      const assigned = await callSheetsApi({
+        action: "assignLot",
+        payload: JSON.stringify({
+          lineId: String(line.lineId),
+          lotId: String(newLotId),
+          qty: qtyN,
+          operatore: "lotto al volo",
+        }),
+      });
+      if (!assigned?.success) {
+        alert(
+          "Lotto creato ma assegnazione fallita: " +
+            (assigned?.error || "sconosciuto") +
+            "\nIl lotto resta caricato col valore inserito. Puoi assegnarlo manualmente."
+        );
+        await loadDataFromSheets();
+        return;
+      }
+
+      // 3) Refresh dati e chiusura dialog.
+      await loadDataFromSheets();
+      setLotOnFlyDialog({ open: false, lineId: "", code: "", expiry: "", qty: "" });
+    } catch (err) {
+      alert("Errore: " + String(err));
+    } finally {
+      setSavingLotOnFly(false);
+    }
   };
 
   const updateInlineAssignmentForm = (lineId, field, value) => {
@@ -3987,26 +4109,47 @@ export default function App() {
                                     alignItems: "center",
                                   }}
                                 >
-                                  <select
-                                    style={{ ...compactInputStyle(), minWidth: 0 }}
-                                    value={form.lotId}
-                                    onChange={(event) =>
-                                      handleInlineLotSelect(line, event.target.value)
-                                    }
-                                  >
-                                    <option value="">Lotto</option>
-                                    {availableLots.map((lot) => {
-                                      const info = lotAssignedMap[String(lot.id)] || {};
-                                      const disp = Number(info.assignable ?? 0);
-                                      const giac = Number(info.total || 0);
-                                      return (
-                                        <option key={lot.id} value={String(lot.id)}>
-                                          {lot.lot} · scad. {fmtDate(lot.expiry)} · disp. {disp}
-                                          {disp === 0 && giac > 0 ? ` (giac. ${giac})` : ""}
-                                        </option>
-                                      );
-                                    })}
-                                  </select>
+                                  <div style={{ display: "grid", gap: 4, minWidth: 0 }}>
+                                    <select
+                                      style={{ ...compactInputStyle(), minWidth: 0 }}
+                                      value={form.lotId}
+                                      onChange={(event) =>
+                                        handleInlineLotSelect(line, event.target.value)
+                                      }
+                                    >
+                                      <option value="">Lotto</option>
+                                      {availableLots.map((lot) => {
+                                        const info = lotAssignedMap[String(lot.id)] || {};
+                                        const disp = Number(info.assignable ?? 0);
+                                        const giac = Number(info.total || 0);
+                                        return (
+                                          <option key={lot.id} value={String(lot.id)}>
+                                            {lot.lot} · scad. {fmtDate(lot.expiry)} · disp. {disp}
+                                            {disp === 0 && giac > 0 ? ` (giac. ${giac})` : ""}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                    {!isOutsideStockLine(line) ? (
+                                      <button
+                                        type="button"
+                                        style={{
+                                          background: "transparent",
+                                          border: "none",
+                                          color: "#1d4ed8",
+                                          fontSize: 12,
+                                          fontWeight: 800,
+                                          padding: "2px 4px",
+                                          cursor: "pointer",
+                                          textAlign: "left",
+                                          alignSelf: "flex-start",
+                                        }}
+                                        onClick={() => openLotOnFlyDialog(line)}
+                                      >
+                                        + Crea lotto al volo
+                                      </button>
+                                    ) : null}
+                                  </div>
 
                                   <input
                                     style={{ ...compactInputStyle(), minWidth: 0 }}
@@ -4656,8 +4799,36 @@ export default function App() {
                   </div>
                 )}
 
-                {magazzinoGrouped.map((group, gIndex) => (
+                {magazzinoGrouped.map((group, gIndex) => {
+                  // Header categoria: appare solo quando la categoria cambia
+                  // rispetto al gruppo precedente. Counter dei prodotti nella
+                  // categoria mostrato a fianco.
+                  const prevCategory = gIndex > 0 ? (magazzinoGrouped[gIndex - 1].category || "Senza categoria") : null;
+                  const currentCategory = group.category || "Senza categoria";
+                  const showCategoryHeader = prevCategory !== currentCategory;
+                  const productsInCategory = magazzinoGrouped.filter(
+                    (g) => (g.category || "Senza categoria") === currentCategory
+                  ).length;
+                  return (
                   <React.Fragment key={`${group.productId}-${gIndex}`}>
+                    {showCategoryHeader && (
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr",
+                          padding: "14px 16px 10px",
+                          background: "#07153a",
+                          color: "#fff",
+                          fontWeight: 900,
+                          fontSize: 14,
+                          letterSpacing: 0.4,
+                          textTransform: "uppercase",
+                          borderTop: gIndex === 0 ? "none" : "3px solid #c6d0e2",
+                        }}
+                      >
+                        {currentCategory} · {productsInCategory} {productsInCategory === 1 ? "prodotto" : "prodotti"}
+                      </div>
+                    )}
                     {/* Riga prodotto: totali aggregati. Sfondo evidenziato. */}
                     <div
                       style={{
@@ -4752,7 +4923,8 @@ export default function App() {
                       </div>
                     ))}
                   </React.Fragment>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -5739,6 +5911,63 @@ export default function App() {
               onClick={saveEditedLot}
             >
               {savingEditedLot ? "Salvataggio..." : "Salva modifiche lotto"}
+            </button>
+          </div>
+        </Modal>
+
+        <Modal
+          open={lotOnFlyDialog.open}
+          title="Crea lotto al volo"
+          onClose={() => setLotOnFlyDialog({ open: false, lineId: "", code: "", expiry: "", qty: "" })}
+          maxWidth={520}
+        >
+          <div style={{ display: "grid", gap: 16 }}>
+            <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", padding: 12, borderRadius: 12, color: "#7c2d12", fontSize: 13, lineHeight: 1.4 }}>
+              Crei un nuovo lotto e gli assegni subito la quantità indicata, anche se in magazzino non c'è ancora la giacenza fisica. Dopo che l'ordine sarà preparato, ricordati di aggiornare la quantità reale del lotto dalla pagina <strong>Prodotti</strong> (può diventare negativa se hai consegnato più di quanto hai prodotto).
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Codice lotto</label>
+              <input
+                style={inputStyle()}
+                value={lotOnFlyDialog.code}
+                onChange={(e) => setLotOnFlyDialog((s) => ({ ...s, code: e.target.value }))}
+                placeholder="Es. 2607010"
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Scadenza (opzionale)</label>
+              <input
+                style={inputStyle()}
+                type="date"
+                value={lotOnFlyDialog.expiry}
+                onChange={(e) => setLotOnFlyDialog((s) => ({ ...s, expiry: e.target.value }))}
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Quantità da assegnare</label>
+              <input
+                style={inputStyle()}
+                type="number"
+                min="1"
+                value={lotOnFlyDialog.qty}
+                onChange={(e) => setLotOnFlyDialog((s) => ({ ...s, qty: e.target.value }))}
+                placeholder="0"
+              />
+              <div style={{ fontSize: 12, color: "#617086", marginTop: 6 }}>
+                Il lotto nascerà con questa quantità caricata. La giacenza reale la inserirai dopo, quando avrai prodotto il lotto.
+              </div>
+            </div>
+
+            <button
+              style={btnStyle("primary", savingLotOnFly)}
+              disabled={savingLotOnFly}
+              onClick={createLotOnFly}
+            >
+              {savingLotOnFly ? "Creazione in corso..." : "Crea lotto e assegna"}
             </button>
           </div>
         </Modal>
