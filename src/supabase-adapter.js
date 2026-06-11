@@ -147,12 +147,20 @@ async function bulkLoad() {
 // ---------- action handlers ----------
 
 async function archivePreparedOrders() {
-  // lower(btrim(stato)) = 'preparato' AND (archiviato is null OR archiviato = false)
-  // PostgREST non ha lower(btrim()) inline: filtro applicativo dopo fetch ridotto.
+  // REGOLA: gli ordini preparati NON si archiviano subito. Si archiviano solo
+  // alla prima esecuzione del bulk-load successiva alla mezzanotte locale: in
+  // pratica, oggi gli ordini preparati restano visibili nella tab "Preparati";
+  // domani mattina, alla prima apertura dell'app, finiscono in Archivio.
+  // Filtro: stato preparato + non archiviato + data_preparato < mezzanotte di oggi.
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const midnightIso = midnight.toISOString();
+
   const { data, error } = await supabase
     .from("ordini")
-    .select("id_ordine, stato, archiviato")
-    .or("archiviato.is.null,archiviato.eq.false");
+    .select("id_ordine, stato, archiviato, data_preparato")
+    .or("archiviato.is.null,archiviato.eq.false")
+    .lt("data_preparato", midnightIso);
   if (error) return failure(error);
 
   const toArchive = (data || [])
@@ -166,7 +174,7 @@ async function archivePreparedOrders() {
     .update({ archiviato: true })
     .in("id_ordine", toArchive);
   if (up.error) return failure(up.error);
-  return { success: true };
+  return { success: true, archiviati: toArchive.length };
 }
 
 async function assignLot(params) {

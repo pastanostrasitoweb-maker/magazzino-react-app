@@ -1412,36 +1412,61 @@ export default function App() {
 
     setSavingLotOnFly(true);
     try {
-      // 1) Crea il lotto con giacenza fisica = 0 (la produzione vera arrivera' dopo).
-      const created = await callSheetsApi({
-        action: "createLot",
-        payload: JSON.stringify({
-          idProdotto: String(line.productId),
-          codiceLotto: codeTrim,
-          scadenza: expiry || "",
-          quantita: 0,
-        }),
-      });
-      if (!created?.success) {
-        alert("Errore creazione lotto: " + (created?.error || "sconosciuto"));
-        return;
-      }
-      const newLotId = created.idLotto || created.id_lotto;
-      if (!newLotId) {
-        alert("Lotto creato ma id mancante. Ricarico i dati e riprova.");
-        await loadDataFromSheets();
-        return;
+      // ACCORPAMENTO: se esiste gia' un lotto con stesso codice (case-insensitive)
+      // sullo stesso prodotto e non archiviato, lo riusiamo. La giacenza fisica
+      // resta quella che ha, e ci aggiungiamo la qty richiesta come ulteriore
+      // assegnazione (sommata a quella eventualmente esistente sulla stessa riga).
+      // I lotti dello stesso codice ma su prodotti diversi NON si toccano.
+      const existingLot = lots.find(
+        (l) =>
+          !l.archived &&
+          String(l.productId) === String(line.productId) &&
+          String(l.lot || "").trim().toLowerCase() === codeTrim.toLowerCase()
+      );
+
+      let targetLotId;
+      if (existingLot) {
+        targetLotId = String(existingLot.id);
+      } else {
+        // Crea il lotto con giacenza fisica = 0 (la produzione vera arrivera' dopo).
+        const created = await callSheetsApi({
+          action: "createLot",
+          payload: JSON.stringify({
+            idProdotto: String(line.productId),
+            codiceLotto: codeTrim,
+            scadenza: expiry || "",
+            quantita: 0,
+          }),
+        });
+        if (!created?.success) {
+          alert("Errore creazione lotto: " + (created?.error || "sconosciuto"));
+          return;
+        }
+        targetLotId = created.idLotto || created.id_lotto;
+        if (!targetLotId) {
+          alert("Lotto creato ma id mancante. Ricarico i dati e riprova.");
+          await loadDataFromSheets();
+          return;
+        }
       }
 
-      // 2) Assegna subito tutta la quantita al nuovo lotto (allowNegative=true:
-      // il lotto andra' in negativo dopo prepara_ordine, e' voluto).
+      // Calcolo qty totale da assegnare alla coppia (riga, lotto target):
+      // se esiste gia' un'assegnazione su questa riga per questo lotto,
+      // sommo la nuova qty (l'rpc/adapter fa upsert, quindi devo passare il totale).
+      const currentAssignedOnThisLot = (assignments[line.lineId] || [])
+        .filter((a) => String(a.lotId) === String(targetLotId))
+        .reduce((s, a) => s + Number(a.qty || 0), 0);
+      const totalQty = currentAssignedOnThisLot + qtyN;
+
+      // Assegna (allowNegative=true: il lotto puo' andare in negativo dopo
+      // prepara_ordine se la giacenza fisica e' inferiore a quanto assegnato).
       const assigned = await callSheetsApi({
         action: "assignLot",
         payload: JSON.stringify({
           lineId: String(line.lineId),
-          lotId: String(newLotId),
-          qty: qtyN,
-          operatore: "lotto al volo",
+          lotId: String(targetLotId),
+          qty: totalQty,
+          operatore: existingLot ? "lotto al volo (accorpato)" : "lotto al volo",
           allowNegative: true,
         }),
       });
@@ -4190,17 +4215,19 @@ export default function App() {
                                       <button
                                         type="button"
                                         style={{
-                                          background: "transparent",
-                                          border: "none",
-                                          color: "#1d4ed8",
+                                          background: "#eef2ff",
+                                          border: "1px dashed #6366f1",
+                                          color: "#3730a3",
                                           fontSize: 12,
-                                          fontWeight: 800,
-                                          padding: "2px 4px",
+                                          fontWeight: 900,
+                                          padding: "6px 10px",
                                           cursor: "pointer",
-                                          textAlign: "left",
-                                          alignSelf: "flex-start",
+                                          textAlign: "center",
+                                          borderRadius: 8,
+                                          width: "100%",
                                         }}
                                         onClick={() => openLotOnFlyDialog(line)}
+                                        title="Crea un lotto nuovo al volo (giacenza in negativo)"
                                       >
                                         + Crea lotto al volo
                                       </button>
@@ -5388,7 +5415,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div>
+              <div style={{ display: "grid", gap: 8 }}>
                 <label style={labelStyle()}>Lotto</label>
 
                 <select
@@ -5410,6 +5437,28 @@ export default function App() {
                     );
                   })}
                 </select>
+
+                <button
+                  type="button"
+                  style={{
+                    background: "#eef2ff",
+                    border: "1px dashed #6366f1",
+                    color: "#3730a3",
+                    fontSize: 13,
+                    fontWeight: 900,
+                    padding: "8px 12px",
+                    cursor: "pointer",
+                    borderRadius: 10,
+                    textAlign: "center",
+                  }}
+                  onClick={() => {
+                    setAssignDialogOpen(false);
+                    openLotOnFlyDialog(selectedLine);
+                  }}
+                  title="Crea un lotto nuovo al volo (per stesso codice viene accorpato)"
+                >
+                  + Crea lotto al volo
+                </button>
               </div>
 
               <div>
