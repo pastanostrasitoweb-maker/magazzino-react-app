@@ -496,12 +496,70 @@ async function createOrder(params) {
 async function deleteOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
+
+  // Se l'ordine era gia' PREPARATO, lo stock dei lotti era stato scalato
+  // da prepara_ordine. Eliminando l'ordine ripristiniamo lo stock (somma
+  // delle assegnazioni per lotto, rincrementata su lotti.quantita_caricata).
+  // Se l'ordine non era preparato, nessuna ripristino (lo stock fisico non
+  // era stato toccato).
+  const ordR = await supabase
+    .from("ordini")
+    .select("stato")
+    .eq("id_ordine", String(idOrdine))
+    .maybeSingle();
+  if (ordR.error) return failure(ordR.error);
+  const isPreparato =
+    String(ordR.data?.stato || "").trim().toLowerCase() === "preparato";
+
+  const stockMovements = [];
+
+  if (isPreparato) {
+    const righeR = await supabase
+      .from("righe_ordine")
+      .select("id_riga")
+      .eq("id_ordine", String(idOrdine));
+    if (righeR.error) return failure(righeR.error);
+    const righeIds = (righeR.data || []).map((r) => r.id_riga);
+
+    if (righeIds.length > 0) {
+      const assR = await supabase
+        .from("assegnazioni_lotti")
+        .select("id_lotto, quantita_assegnata")
+        .in("id_riga", righeIds);
+      if (assR.error) return failure(assR.error);
+
+      const sumByLot = {};
+      for (const a of assR.data || []) {
+        const k = String(a.id_lotto);
+        sumByLot[k] = (sumByLot[k] || 0) + Number(a.quantita_assegnata || 0);
+      }
+
+      for (const [lotId, qty] of Object.entries(sumByLot)) {
+        const curLotR = await supabase
+          .from("lotti")
+          .select("quantita_caricata")
+          .eq("id_lotto", lotId)
+          .maybeSingle();
+        // se il lotto e' stato eliminato non posso ripristinare nulla, salto.
+        if (curLotR.error || !curLotR.data) continue;
+        const newQty = Number(curLotR.data.quantita_caricata || 0) + qty;
+        const updR = await supabase
+          .from("lotti")
+          .update({ quantita_caricata: newQty })
+          .eq("id_lotto", lotId);
+        if (updR.error) return failure(updR.error);
+        stockMovements.push({ lotId, newQty });
+      }
+    }
+  }
+
   const { error } = await supabase
     .from("ordini")
     .delete()
     .eq("id_ordine", String(idOrdine));
   if (error) return failure(error);
-  return { success: true };
+
+  return { success: true, stockMovements, orderWasPrepared: isPreparato };
 }
 
 async function createLot(params) {

@@ -2504,26 +2504,15 @@ export default function App() {
     if (!orderId) return;
 
     const orderToDelete = orders.find((order) => String(order.id) === String(orderId));
+    const wasPreparato =
+      String(orderToDelete?.status || "").trim().toLowerCase() === "preparato";
 
-    const assignedLines = (orderToDelete?.lines || []).filter(
-      (line) => (assignments[line.lineId] || []).length > 0
+    // Conferma esplicita: messaggi diversi a seconda dello stato.
+    const conferma = window.confirm(
+      wasPreparato
+        ? "Questo ordine era PREPARATO. Eliminandolo, le quantità scaricate vengono RIMESSE in magazzino sui lotti coinvolti. Procedo?"
+        : "Vuoi eliminare davvero questo ordine? Eventuali assegnazioni vengono rimosse, lo stock fisico non e' stato ancora scalato."
     );
-
-    if (assignedLines.length > 0) {
-      alert(
-        "Prima di eliminare l'ordine devi eliminare le assegnazioni delle righe già assegnate."
-      );
-      return;
-    }
-
-    if (String(orderToDelete?.status || "").trim().toLowerCase() === "preparato") {
-      alert(
-        "Questo ordine è già preparato. Prima elimina eventuali assegnazioni e riportalo da preparare."
-      );
-      return;
-    }
-
-    const conferma = window.confirm("Vuoi eliminare davvero questo ordine?");
     if (!conferma) return;
 
     try {
@@ -2534,10 +2523,17 @@ export default function App() {
 
       if (!result || !result.success) {
         alert(
-          "Errore nell'eliminazione ordine sul foglio: " +
+          "Errore nell'eliminazione ordine: " +
             ((result && result.error) || "errore sconosciuto")
         );
         return;
+      }
+
+      // Se l'ordine era preparato, l'adapter ha ripristinato lo stock dei
+      // lotti. Aggiorno lo state locale dei lotti per riflettere subito le
+      // nuove quantita_caricata (no flicker / nessuna attesa del reload).
+      if (Array.isArray(result.stockMovements) && result.stockMovements.length > 0) {
+        setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements));
       }
 
       setAssignments((prev) => {
