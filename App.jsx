@@ -2240,6 +2240,11 @@ export default function App() {
         )
       );
 
+      // Se l'ordine era preparato, l'adapter ha rincrementato i lotti.
+      if (result.stockMovements && result.stockMovements.length) {
+        setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements));
+      }
+
       setSelectedOrderId(orderId);
       setPage("ordini");
     } catch (error) {

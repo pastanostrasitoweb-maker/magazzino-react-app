@@ -375,10 +375,61 @@ async function markOrderStopped(params) {
 async function reopenOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
-  // NOTA: NON ripristina lo stock dei lotti. Le quantità già scalate restano
-  // così — l'ordine torna "Da preparare" ma la giacenza fisica già rimossa
-  // dai lotti rimane scalata. Confronta con il vecchio backend Apps Script
-  // che invece ripristinava le quantità. Da rivedere se serve symmetry.
+
+  // Se l'ordine era PREPARATO, ripristino lo stock dei lotti (somma delle
+  // assegnazioni per lotto, rincrementata su lotti.quantita_caricata).
+  // Comportamento simmetrico a deleteOrder: l'ordine torna "Da preparare"
+  // e il magazzino vede lo stock come prima della preparazione.
+  const ordR = await supabase
+    .from("ordini")
+    .select("stato")
+    .eq("id_ordine", String(idOrdine))
+    .maybeSingle();
+  if (ordR.error) return failure(ordR.error);
+  const wasPreparato =
+    String(ordR.data?.stato || "").trim().toLowerCase() === "preparato";
+
+  const stockMovements = [];
+
+  if (wasPreparato) {
+    const righeR = await supabase
+      .from("righe_ordine")
+      .select("id_riga")
+      .eq("id_ordine", String(idOrdine));
+    if (righeR.error) return failure(righeR.error);
+    const righeIds = (righeR.data || []).map((r) => r.id_riga);
+
+    if (righeIds.length > 0) {
+      const assR = await supabase
+        .from("assegnazioni_lotti")
+        .select("id_lotto, quantita_assegnata")
+        .in("id_riga", righeIds);
+      if (assR.error) return failure(assR.error);
+
+      const sumByLot = {};
+      for (const a of assR.data || []) {
+        const k = String(a.id_lotto);
+        sumByLot[k] = (sumByLot[k] || 0) + Number(a.quantita_assegnata || 0);
+      }
+
+      for (const [lotId, qty] of Object.entries(sumByLot)) {
+        const curLotR = await supabase
+          .from("lotti")
+          .select("quantita_caricata")
+          .eq("id_lotto", lotId)
+          .maybeSingle();
+        if (curLotR.error || !curLotR.data) continue;
+        const newQty = Number(curLotR.data.quantita_caricata || 0) + qty;
+        const updR = await supabase
+          .from("lotti")
+          .update({ quantita_caricata: newQty })
+          .eq("id_lotto", lotId);
+        if (updR.error) return failure(updR.error);
+        stockMovements.push({ lotId, newQty });
+      }
+    }
+  }
+
   const { error } = await supabase
     .from("ordini")
     .update({
@@ -388,7 +439,7 @@ async function reopenOrder(params) {
     })
     .eq("id_ordine", String(idOrdine));
   if (error) return failure(error);
-  return { success: true };
+  return { success: true, stockMovements, orderReopened: true };
 }
 
 async function markOrderPrepared(params) {
