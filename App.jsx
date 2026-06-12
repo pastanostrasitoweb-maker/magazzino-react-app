@@ -3116,9 +3116,20 @@ export default function App() {
 
       if (!result || !result.success) {
         alert(
-          "Errore nell'eliminazione riga ordine sul foglio: " +
+          "Errore nell'eliminazione riga ordine: " +
             ((result && result.error) || "errore sconosciuto")
         );
+        return;
+      }
+
+      // Se l'ordine era preparato e l'adapter ha ripristinato lo stock dei
+      // lotti coinvolti + riaperto l'ordine, applichiamo i movimenti e il
+      // ricaricamento e' gestito dal flag orderReopened.
+      if (Array.isArray(result.stockMovements) && result.stockMovements.length > 0) {
+        setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements));
+      }
+      if (result.orderReopened) {
+        await loadDataFromSheets();
         return;
       }
 

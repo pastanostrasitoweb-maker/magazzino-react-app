@@ -732,25 +732,140 @@ async function updateOrderLine(params) {
   return { success: true };
 }
 
+// Helper: se l'ordine collegato a una riga era PREPARATO, ripristina lo stock
+// dei lotti per le quantita indicate e riapre l'ordine ('Da preparare'). Ritorna
+// { stockMovements, orderReopened, idOrdine }. Logica unificata: ogni azione che
+// "spreparara" un ordine ripristina automaticamente lo stock.
+async function maybeRestoreStockAndReopen({ idOrdine, sumByLot }) {
+  if (!idOrdine) return { stockMovements: [], orderReopened: false };
+  const ordR = await supabase
+    .from("ordini")
+    .select("stato")
+    .eq("id_ordine", String(idOrdine))
+    .maybeSingle();
+  if (ordR.error) return { error: ordR.error };
+  const wasPreparato =
+    String(ordR.data?.stato || "").trim().toLowerCase() === "preparato";
+  if (!wasPreparato) return { stockMovements: [], orderReopened: false };
+
+  const stockMovements = [];
+  for (const [lotId, qty] of Object.entries(sumByLot)) {
+    const curR = await supabase
+      .from("lotti")
+      .select("quantita_caricata")
+      .eq("id_lotto", lotId)
+      .maybeSingle();
+    if (curR.error || !curR.data) continue;
+    const newQty = Number(curR.data.quantita_caricata || 0) + Number(qty || 0);
+    const upd = await supabase
+      .from("lotti")
+      .update({ quantita_caricata: newQty })
+      .eq("id_lotto", lotId);
+    if (upd.error) return { error: upd.error };
+    stockMovements.push({ lotId, newQty });
+  }
+
+  const updO = await supabase
+    .from("ordini")
+    .update({
+      stato: "Da preparare",
+      data_preparato: null,
+      stato_lavorazione: "In lavorazione",
+    })
+    .eq("id_ordine", String(idOrdine));
+  if (updO.error) return { error: updO.error };
+
+  return { stockMovements, orderReopened: true };
+}
+
 async function deleteLine(params) {
   const idRiga = params.lineId || params.idRiga;
   if (!idRiga) return { success: false, error: "lineId mancante" };
+
+  // Raccolgo l'ordine + le assegnazioni della riga PRIMA di cancellare:
+  // se l'ordine era preparato, devo ripristinare lo stock delle quantita
+  // assegnate dalla riga e riaprire l'ordine.
+  const rigR = await supabase
+    .from("righe_ordine")
+    .select("id_ordine")
+    .eq("id_riga", String(idRiga))
+    .maybeSingle();
+  if (rigR.error) return failure(rigR.error);
+  const idOrdine = rigR.data?.id_ordine;
+
+  const assR = await supabase
+    .from("assegnazioni_lotti")
+    .select("id_lotto, quantita_assegnata")
+    .eq("id_riga", String(idRiga));
+  if (assR.error) return failure(assR.error);
+
+  const sumByLot = {};
+  for (const a of assR.data || []) {
+    const k = String(a.id_lotto);
+    sumByLot[k] = (sumByLot[k] || 0) + Number(a.quantita_assegnata || 0);
+  }
+
+  const restored = await maybeRestoreStockAndReopen({ idOrdine, sumByLot });
+  if (restored.error) return failure(restored.error);
+
   const { error } = await supabase
     .from("righe_ordine")
     .delete()
     .eq("id_riga", String(idRiga));
   if (error) return failure(error);
-  return { success: true };
+
+  return {
+    success: true,
+    stockMovements: restored.stockMovements,
+    orderReopened: restored.orderReopened,
+  };
 }
 
 async function deleteAssignment(params) {
   const idAss = params.assignmentId || params.idAssegnazione;
   if (!idAss) return { success: false, error: "assignmentId mancante" };
+
+  // Recupero l'assegnazione PRIMA di cancellarla, per sapere id_riga / id_lotto /
+  // qty. Se l'ordine collegato e' preparato, ripristino lo stock di quel lotto
+  // e riapro l'ordine, poi cancello.
+  const assR = await supabase
+    .from("assegnazioni_lotti")
+    .select("id_riga, id_lotto, quantita_assegnata")
+    .eq("id_assegnazione", String(idAss))
+    .maybeSingle();
+  if (assR.error) return failure(assR.error);
+  if (!assR.data) {
+    return { success: false, error: `Assegnazione ${idAss} inesistente` };
+  }
+
+  const { id_riga, id_lotto, quantita_assegnata } = assR.data;
+
+  const rigR = await supabase
+    .from("righe_ordine")
+    .select("id_ordine")
+    .eq("id_riga", id_riga)
+    .maybeSingle();
+  if (rigR.error) return failure(rigR.error);
+  const idOrdine = rigR.data?.id_ordine;
+
+  const restored = await maybeRestoreStockAndReopen({
+    idOrdine,
+    sumByLot: { [String(id_lotto)]: Number(quantita_assegnata || 0) },
+  });
+  if (restored.error) return failure(restored.error);
+
   const { error } = await supabase.rpc("rimuovi_assegnazione", {
     p_id_assegnazione: String(idAss),
   });
   if (error) return failure(error);
-  return { success: true };
+
+  // Compat: vecchio backend ritornava 'stockRestored' come singolo oggetto.
+  return {
+    success: true,
+    stockMovements: restored.stockMovements,
+    stockRestored: restored.stockMovements[0] || null,
+    orderReopened: restored.orderReopened,
+  };
 }
 
 async function updateLot(params) {
