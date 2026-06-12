@@ -189,93 +189,20 @@ async function assignLot(params) {
     return { success: false, error: "Parametri mancanti per assignLot" };
   }
 
-  if (!allowNegative) {
-    const { data, error } = await supabase.rpc("assegna_lotto", {
-      p_id_riga: String(idRiga),
-      p_id_lotto: String(idLotto),
-      p_quantita: quantita,
-      p_operatore: String(operatore),
-    });
-    if (error) return failure(error);
-    const row = Array.isArray(data) ? data[0] : data;
-    return {
-      success: true,
-      assignmentId: row?.id_assegnazione || row?.ID_Assegnazione || null,
-      row,
-    };
-  }
-
-  // allowNegative=true: bypassa il check disponibilita della rpc.
-  // Scrive direttamente in assegnazioni_lotti (upsert per coppia id_riga+id_lotto)
-  // poi riallinea righe_ordine.quantita_assegnata. Usato per "lotto al volo"
-  // dove la giacenza fisica e' inferiore alla quantita assegnata: il lotto andra'
-  // in negativo dopo prepara_ordine ed e' un comportamento voluto.
-  const lottoR = await supabase
-    .from("lotti")
-    .select("id_lotto, id_prodotto, codice_lotto, lotto")
-    .eq("id_lotto", String(idLotto))
-    .maybeSingle();
-  if (lottoR.error) return failure(lottoR.error);
-  if (!lottoR.data) return { success: false, error: `Lotto ${idLotto} inesistente` };
-
-  const existing = await supabase
-    .from("assegnazioni_lotti")
-    .select("id_assegnazione")
-    .eq("id_riga", String(idRiga))
-    .eq("id_lotto", String(idLotto))
-    .maybeSingle();
-  if (existing.error) return failure(existing.error);
-
-  let row;
-  if (existing.data) {
-    const upd = await supabase
-      .from("assegnazioni_lotti")
-      .update({
-        quantita_assegnata: quantita,
-        data_ora: new Date().toISOString(),
-        operatore: String(operatore),
-        id_prodotto: lottoR.data.id_prodotto,
-        codice_lotto: lottoR.data.codice_lotto,
-        lotto: lottoR.data.lotto,
-      })
-      .eq("id_assegnazione", existing.data.id_assegnazione)
-      .select()
-      .single();
-    if (upd.error) return failure(upd.error);
-    row = upd.data;
-  } else {
-    const ins = await supabase
-      .from("assegnazioni_lotti")
-      .insert({
-        id_assegnazione: "ASS-" + Date.now(),
-        id_riga: String(idRiga),
-        id_lotto: String(idLotto),
-        id_prodotto: lottoR.data.id_prodotto,
-        codice_lotto: lottoR.data.codice_lotto,
-        lotto: lottoR.data.lotto,
-        quantita_assegnata: quantita,
-        data_ora: new Date().toISOString(),
-        operatore: String(operatore),
-      })
-      .select()
-      .single();
-    if (ins.error) return failure(ins.error);
-    row = ins.data;
-  }
-
-  // Riallinea righe_ordine.quantita_assegnata
-  const sumR = await supabase
-    .from("assegnazioni_lotti")
-    .select("quantita_assegnata")
-    .eq("id_riga", String(idRiga));
-  if (!sumR.error) {
-    const tot = (sumR.data || []).reduce((s, r) => s + Number(r.quantita_assegnata || 0), 0);
-    await supabase.from("righe_ordine").update({ quantita_assegnata: tot }).eq("id_riga", String(idRiga));
-  }
-
+  // Sempre via rpc (atomica, con lock del lotto). allowNegative passa il flag
+  // p_allow_negative=true alla rpc, che salta il check disponibilita.
+  const { data, error } = await supabase.rpc("assegna_lotto", {
+    p_id_riga: String(idRiga),
+    p_id_lotto: String(idLotto),
+    p_quantita: quantita,
+    p_operatore: String(operatore),
+    p_allow_negative: !!allowNegative,
+  });
+  if (error) return failure(error);
+  const row = Array.isArray(data) ? data[0] : data;
   return {
     success: true,
-    assignmentId: row?.id_assegnazione || null,
+    assignmentId: row?.id_assegnazione || row?.ID_Assegnazione || null,
     row,
   };
 }
