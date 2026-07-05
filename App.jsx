@@ -16,6 +16,7 @@ import {
   Clock,
   Archive,
   RotateCcw,
+  Users,
 } from "lucide-react";
 
 // Storico: backend Apps Script (JSONP) usato fino al 2026-06-09, ora sostituito
@@ -215,7 +216,10 @@ function productOptionLabel(product) {
 
 
 function productManagesLots(product) {
-  return product?.managesLots !== false;
+  // Decisione operativa: TUTTI gli articoli gestiscono il lotto. In carica
+  // lotto ogni prodotto deve poter caricare codice lotto + scadenza, non solo
+  // quelli marcati "gestione lotti". (Richiesta Luca, riunione magazziniere.)
+  return true;
 }
 
 function productStockModeLabel(product) {
@@ -332,6 +336,7 @@ function normalizeOrders(rows) {
     .map((row, index) => ({
       id: String(getField(row, ["ID_Ordine", "Id_Ordine", "Ordine", "id"]) || `ORD-${index + 1}`),
       customer: String(getField(row, ["Cliente", "Customer", "cliente"])).trim(),
+      clientId: String(getField(row, ["ID_Cliente", "Id_Cliente", "id_cliente"]) || "").trim(),
       notes: String(getField(row, ["Note", "Note_Ordine", "Descrizione", "notes"])).trim(),
       dataPrepared: getField(row, ["Data_Preparato", "Data preparato", "Prepared_At"]),
       archived: ["si", "sì", "yes", "true"].includes(
@@ -351,6 +356,24 @@ function normalizeOrders(rows) {
       lines: [],
     }))
     .filter((order) => order.id);
+}
+
+function normalizeClients(rows) {
+  return (rows || [])
+    .map((row) => ({
+      id: String(getField(row, ["ID_Cliente", "Id_Cliente", "id_cliente"]) || "").trim(),
+      name: String(getField(row, ["Ragione_Sociale", "ragione_sociale", "Cliente"]) || "").trim(),
+      category: String(getField(row, ["Categoria", "categoria"]) || "").trim(),
+      categoryTs: String(getField(row, ["Categoria_TS", "categoria_ts"]) || "").trim(),
+      codeTs: String(getField(row, ["Codice_Cliente_TS", "codice_cliente_ts"]) || "").trim(),
+      piva: String(getField(row, ["PIVA", "piva"]) || "").trim(),
+      codiceFiscale: String(getField(row, ["Codice_Fiscale", "codice_fiscale"]) || "").trim(),
+      codiceDestinatarioTs: String(getField(row, ["Codice_Destinatario_TS", "codice_destinatario_ts"]) || "").trim(),
+      source: String(getField(row, ["Fonte", "fonte"]) || "").trim(),
+      active: getField(row, ["Attivo", "attivo"]) === false ? false : true,
+      notes: String(getField(row, ["Note", "note"]) || "").trim(),
+    }))
+    .filter((c) => c.id && c.name);
 }
 
 function normalizeOrderLines(rows, products) {
@@ -672,6 +695,7 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [lots, setLots] = useState([]);
   const [products, setProducts] = useState([]);
+  const [clients, setClients] = useState([]);
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [selectedLineId, setSelectedLineId] = useState("");
   const [productSearch, setProductSearch] = useState("");
@@ -704,15 +728,60 @@ export default function App() {
   const [adminError, setAdminError] = useState("");
 
   const [newOrderCustomer, setNewOrderCustomer] = useState("");
+  const [newOrderClientId, setNewOrderClientId] = useState("");
+  const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
   const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
 
   const [editOrderDialogOpen, setEditOrderDialogOpen] = useState(false);
   const [editOrderCustomer, setEditOrderCustomer] = useState("");
+  const [editOrderClientId, setEditOrderClientId] = useState("");
+  const [editOrderCategory, setEditOrderCategory] = useState("");
   const [editOrderNotes, setEditOrderNotes] = useState("");
   const [savingEditedOrder, setSavingEditedOrder] = useState(false);
   const [colliDrafts, setColliDrafts] = useState({});
   const [savingColliOrderId, setSavingColliOrderId] = useState("");
+
+  // Anagrafica clienti (gestione) + filtri picker ordine.
+  const [clientDialogOpen, setClientDialogOpen] = useState(false);
+  const [clientSearch, setClientSearch] = useState("");
+  const [editingClientId, setEditingClientId] = useState("");
+  const [clientForm, setClientForm] = useState({
+    ragioneSociale: "", categoria: "", codiceClienteTs: "", piva: "", codiceFiscale: "", note: "",
+  });
+  const [savingClient, setSavingClient] = useState(false);
+
+  // Canali suggeriti + quelli realmente presenti nei clienti.
+  const SUGGESTED_CHANNELS = ["GDO", "Farmacia", "Horeca", "Export", "Ingrosso", "B2C", "Altro"];
+  const clientCategories = useMemo(() => {
+    const set = new Set(SUGGESTED_CHANNELS);
+    for (const c of clients) if (c.category) set.add(c.category);
+    return Array.from(set);
+  }, [clients]);
+
+  const activeClients = useMemo(
+    () => clients.filter((c) => c.active).sort((a, b) => a.name.localeCompare(b.name)),
+    [clients]
+  );
+  const clientsById = useMemo(() => {
+    const m = {};
+    for (const c of clients) m[c.id] = c;
+    return m;
+  }, [clients]);
+  // Tutti i clienti attivi raggruppati per canale (quelli senza canale in coda).
+  const activeClientsGrouped = useMemo(() => {
+    const groups = new Map();
+    for (const c of activeClients) {
+      const key = c.category || "Senza categoria";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
+    }
+    const named = Array.from(groups.keys())
+      .filter((k) => k !== "Senza categoria")
+      .sort((a, b) => a.localeCompare(b));
+    if (groups.has("Senza categoria")) named.push("Senza categoria");
+    return named.map((k) => ({ category: k, clients: groups.get(k) }));
+  }, [activeClients]);
 
   const [newLineProductId, setNewLineProductId] = useState("");
   const [newLineProductSearch, setNewLineProductSearch] = useState("");
@@ -815,9 +884,12 @@ export default function App() {
         safeLots
       );
 
+      const normalizedClients = normalizeClients(raw.clienti || []);
+
       setProducts(safeProducts);
       setLots(safeLots);
       setOrders(mergedOrders);
+      setClients(normalizedClients);
       setAssignments(normalizedAssignments);
       setSelectedOrderId(mergedOrders[0]?.id ?? "");
       setSelectedLineId(mergedOrders[0]?.lines?.[0]?.lineId ?? "");
@@ -828,6 +900,7 @@ export default function App() {
       setProducts(fallbackProducts);
       setLots(fallbackLots);
       setOrders([]);
+      setClients([]);
       setAssignments({});
       setSelectedOrderId("");
       setSelectedLineId("");
@@ -1897,6 +1970,8 @@ export default function App() {
     if (!selectedOrder) return;
 
     setEditOrderCustomer(selectedOrder.customer || "");
+    setEditOrderClientId(selectedOrder.clientId || "");
+    setEditOrderCategory(clientsById[selectedOrder.clientId]?.category || "");
     setEditOrderNotes(selectedOrder.notes || "");
     setEditOrderDialogOpen(true);
   };
@@ -1919,6 +1994,7 @@ export default function App() {
           ? {
               ...order,
               customer: editOrderCustomer.trim(),
+              clientId: editOrderClientId || "",
               notes: editOrderNotes.trim(),
             }
           : order
@@ -1931,6 +2007,7 @@ export default function App() {
         payload: JSON.stringify({
           orderId: selectedOrder.id,
           customer: editOrderCustomer.trim(),
+          clienteId: editOrderClientId || "",
           notes: editOrderNotes.trim(),
         }),
       });
@@ -2364,6 +2441,95 @@ export default function App() {
     }
   };
 
+  const startNewClient = () => {
+    setEditingClientId("");
+    setClientForm({ ragioneSociale: "", categoria: "", codiceClienteTs: "", piva: "", codiceFiscale: "", note: "" });
+  };
+
+  const startEditClient = (c) => {
+    setEditingClientId(c.id);
+    setClientForm({
+      ragioneSociale: c.name || "",
+      categoria: c.category || "",
+      codiceClienteTs: c.codeTs || "",
+      piva: c.piva || "",
+      codiceFiscale: c.codiceFiscale || "",
+      note: c.notes || "",
+    });
+  };
+
+  const saveClient = async () => {
+    const ragione = String(clientForm.ragioneSociale || "").trim();
+    if (!ragione) {
+      alert("Inserisci la ragione sociale del cliente");
+      return;
+    }
+    setSavingClient(true);
+    try {
+      const isEdit = !!editingClientId;
+      const result = await callSheetsApi({
+        action: isEdit ? "updateCliente" : "createCliente",
+        payload: JSON.stringify({
+          id: editingClientId || undefined,
+          ragioneSociale: ragione,
+          categoria: clientForm.categoria,
+          codiceClienteTs: clientForm.codiceClienteTs,
+          piva: clientForm.piva,
+          codiceFiscale: clientForm.codiceFiscale,
+          note: clientForm.note,
+        }),
+      });
+      if (!result || !result.success) {
+        alert("Errore nel salvataggio cliente: " + ((result && result.error) || "sconosciuto"));
+        return;
+      }
+      const saved = result.cliente || {};
+      const savedId = String(saved.id_cliente || editingClientId || "");
+      const normalized = {
+        id: savedId,
+        name: saved.ragione_sociale ?? ragione,
+        category: saved.categoria ?? clientForm.categoria ?? "",
+        categoryTs: saved.categoria_ts ?? "",
+        codeTs: saved.codice_cliente_ts ?? clientForm.codiceClienteTs ?? "",
+        piva: saved.piva ?? clientForm.piva ?? "",
+        codiceFiscale: saved.codice_fiscale ?? clientForm.codiceFiscale ?? "",
+        codiceDestinatarioTs: saved.codice_destinatario_ts ?? "",
+        source: saved.fonte ?? "manuale",
+        active: saved.attivo === false ? false : true,
+        notes: saved.note ?? clientForm.note ?? "",
+      };
+      setClients((prev) => {
+        const exists = prev.some((c) => c.id === normalized.id);
+        return exists
+          ? prev.map((c) => (c.id === normalized.id ? normalized : c))
+          : [...prev, normalized];
+      });
+      startNewClient();
+    } catch (error) {
+      alert("Errore di collegamento: " + String(error));
+    } finally {
+      setSavingClient(false);
+    }
+  };
+
+  const deactivateClient = async (c) => {
+    if (!c || !c.id) return;
+    if (!window.confirm(`Disattivare "${c.name}"? Sparisce dai menu ma resta sugli ordini storici.`)) return;
+    try {
+      const result = await callSheetsApi({
+        action: "deleteCliente",
+        payload: JSON.stringify({ id: c.id }),
+      });
+      if (!result || !result.success) {
+        alert("Errore: " + ((result && result.error) || "sconosciuto"));
+        return;
+      }
+      setClients((prev) => prev.map((x) => (x.id === c.id ? { ...x, active: false } : x)));
+    } catch (error) {
+      alert("Errore di collegamento: " + String(error));
+    }
+  };
+
   const addEmptyOrderLine = () => {
     setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
   };
@@ -2428,6 +2594,7 @@ export default function App() {
     const newOrder = {
       id: `ORD-${Date.now()}`,
       customer: newOrderCustomer.trim(),
+      clientId: newOrderClientId || "",
       notes: newOrderNotes.trim(),
       status: "Da preparare",
       workStatus: "Nuovo",
@@ -2441,6 +2608,7 @@ export default function App() {
         payload: JSON.stringify({
           id: newOrder.id,
           customer: newOrder.customer,
+          clienteId: newOrder.clientId,
           notes: newOrder.notes,
           status: newOrder.status,
           workStatus: newOrder.workStatus,
@@ -2461,6 +2629,8 @@ export default function App() {
       setSelectedOrderId(newOrder.id);
       setSelectedLineId(newOrder.lines[0]?.lineId || "");
       setNewOrderCustomer("");
+      setNewOrderClientId("");
+      setNewOrderCategory("");
       setNewOrderNotes("");
       setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
       setOrderDialogOpen(false);
@@ -3593,6 +3763,17 @@ export default function App() {
                     onClick={() => setLotDialogOpen(true)}
                   >
                     <Boxes size={18} /> Carica lotto
+                  </button>
+
+                  <button
+                    style={{
+                      ...btnStyle("soft"),
+                      borderRadius: 999,
+                      minWidth: isSmallLayout ? "calc(50% - 5px)" : 142,
+                    }}
+                    onClick={() => { startNewClient(); setClientSearch(""); setClientDialogOpen(true); }}
+                  >
+                    <Users size={18} /> Clienti
                   </button>
                 </>
               )}
@@ -5505,14 +5686,89 @@ export default function App() {
         >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
-              <label style={labelStyle()}>Nome ordine / cliente</label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <label style={labelStyle()}>Cliente</label>
+                <button
+                  type="button"
+                  style={{ ...btnStyle("outline"), padding: "4px 10px", fontSize: 13 }}
+                  onClick={() => {
+                    setEditingClientId("");
+                    setClientForm({ ragioneSociale: "", categoria: newOrderCategory || "", codiceClienteTs: "", piva: "", codiceFiscale: "", note: "" });
+                    setClientDialogOpen(true);
+                  }}
+                >
+                  + Nuovo cliente
+                </button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <select
+                  style={inputStyle()}
+                  value={newOrderCategory}
+                  onChange={(event) => {
+                    setNewOrderCategory(event.target.value);
+                    // Cambiando categoria, se il cliente selezionato non e' piu' coerente, lo svuoto.
+                    const cur = clientsById[newOrderClientId];
+                    if (cur && event.target.value && cur.category !== event.target.value) {
+                      setNewOrderClientId("");
+                      setNewOrderCustomer("");
+                    }
+                  }}
+                >
+                  <option value="">Tutte le categorie</option>
+                  {clientCategories.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+
+                <select
+                  style={inputStyle()}
+                  value={newOrderClientId}
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    setNewOrderClientId(id);
+                    const c = clientsById[id];
+                    if (c) {
+                      setNewOrderCustomer(c.name);
+                      if (c.category) setNewOrderCategory(c.category);
+                    }
+                  }}
+                >
+                  <option value="">— seleziona cliente —</option>
+                  {activeClientsGrouped.map((g) => (
+                    <optgroup key={g.category} label={g.category}>
+                      {g.clients.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}{c.codeTs ? ` (${c.codeTs})` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
 
               <input
-                style={inputStyle()}
+                style={{ ...inputStyle(), marginTop: 10 }}
                 value={newOrderCustomer}
-                onChange={(event) => setNewOrderCustomer(event.target.value)}
-                placeholder="Nome ordine o cliente"
+                onChange={(event) => {
+                  setNewOrderCustomer(event.target.value);
+                  // Se scrivo a mano, scollego dall'anagrafica (cliente non mappato).
+                  setNewOrderClientId("");
+                }}
+                placeholder="Nome ordine o cliente (oppure scrivi a mano)"
               />
+
+              {newOrderClientId && clientsById[newOrderClientId] ? (
+                <div style={{ fontSize: 12, color: "#475569", marginTop: 6 }}>
+                  {clientsById[newOrderClientId].codeTs
+                    ? `Codice GAMMA: ${clientsById[newOrderClientId].codeTs}`
+                    : "Cliente in anagrafica senza codice GAMMA (verra' agganciato quando arriva il ponte)."}
+                </div>
+              ) : newOrderCustomer.trim() ? (
+                <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>
+                  Cliente scritto a mano, non collegato all'anagrafica.
+                </div>
+              ) : null}
             </div>
 
             <div>
@@ -5675,6 +5931,119 @@ export default function App() {
         </Modal>
 
         <Modal
+          open={clientDialogOpen}
+          title="Anagrafica clienti"
+          onClose={() => setClientDialogOpen(false)}
+          maxWidth={760}
+        >
+          <div style={{ display: "grid", gap: 16 }}>
+            <div style={{
+              border: "1px solid #dbe2ea", borderRadius: 12, padding: 14,
+              display: "grid", gap: 10, background: "#f8fafc",
+            }}>
+              <div style={{ fontSize: 16, fontWeight: 800 }}>
+                {editingClientId ? "Modifica cliente" : "Nuovo cliente"}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={labelStyle()}>Ragione sociale</label>
+                  <input
+                    style={inputStyle()}
+                    value={clientForm.ragioneSociale}
+                    onChange={(e) => setClientForm((f) => ({ ...f, ragioneSociale: e.target.value }))}
+                    placeholder="Es. Farmacia Rossi srl"
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle()}>Categoria (canale)</label>
+                  <input
+                    list="client-categories"
+                    style={inputStyle()}
+                    value={clientForm.categoria}
+                    onChange={(e) => setClientForm((f) => ({ ...f, categoria: e.target.value }))}
+                    placeholder="GDO, Farmacia, Horeca..."
+                  />
+                  <datalist id="client-categories">
+                    {clientCategories.map((cat) => <option key={cat} value={cat} />)}
+                  </datalist>
+                </div>
+                <div>
+                  <label style={labelStyle()}>Codice cliente GAMMA</label>
+                  <input
+                    style={inputStyle()}
+                    value={clientForm.codiceClienteTs}
+                    onChange={(e) => setClientForm((f) => ({ ...f, codiceClienteTs: e.target.value }))}
+                    placeholder="Codice anagrafica GAMMA"
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle()}>Partita IVA</label>
+                  <input
+                    style={inputStyle()}
+                    value={clientForm.piva}
+                    onChange={(e) => setClientForm((f) => ({ ...f, piva: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button style={btnStyle("primary", savingClient)} disabled={savingClient} onClick={saveClient}>
+                  {editingClientId ? "Salva modifiche" : "Aggiungi cliente"}
+                </button>
+                {editingClientId ? (
+                  <button style={btnStyle("outline")} onClick={startNewClient}>Annulla modifica</button>
+                ) : null}
+              </div>
+            </div>
+
+            <input
+              style={inputStyle()}
+              value={clientSearch}
+              onChange={(e) => setClientSearch(e.target.value)}
+              placeholder="Cerca cliente per nome, categoria o codice..."
+            />
+
+            <div style={{ maxHeight: 320, overflowY: "auto", display: "grid", gap: 6 }}>
+              {activeClients
+                .filter((c) => {
+                  const q = clientSearch.trim().toLowerCase();
+                  if (!q) return true;
+                  return [c.name, c.category, c.codeTs, c.piva].join(" ").toLowerCase().includes(q);
+                })
+                .map((c) => (
+                  <div key={c.id} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 12px",
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {c.name}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748b" }}>
+                        {c.category || "senza categoria"}
+                        {c.codeTs ? ` · GAMMA ${c.codeTs}` : " · no codice GAMMA"}
+                        {c.source === "seed" ? " · da ordini" : ""}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button style={{ ...btnStyle("outline"), padding: "4px 10px", fontSize: 13 }} onClick={() => startEditClient(c)}>
+                        Modifica
+                      </button>
+                      <button style={{ ...btnStyle("outline"), padding: "4px 10px", fontSize: 13, color: "#b91c1c" }} onClick={() => deactivateClient(c)}>
+                        Disattiva
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              {activeClients.length === 0 ? (
+                <div style={{ color: "#64748b", fontSize: 14, padding: 8 }}>
+                  Nessun cliente in anagrafica. Aggiungine uno qui sopra.
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </Modal>
+
+        <Modal
           open={editOrderDialogOpen}
           title="Modifica ordine"
           onClose={() => setEditOrderDialogOpen(false)}
@@ -5682,14 +6051,70 @@ export default function App() {
         >
           <div style={{ display: "grid", gap: 18 }}>
             <div>
-              <label style={labelStyle()}>Nome ordine / cliente</label>
+              <label style={labelStyle()}>Cliente</label>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <select
+                  style={inputStyle()}
+                  value={editOrderCategory}
+                  onChange={(event) => {
+                    setEditOrderCategory(event.target.value);
+                    const cur = clientsById[editOrderClientId];
+                    if (cur && event.target.value && cur.category !== event.target.value) {
+                      setEditOrderClientId("");
+                      setEditOrderCustomer("");
+                    }
+                  }}
+                >
+                  <option value="">Tutte le categorie</option>
+                  {clientCategories.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+
+                <select
+                  style={inputStyle()}
+                  value={editOrderClientId}
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    setEditOrderClientId(id);
+                    const c = clientsById[id];
+                    if (c) {
+                      setEditOrderCustomer(c.name);
+                      if (c.category) setEditOrderCategory(c.category);
+                    }
+                  }}
+                >
+                  <option value="">— seleziona cliente —</option>
+                  {activeClientsGrouped.map((g) => (
+                    <optgroup key={g.category} label={g.category}>
+                      {g.clients.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}{c.codeTs ? ` (${c.codeTs})` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
 
               <input
-                style={inputStyle()}
+                style={{ ...inputStyle(), marginTop: 10 }}
                 value={editOrderCustomer}
-                onChange={(event) => setEditOrderCustomer(event.target.value)}
-                placeholder="Nome ordine o cliente"
+                onChange={(event) => {
+                  setEditOrderCustomer(event.target.value);
+                  setEditOrderClientId("");
+                }}
+                placeholder="Nome ordine o cliente (oppure scrivi a mano)"
               />
+
+              {editOrderClientId && clientsById[editOrderClientId] ? (
+                <div style={{ fontSize: 12, color: "#475569", marginTop: 6 }}>
+                  {clientsById[editOrderClientId].codeTs
+                    ? `Codice GAMMA: ${clientsById[editOrderClientId].codeTs}`
+                    : "Cliente in anagrafica senza codice GAMMA."}
+                </div>
+              ) : null}
             </div>
 
             <div>

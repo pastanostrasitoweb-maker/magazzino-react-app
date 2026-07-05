@@ -66,12 +66,15 @@ const failure = (e) => {
 // ---------- bulk load ----------
 
 async function bulkLoad() {
-  const [prodottiR, lottiR, ordiniR, righeR, assegR] = await Promise.all([
+  const [prodottiR, lottiR, ordiniR, righeR, assegR, clientiR] = await Promise.all([
     supabase.from("prodotti").select("*"),
     supabase.from("lotti").select("*").order("scadenza", { ascending: true, nullsFirst: false }),
     supabase.from("ordini").select("*"),
     supabase.from("righe_ordine").select("*"),
     supabase.from("assegnazioni_lotti").select("*"),
+    // clienti: tabella nuova (06_clienti.sql). maybe non esiste su ambienti
+    // non ancora migrati -> tollerante: se errore, lista vuota, app gira lo stesso.
+    supabase.from("clienti").select("*").order("ragione_sociale", { ascending: true }),
   ]);
 
   for (const r of [prodottiR, lottiR, ordiniR, righeR, assegR]) {
@@ -114,6 +117,7 @@ async function bulkLoad() {
   const ordini = (ordiniR.data || []).map((row) => ({
     ID_Ordine: String(row.id_ordine ?? ""),
     Cliente: row.cliente ?? "",
+    ID_Cliente: String(row.id_cliente ?? ""),
     Note: row.note ?? "",
     Data_Preparato: toIsoString(row.data_preparato),
     Archiviato: boolToSiNo(row.archiviato),
@@ -141,7 +145,22 @@ async function bulkLoad() {
     "Quantità_Assegnata": Number(row.quantita_assegnata ?? 0),
   }));
 
-  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti };
+  // clienti: tollerante alla tabella mancante (clientiR.error -> lista vuota).
+  const clienti = (clientiR && !clientiR.error ? clientiR.data || [] : []).map((row) => ({
+    ID_Cliente: String(row.id_cliente ?? ""),
+    Ragione_Sociale: row.ragione_sociale ?? "",
+    Categoria: row.categoria ?? "",
+    Categoria_TS: row.categoria_ts ?? "",
+    Codice_Cliente_TS: row.codice_cliente_ts ?? "",
+    PIVA: row.piva ?? "",
+    Codice_Fiscale: row.codice_fiscale ?? "",
+    Codice_Destinatario_TS: row.codice_destinatario_ts ?? "",
+    Fonte: row.fonte ?? "",
+    Attivo: row.attivo === false ? false : true,
+    Note: row.note ?? "",
+  }));
+
+  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti };
 }
 
 // ---------- action handlers ----------
@@ -226,6 +245,9 @@ async function updateOrder(params) {
   const patch = {};
   if (p.customer !== undefined) patch.cliente = p.customer;
   if (p.cliente !== undefined) patch.cliente = p.cliente;
+  if (p.clienteId !== undefined) patch.id_cliente = p.clienteId ? String(p.clienteId) : null;
+  if (p.idCliente !== undefined) patch.id_cliente = p.idCliente ? String(p.idCliente) : null;
+  if (p.id_cliente !== undefined) patch.id_cliente = p.id_cliente ? String(p.id_cliente) : null;
   if (p.notes !== undefined) patch.note = p.notes;
   if (p.note !== undefined) patch.note = p.note;
   if (p.colli !== undefined) {
@@ -419,6 +441,7 @@ async function createOrder(params) {
   const p = parsePayload(params);
   const idOrdine = p.id || p.idOrdine || p.orderId || `ORD-${Date.now()}`;
   const cliente = p.customer || p.cliente || "";
+  const idCliente = p.clienteId || p.idCliente || p.id_cliente || "";
   const note = p.notes || p.note || "";
   const dataOrdine = p.date || p.data_ordine || null;
   const stato = p.status || p.stato || "Da preparare";
@@ -429,6 +452,7 @@ async function createOrder(params) {
     .insert({
       id_ordine: String(idOrdine),
       cliente,
+      id_cliente: idCliente ? String(idCliente) : null,
       note,
       data_ordine: dataOrdine,
       stato,
@@ -958,6 +982,81 @@ async function deleteLot(params) {
   return { success: true };
 }
 
+// ---------- CLIENTI (anagrafica) ----------
+
+async function createCliente(params) {
+  const p = parsePayload(params);
+  const ragione = (p.ragioneSociale || p.ragione_sociale || p.nome || "").trim();
+  if (!ragione) return { success: false, error: "Ragione sociale mancante" };
+
+  const idCliente = p.id || p.idCliente || `CLI-${Date.now()}`;
+  const row = {
+    id_cliente: String(idCliente),
+    ragione_sociale: ragione,
+    categoria: (p.categoria || "").trim(),
+    codice_cliente_ts: (p.codiceClienteTs || p.codice_cliente_ts || "").trim(),
+    piva: (p.piva || "").trim(),
+    codice_fiscale: (p.codiceFiscale || p.codice_fiscale || "").trim(),
+    codice_destinatario_ts: (p.codiceDestinatarioTs || p.codice_destinatario_ts || "").trim(),
+    fonte: "manuale",
+    attivo: true,
+    note: (p.note || "").trim(),
+  };
+
+  const { data, error } = await supabase
+    .from("clienti")
+    .insert(row)
+    .select()
+    .maybeSingle();
+  if (error) return failure(error);
+  return { success: true, cliente: data };
+}
+
+async function updateCliente(params) {
+  const p = parsePayload(params);
+  const idCliente = p.id || p.idCliente || p.id_cliente;
+  if (!idCliente) return { success: false, error: "idCliente mancante" };
+
+  const patch = {};
+  if (p.ragioneSociale !== undefined) patch.ragione_sociale = String(p.ragioneSociale).trim();
+  if (p.ragione_sociale !== undefined) patch.ragione_sociale = String(p.ragione_sociale).trim();
+  if (p.categoria !== undefined) patch.categoria = String(p.categoria).trim();
+  if (p.codiceClienteTs !== undefined) patch.codice_cliente_ts = String(p.codiceClienteTs).trim();
+  if (p.codice_cliente_ts !== undefined) patch.codice_cliente_ts = String(p.codice_cliente_ts).trim();
+  if (p.piva !== undefined) patch.piva = String(p.piva).trim();
+  if (p.codiceFiscale !== undefined) patch.codice_fiscale = String(p.codiceFiscale).trim();
+  if (p.codice_fiscale !== undefined) patch.codice_fiscale = String(p.codice_fiscale).trim();
+  if (p.codiceDestinatarioTs !== undefined) patch.codice_destinatario_ts = String(p.codiceDestinatarioTs).trim();
+  if (p.codice_destinatario_ts !== undefined) patch.codice_destinatario_ts = String(p.codice_destinatario_ts).trim();
+  if (p.note !== undefined) patch.note = String(p.note).trim();
+  if (p.attivo !== undefined) patch.attivo = !!p.attivo;
+
+  if (Object.keys(patch).length === 0) return { success: true };
+
+  const { data, error } = await supabase
+    .from("clienti")
+    .update(patch)
+    .eq("id_cliente", String(idCliente))
+    .select()
+    .maybeSingle();
+  if (error) return failure(error);
+  return { success: true, cliente: data };
+}
+
+async function deleteCliente(params) {
+  // "Elimina" = disattiva (soft). Non cancelliamo per non rompere gli ordini
+  // storici che puntano a questo id_cliente. Sparisce dai menu, resta nei dati.
+  const p = parsePayload(params);
+  const idCliente = p.id || p.idCliente || p.id_cliente || params.clienteId;
+  if (!idCliente) return { success: false, error: "idCliente mancante" };
+  const { error } = await supabase
+    .from("clienti")
+    .update({ attivo: false })
+    .eq("id_cliente", String(idCliente));
+  if (error) return failure(error);
+  return { success: true };
+}
+
 // ---------- public entry ----------
 
 export async function callSheetsApi(params = {}) {
@@ -1013,6 +1112,12 @@ export async function callSheetsApi(params = {}) {
         return await archiveLot(params);
       case "deleteLot":
         return await deleteLot(params);
+      case "createCliente":
+        return await createCliente(params);
+      case "updateCliente":
+        return await updateCliente(params);
+      case "deleteCliente":
+        return await deleteCliente(params);
       default:
         return { success: false, error: `Azione non supportata: ${params.action}` };
     }
