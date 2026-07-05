@@ -1057,6 +1057,74 @@ async function deleteCliente(params) {
   return { success: true };
 }
 
+// ---------- staging ordini TeamSystem (2.0) ----------
+// Gli ordini pescati da GAMMA atterrano in ts_ordini_in (staging) e
+// vengono importati negli ordini operativi solo su conferma di Luca.
+// Tollerante: se la tabella non esiste (migration 08 non ancora
+// eseguita) ritorna lista vuota, l'app gira lo stesso.
+
+async function tsStagingList() {
+  const testateR = await supabase
+    .from("ts_ordini_in")
+    .select("*")
+    .order("pescato_il", { ascending: false });
+  if (testateR.error) {
+    // tabella assente o non leggibile: nessuno staging, non e' un errore bloccante.
+    return { success: true, ordini: [] };
+  }
+  const testate = testateR.data || [];
+  if (testate.length === 0) return { success: true, ordini: [] };
+
+  const righeR = await supabase
+    .from("ts_ordini_in_righe")
+    .select("*")
+    .in("ts_id", testate.map((t) => t.ts_id));
+  const righe = righeR.error ? [] : (righeR.data || []);
+
+  const ordini = testate.map((t) => ({
+    tsId: t.ts_id,
+    tsNumero: t.ts_numero,
+    tsSerie: t.ts_serie,
+    dataOrdine: t.data_ordine,
+    codiceClienteTs: t.codice_cliente_ts,
+    cliente: t.cliente,
+    note: t.note,
+    stato: t.stato_import,
+    idOrdineCreato: t.id_ordine_creato,
+    pescatoIl: t.pescato_il,
+    righe: righe
+      .filter((r) => r.ts_id === t.ts_id)
+      .sort((a, b) => (a.riga_num ?? 0) - (b.riga_num ?? 0))
+      .map((r) => ({
+        idProdotto: r.id_prodotto,
+        descrizione: r.descrizione_prodotto,
+        quantita: r.quantita_ordinata,
+      })),
+  }));
+  return { success: true, ordini };
+}
+
+async function tsStagingImport(params) {
+  const p = parsePayload(params);
+  const tsId = p.tsId || p.ts_id || params.tsId;
+  if (!tsId) return { success: false, error: "tsId mancante" };
+  const { data, error } = await supabase.rpc("ts_importa_ordine", { p_ts_id: String(tsId) });
+  if (error) return failure(error);
+  return { success: true, idOrdine: data };
+}
+
+async function tsStagingIgnora(params) {
+  const p = parsePayload(params);
+  const tsId = p.tsId || p.ts_id || params.tsId;
+  if (!tsId) return { success: false, error: "tsId mancante" };
+  const { error } = await supabase
+    .from("ts_ordini_in")
+    .update({ stato_import: "ignorato" })
+    .eq("ts_id", String(tsId));
+  if (error) return failure(error);
+  return { success: true };
+}
+
 // ---------- public entry ----------
 
 export async function callSheetsApi(params = {}) {
@@ -1118,6 +1186,12 @@ export async function callSheetsApi(params = {}) {
         return await updateCliente(params);
       case "deleteCliente":
         return await deleteCliente(params);
+      case "tsStagingList":
+        return await tsStagingList();
+      case "tsStagingImport":
+        return await tsStagingImport(params);
+      case "tsStagingIgnora":
+        return await tsStagingIgnora(params);
       default:
         return { success: false, error: `Azione non supportata: ${params.action}` };
     }

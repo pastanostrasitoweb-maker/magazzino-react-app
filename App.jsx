@@ -690,8 +690,15 @@ function applyStockMovementsToLots(lots, movements = []) {
   });
 }
 
+// Feature flag 2.0: import ordini da TeamSystem. SPENTO di default (prod
+// resta 1.0). Si accende in locale/anteprima con VITE_TS_IMPORT=1.
+const TS_IMPORT_ENABLED = import.meta.env.VITE_TS_IMPORT === "1";
+
 export default function App() {
   const [page, setPage] = useState("ordini");
+  const [tsStaging, setTsStaging] = useState([]);
+  const [tsStagingLoading, setTsStagingLoading] = useState(false);
+  const [tsStagingError, setTsStagingError] = useState("");
   const [orders, setOrders] = useState([]);
   const [lots, setLots] = useState([]);
   const [products, setProducts] = useState([]);
@@ -926,6 +933,10 @@ export default function App() {
   useEffect(() => {
     setProductSubcategoryFilter("");
   }, [productCategoryFilter]);
+
+  useEffect(() => {
+    if (TS_IMPORT_ENABLED && page === "ts_import") loadTsStaging();
+  }, [page]);
 
   const productMap = useMemo(() => {
     const map = {};
@@ -1964,6 +1975,45 @@ export default function App() {
       setOrders(previousOrders);
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
+  };
+
+  // --- Staging ordini TeamSystem (2.0, dietro feature flag) ---
+  const loadTsStaging = async () => {
+    if (!TS_IMPORT_ENABLED) return;
+    setTsStagingLoading(true);
+    setTsStagingError("");
+    try {
+      const result = await callSheetsApi({ action: "tsStagingList" });
+      if (result && result.success) setTsStaging(result.ordini || []);
+      else setTsStagingError((result && result.error) || "errore sconosciuto");
+    } catch (e) {
+      setTsStagingError(String(e));
+    } finally {
+      setTsStagingLoading(false);
+    }
+  };
+
+  const importTsOrder = async (tsId) => {
+    const result = await callSheetsApi({ action: "tsStagingImport", tsId }).catch(
+      (e) => ({ success: false, error: String(e) })
+    );
+    if (!result || !result.success) {
+      alert("Errore import ordine: " + ((result && result.error) || "errore sconosciuto"));
+      return;
+    }
+    await loadTsStaging();
+    await loadDataFromSheets();
+  };
+
+  const ignoreTsOrder = async (tsId) => {
+    const result = await callSheetsApi({ action: "tsStagingIgnora", tsId }).catch(
+      (e) => ({ success: false, error: String(e) })
+    );
+    if (!result || !result.success) {
+      alert("Errore: " + ((result && result.error) || "errore sconosciuto"));
+      return;
+    }
+    await loadTsStaging();
   };
 
   const openEditOrderDialog = () => {
@@ -3730,6 +3780,19 @@ export default function App() {
                 <Boxes size={18} /> Magazzino
               </button>
 
+              {TS_IMPORT_ENABLED && (
+                <button
+                  style={{
+                    ...btnStyle(page === "ts_import" ? "primary" : "soft"),
+                    borderRadius: 999,
+                    minWidth: isSmallLayout ? "calc(50% - 5px)" : 158,
+                  }}
+                  onClick={() => setPage("ts_import")}
+                >
+                  <ClipboardList size={18} /> Ordini TS
+                </button>
+              )}
+
               <button
                 style={{
                   ...btnStyle("primary"),
@@ -5208,6 +5271,94 @@ export default function App() {
               {magazzinoGrouped.length} {magazzinoGrouped.length === 1 ? "prodotto" : "prodotti"} ·{" "}
               {filteredMagazzinoRows.length} lotti · Disponibili totali{" "}
               {magazzinoGrouped.reduce((sum, g) => sum + g.totalAvailable, 0)}
+            </div>
+          </div>
+        )}
+
+        {TS_IMPORT_ENABLED && page === "ts_import" && (
+          <div style={{ ...cardStyle(), padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>Ordini da TeamSystem</div>
+                <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
+                  Ordini pescati da GAMMA in attesa di conferma. Importa per crearli tra gli ordini operativi.
+                </div>
+              </div>
+              <button
+                style={{ ...btnStyle("soft"), borderRadius: 999 }}
+                onClick={loadTsStaging}
+                disabled={tsStagingLoading}
+              >
+                {tsStagingLoading ? "Aggiorno..." : "Aggiorna"}
+              </button>
+            </div>
+
+            {tsStagingError && (
+              <div style={{ ...cardStyle({ background: "#fef2f2" }), padding: 14, color: "#b91c1c", marginBottom: 14 }}>
+                {tsStagingError}
+              </div>
+            )}
+
+            {!tsStagingLoading && tsStaging.length === 0 && !tsStagingError && (
+              <div style={{ ...cardStyle({ background: "#f0f7ff" }), padding: 18, color: "#1d4ed8" }}>
+                Nessun ordine in arrivo da TeamSystem. (Il ponte gira in dry-run finche' non e' collegato il web service di FoodConsulting.)
+              </div>
+            )}
+
+            <div style={{ display: "grid", gap: 12 }}>
+              {tsStaging.map((o) => {
+                const importato = o.stato === "importato";
+                const ignorato = o.stato === "ignorato";
+                return (
+                  <div key={o.tsId} style={{ ...cardStyle(), padding: 16, opacity: ignorato ? 0.6 : 1 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                      <div>
+                        <div style={{ fontWeight: 800, fontSize: 16 }}>
+                          {o.cliente || o.codiceClienteTs || "(cliente sconosciuto)"}
+                        </div>
+                        <div style={{ color: "#617086", fontSize: 13, marginTop: 2 }}>
+                          TS {o.tsSerie ? `${o.tsSerie}/` : ""}{o.tsNumero}
+                          {o.dataOrdine ? ` · ${String(o.dataOrdine).slice(0, 10)}` : ""}
+                          {` · ${o.righe.length} ${o.righe.length === 1 ? "riga" : "righe"}`}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        {importato && (
+                          <span style={{ background: "#dcfce7", color: "#166534", padding: "6px 12px", borderRadius: 999, fontWeight: 700, fontSize: 13 }}>
+                            Gia importato
+                          </span>
+                        )}
+                        {ignorato && (
+                          <span style={{ background: "#f1f5f9", color: "#64748b", padding: "6px 12px", borderRadius: 999, fontWeight: 700, fontSize: 13 }}>
+                            Ignorato
+                          </span>
+                        )}
+                        {!importato && !ignorato && (
+                          <>
+                            <button style={{ ...btnStyle("soft"), borderRadius: 999 }} onClick={() => ignoreTsOrder(o.tsId)}>
+                              Ignora
+                            </button>
+                            <button style={{ ...btnStyle("primary"), borderRadius: 999 }} onClick={() => importTsOrder(o.tsId)}>
+                              Importa
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {o.righe.length > 0 && (
+                      <div style={{ marginTop: 12, display: "grid", gap: 4 }}>
+                        {o.righe.map((r, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#334155", borderTop: "1px solid #eef2f7", paddingTop: 4 }}>
+                            <span>{r.descrizione || r.idProdotto}</span>
+                            <span style={{ fontWeight: 700 }}>{r.quantita}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
