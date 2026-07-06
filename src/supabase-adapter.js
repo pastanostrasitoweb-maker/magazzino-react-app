@@ -196,6 +196,59 @@ async function archivePreparedOrders() {
   return { success: true, archiviati: toArchive.length };
 }
 
+const OUTSIDE_STOCK_LOT = "FUORI_MAGAZZINO";
+
+// Righe "fuori magazzino" / articoli liberi: non hanno un lotto reale ne'
+// giacenza. L'assegnazione serve solo a marcare la riga come evasa, cosi'
+// l'ordine si puo' chiudere anche senza trovare un lotto. Non passa dalla
+// rpc assegna_lotto (che pretende il lotto e movimenta il magazzino):
+// scrive direttamente l'assegnazione e aggiorna il totale sulla riga.
+async function assignOutsideStock({ idRiga, idProdotto, quantita, operatore }) {
+  // Idempotente come la rpc: una sola assegnazione fuori magazzino per riga.
+  const { data: esist } = await supabase
+    .from("assegnazioni_lotti")
+    .select("id_assegnazione")
+    .eq("id_riga", String(idRiga))
+    .eq("id_lotto", OUTSIDE_STOCK_LOT)
+    .maybeSingle();
+
+  const row = {
+    id_riga: String(idRiga),
+    id_lotto: OUTSIDE_STOCK_LOT,
+    id_prodotto: String(idProdotto || ""),
+    codice_lotto: OUTSIDE_STOCK_LOT,
+    lotto: OUTSIDE_STOCK_LOT,
+    quantita_assegnata: quantita,
+    data_ora: new Date().toISOString(),
+    operatore: String(operatore || ""),
+  };
+
+  let result;
+  if (esist) {
+    result = await supabase
+      .from("assegnazioni_lotti")
+      .update(row)
+      .eq("id_assegnazione", esist.id_assegnazione)
+      .select()
+      .maybeSingle();
+  } else {
+    row.id_assegnazione = `ASS-${Date.now()}`;
+    result = await supabase.from("assegnazioni_lotti").insert(row).select().maybeSingle();
+  }
+  if (result.error) return failure(result.error);
+
+  // Aggiorna quantita_assegnata sulla riga = somma delle assegnazioni.
+  const { data: sommaRows } = await supabase
+    .from("assegnazioni_lotti")
+    .select("quantita_assegnata")
+    .eq("id_riga", String(idRiga));
+  const somma = (sommaRows || []).reduce((s, r) => s + Number(r.quantita_assegnata || 0), 0);
+  await supabase.from("righe_ordine").update({ quantita_assegnata: somma }).eq("id_riga", String(idRiga));
+
+  const data = result.data;
+  return { success: true, assignmentId: data?.id_assegnazione || null, row: data };
+}
+
 async function assignLot(params) {
   const p = parsePayload(params);
   const idRiga = p.lineId || p.idRiga || p.ID_Riga;
@@ -206,6 +259,15 @@ async function assignLot(params) {
 
   if (!idRiga || !idLotto || !quantita) {
     return { success: false, error: "Parametri mancanti per assignLot" };
+  }
+
+  // Fuori magazzino / articolo libero: nessun lotto reale, nessuna rpc.
+  const idProdotto = p.productId || p.idProdotto || p.ID_Prodotto || "";
+  const isOutside =
+    String(idLotto) === OUTSIDE_STOCK_LOT ||
+    String(idProdotto).startsWith(OUTSIDE_STOCK_LOT);
+  if (isOutside) {
+    return await assignOutsideStock({ idRiga, idProdotto, quantita, operatore });
   }
 
   // Sempre via rpc (atomica, con lock del lotto). allowNegative passa il flag
