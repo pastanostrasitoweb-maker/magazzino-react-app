@@ -197,27 +197,31 @@ async function archivePreparedOrders() {
 }
 
 const OUTSIDE_STOCK_LOT = "FUORI_MAGAZZINO";
+// Codici HORECA senza lotto: articolo di magazzino movimentato senza lotto.
+// Come il fuori magazzino non passa dalla rpc (non c'e' un lotto reale), ma
+// conserva il productId reale perche' resta un articolo di magazzino.
+const NO_LOT_MARK = "SENZA_LOTTO";
 
-// Righe "fuori magazzino" / articoli liberi: non hanno un lotto reale ne'
-// giacenza. L'assegnazione serve solo a marcare la riga come evasa, cosi'
-// l'ordine si puo' chiudere anche senza trovare un lotto. Non passa dalla
-// rpc assegna_lotto (che pretende il lotto e movimenta il magazzino):
-// scrive direttamente l'assegnazione e aggiorna il totale sulla riga.
-async function assignOutsideStock({ idRiga, idProdotto, quantita, operatore }) {
-  // Idempotente come la rpc: una sola assegnazione fuori magazzino per riga.
+// Righe senza lotto reale (fuori magazzino / articolo libero, oppure codice
+// HORECA senza lotto). Non hanno un lotto reale su cui movimentare: l'assegna-
+// zione marca la riga come evasa cosi' l'ordine si puo' chiudere. Non passa
+// dalla rpc assegna_lotto (che pretende il lotto): scrive direttamente
+// l'assegnazione e aggiorna il totale sulla riga.
+async function assignOutsideStock({ idRiga, idProdotto, quantita, operatore, lotMark = OUTSIDE_STOCK_LOT }) {
+  // Idempotente come la rpc: una sola assegnazione senza lotto per riga.
   const { data: esist } = await supabase
     .from("assegnazioni_lotti")
     .select("id_assegnazione")
     .eq("id_riga", String(idRiga))
-    .eq("id_lotto", OUTSIDE_STOCK_LOT)
+    .eq("id_lotto", lotMark)
     .maybeSingle();
 
   const row = {
     id_riga: String(idRiga),
-    id_lotto: OUTSIDE_STOCK_LOT,
+    id_lotto: lotMark,
     id_prodotto: String(idProdotto || ""),
-    codice_lotto: OUTSIDE_STOCK_LOT,
-    lotto: OUTSIDE_STOCK_LOT,
+    codice_lotto: lotMark,
+    lotto: lotMark,
     quantita_assegnata: quantita,
     data_ora: new Date().toISOString(),
     operatore: String(operatore || ""),
@@ -261,13 +265,21 @@ async function assignLot(params) {
     return { success: false, error: "Parametri mancanti per assignLot" };
   }
 
-  // Fuori magazzino / articolo libero: nessun lotto reale, nessuna rpc.
+  // Senza lotto reale, nessuna rpc: fuori magazzino/articolo libero, oppure
+  // codice HORECA movimentato senza lotto.
   const idProdotto = p.productId || p.idProdotto || p.ID_Prodotto || "";
   const isOutside =
     String(idLotto) === OUTSIDE_STOCK_LOT ||
     String(idProdotto).startsWith(OUTSIDE_STOCK_LOT);
-  if (isOutside) {
-    return await assignOutsideStock({ idRiga, idProdotto, quantita, operatore });
+  const isNoLot = String(idLotto) === NO_LOT_MARK;
+  if (isOutside || isNoLot) {
+    return await assignOutsideStock({
+      idRiga,
+      idProdotto,
+      quantita,
+      operatore,
+      lotMark: isNoLot ? NO_LOT_MARK : OUTSIDE_STOCK_LOT,
+    });
   }
 
   // Sempre via rpc (atomica, con lock del lotto). allowNegative passa il flag

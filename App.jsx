@@ -235,6 +235,17 @@ function isOutsideStockLine(line) {
   );
 }
 
+// Codici a lotto FACOLTATIVO (HORECA, BIS): articoli di magazzino a tutti gli
+// effetti (giacenza, impegnato, disponibile) ma senza obbligo di lotto. Se c'e'
+// un lotto lo si usa; altrimenti si movimenta il codice articolo senza lotto.
+// (Richiesta Luca.)
+const LOT_OPTIONAL_PREFIXES = ["HORECA", "BIS"];
+
+function isLotOptionalProduct(product) {
+  const key = String(product?.code || product?.id || "").trim().toUpperCase();
+  return LOT_OPTIONAL_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
 function miniStatStyle(tone = "neutral") {
   const variants = {
     neutral: { background: "#f3f6fb", color: "#0f172a", border: "1px solid #dce4f0" },
@@ -1135,11 +1146,14 @@ export default function App() {
       const lines = (order.lines || []).map((line) => {
         const product = products.find((item) => String(item.id) === String(line.productId));
         const outsideStock = isOutsideStockLine(line);
+        const lotOptional = isLotOptionalProduct(product);
         // Sempre selettore lotti per le righe di magazzino. Anche i prodotti
         // a "disponibilita' generica" hanno il loro lotto DISPONIBILITA da
         // scegliere esplicitamente: cosi' su TUTTI gli ordini Luca puo' vedere
-        // e selezionare il lotto. Solo le righe fuori magazzino sono escluse.
-        const requiresLots = !outsideStock;
+        // e selezionare il lotto. Escluse le righe fuori magazzino e i codici
+        // a lotto facoltativo (HORECA, BIS): se c'e' un lotto lo si usa,
+        // altrimenti si movimenta senza lotto.
+        const requiresLots = !outsideStock && !lotOptional;
 
         const assignedFromAssignments = (assignments[line.lineId] || []).reduce(
           (sum, assignment) => sum + assignment.qty,
@@ -1150,7 +1164,7 @@ export default function App() {
 
         const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
 
-        return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock };
+        return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock, lotOptional };
       });
 
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
@@ -1629,7 +1643,10 @@ export default function App() {
     let lotId = "";
     let lotCode = "";
 
-    if (requiresLots) {
+    if (form.lotId) {
+      // Un lotto e' stato scelto: usalo (vale anche per gli HORECA, "se
+      // presente il lotto bene"). Quando requiresLots e' true il lotto e' gia'
+      // obbligatorio (return sopra se manca).
       selectedLot = lots.find((lot) => String(lot.id) === String(form.lotId));
 
       if (!selectedLot) {
@@ -1659,6 +1676,13 @@ export default function App() {
       if (isOutsideStockLine(line)) {
         lotId = "FUORI_MAGAZZINO";
         lotCode = "FUORI_MAGAZZINO";
+      } else if (line.lotOptional) {
+        // Codice a lotto facoltativo (HORECA, BIS) senza lotto selezionato:
+        // movimento il codice articolo senza lotto. L'assegnazione tiene il
+        // productId reale (resta un articolo di magazzino), non passa dalla
+        // rpc assegna_lotto.
+        lotId = "SENZA_LOTTO";
+        lotCode = "SENZA_LOTTO";
       } else {
         const genericLots = activeLots
           .filter(
@@ -4281,7 +4305,7 @@ export default function App() {
                                     </div>
                                   ) : null}
                                 </div>
-                              ) : !line.requiresLots ? (
+                              ) : !line.requiresLots && !line.lotOptional ? (
                                 <div
                                   style={{
                                     display: "grid",
@@ -4303,6 +4327,66 @@ export default function App() {
                                     {isOutsideStockLine(line)
                                       ? "Fuori magazzino"
                                       : "Lotto DISPONIBILITA"}
+                                  </div>
+
+                                  <input
+                                    style={{ ...compactInputStyle(), minWidth: 0 }}
+                                    type="number"
+                                    min="1"
+                                    value={form.qty}
+                                    onChange={(event) =>
+                                      updateInlineAssignmentForm(
+                                        line.lineId,
+                                        "qty",
+                                        event.target.value
+                                      )
+                                    }
+                                    placeholder="Qtà"
+                                  />
+
+                                  <button
+                                    style={{
+                                      ...compactBtnStyle("primary", savingThisLine),
+                                      minWidth: 0,
+                                      width: "100%",
+                                    }}
+                                    disabled={savingThisLine}
+                                    onClick={() => confirmInlineAssignment(line)}
+                                  >
+                                    {savingThisLine ? "Salvo..." : "Assegna"}
+                                  </button>
+
+                                  <button
+                                    style={{
+                                      ...compactBtnStyle("outline"),
+                                      minWidth: 0,
+                                      width: "100%",
+                                    }}
+                                    onClick={() => deleteLine(selectedOrder.id, line.lineId)}
+                                  >
+                                    <Trash2 size={15} /> Riga
+                                  </button>
+                                </div>
+                              ) : availableLots.length === 0 && line.lotOptional ? (
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: isIPadLayout ? "1fr" : "minmax(0, 1fr) 76px 96px 92px",
+                                    gap: 8,
+                                    alignItems: "center",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      ...compactInputStyle(),
+                                      display: "flex",
+                                      alignItems: "center",
+                                      color: "#40516a",
+                                      fontWeight: 800,
+                                      minWidth: 0,
+                                    }}
+                                  >
+                                    Senza lotto
                                   </div>
 
                                   <input
@@ -4391,7 +4475,7 @@ export default function App() {
                                         handleInlineLotSelect(line, event.target.value)
                                       }
                                     >
-                                      <option value="">Lotto</option>
+                                      <option value="">{line.lotOptional ? "Senza lotto" : "Lotto"}</option>
                                       {availableLots.map((lot) => {
                                         const info = lotAssignedMap[String(lot.id)] || {};
                                         const disp = Number(info.assignable ?? 0);
