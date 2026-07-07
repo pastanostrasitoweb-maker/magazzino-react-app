@@ -369,6 +369,16 @@ function normalizeOrders(rows) {
     .filter((order) => order.id);
 }
 
+// Timestamp di caricamento dell'ordine, per l'ordinamento cronologico. L'ora
+// precisa vive nell'ID (ORD-<ms>); il campo date e' solo la data. Uso il primo
+// blocco di 10+ cifre nell'ID come millisecondi; fallback sulla data.
+function orderLoadTs(order) {
+  const match = String(order?.id || "").match(/(\d{10,})/);
+  if (match) return Number(match[1]);
+  const parsed = Date.parse(String(order?.date || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function normalizeClients(rows) {
   return (rows || [])
     .map((row) => ({
@@ -1212,23 +1222,9 @@ export default function App() {
       .filter((order) => !order.archived)
       .filter((order) => String(order.computedStatus) !== "Fermo")
       .filter((order) => String(order.computedStatus) !== "Preparato")
-      .sort((a, b) => {
-        const rankOrder = (order) => {
-          const work = String(order.workStatus || "").trim().toLowerCase();
-          if (work === "nuovo") return 0;
-          if (order.totalToAssign > 0) return 1;
-          return 2;
-        };
-
-        const rankDiff = rankOrder(a) - rankOrder(b);
-        if (rankDiff !== 0) return rankDiff;
-
-        const aOpen = a.totalToAssign > 0 ? 0 : 1;
-        const bOpen = b.totalToAssign > 0 ? 0 : 1;
-        if (aOpen !== bOpen) return aOpen - bOpen;
-
-        return String(b.date || "").localeCompare(String(a.date || ""));
-      });
+      // Sempre in ordine cronologico di caricamento: i piu' recenti in cima.
+      // (Richiesta Luca.)
+      .sort((a, b) => orderLoadTs(b) - orderLoadTs(a));
 
     if (!q) return visibleOrders;
 
