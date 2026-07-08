@@ -1193,8 +1193,12 @@ export default function App() {
 
       const explicitStatus = String(order.status || "").trim();
       const explicitStatusLower = explicitStatus.toLowerCase();
+      const workStatusLower = String(order.workStatus || "").trim().toLowerCase();
+      // "Fermo" anche se solo stato_lavorazione='Fermato' (ordini messi in fermo
+      // prima del fix che scriveva solo stato_lavorazione): cosi' non tornano
+      // tra gli ordini da preparare al refresh.
       const computedStatus =
-        explicitStatusLower === "fermo"
+        explicitStatusLower === "fermo" || workStatusLower === "fermato"
           ? "Fermo"
           : explicitStatusLower === "preparato"
             ? "Preparato"

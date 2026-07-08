@@ -387,9 +387,13 @@ async function archiveOrder(params) {
 async function markOrderStopped(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
+  // Lo stato "Fermo" e' derivato dalla colonna stato (il frontend guarda
+  // stato === 'fermo'). Va scritto anche stato, non solo stato_lavorazione,
+  // altrimenti al refresh l'ordine ricarica come "Da preparare" e ricompare
+  // tra gli ordini da evadere.
   const { error } = await supabase
     .from("ordini")
-    .update({ stato_lavorazione: "Fermato" })
+    .update({ stato: "Fermo", stato_lavorazione: "Fermato" })
     .eq("id_ordine", String(idOrdine));
   if (error) return failure(error);
   return { success: true };
