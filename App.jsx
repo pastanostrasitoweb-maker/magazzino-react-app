@@ -877,6 +877,9 @@ export default function App() {
 
   const isIPadLayout = windowWidth <= 1100;
   const isSmallLayout = windowWidth <= 760;
+  // Con la lista ordini affiancata, la colonna dettaglio e' stretta: la riga
+  // ordine a 3 colonne (min ~724px) entra solo su desktop ampio. Sotto, impila.
+  const isOrderRowWide = windowWidth > 1200;
 
   const responsiveTwoColumns = isSmallLayout
     ? "1fr"
@@ -4166,9 +4169,9 @@ export default function App() {
                           <div
                             style={{
                               display: "grid",
-                              gridTemplateColumns: isSmallLayout
-                                ? "1fr"
-                                : "minmax(220px, 1.1fr) 180px minmax(300px, 1.4fr)",
+                              gridTemplateColumns: isOrderRowWide
+                                ? "minmax(220px, 1.1fr) 180px minmax(300px, 1.4fr)"
+                                : "1fr",
                               gap: 12,
                               alignItems: "center",
                             }}
