@@ -878,7 +878,11 @@ export default function App() {
   const isIPadLayout = windowWidth <= 1100;
   const isSmallLayout = windowWidth <= 760;
 
-  const responsiveTwoColumns = isIPadLayout ? "1fr" : "360px minmax(0, 1fr)";
+  const responsiveTwoColumns = isSmallLayout
+    ? "1fr"
+    : isIPadLayout
+      ? "300px minmax(0, 1fr)"
+      : "360px minmax(0, 1fr)";
   const responsiveOrderDetailColumns = isIPadLayout ? "1fr" : "1.1fr 0.9fr";
   const responsiveProductColumns = isIPadLayout ? "1fr" : "repeat(2, minmax(0, 1fr))";
   const responsiveOrderLineColumns = isSmallLayout ? "1fr" : "1fr 140px 110px";
@@ -3962,7 +3966,21 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20 }}>
+            <div
+              style={{
+                ...cardStyle(),
+                padding: isSmallLayout ? 16 : 20,
+                ...(isSmallLayout
+                  ? {}
+                  : {
+                      position: "sticky",
+                      top: 12,
+                      alignSelf: "start",
+                      maxHeight: "calc(100vh - 24px)",
+                      overflowY: "auto",
+                    }),
+              }}
+            >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 24, fontWeight: 950, color: "#07153a", letterSpacing: "-0.02em" }}>
                   Preparazione ordine
@@ -3990,9 +4008,10 @@ export default function App() {
                         justifyContent: "space-between",
                         gap: 12,
                         alignItems: "flex-start",
+                        flexWrap: "wrap",
                       }}
                     >
-                      <div>
+                      <div style={{ flex: "1 1 240px", minWidth: 0 }}>
                         <div style={{ fontSize: isSmallLayout ? 24 : 30, fontWeight: 950, color: "#07153a", overflowWrap: "anywhere" }}>
                           {selectedOrder.customer || "Ordine senza nome"}
                         </div>
