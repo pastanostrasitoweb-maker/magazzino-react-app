@@ -3969,21 +3969,7 @@ export default function App() {
               </div>
             </div>
 
-            <div
-              style={{
-                ...cardStyle(),
-                padding: isSmallLayout ? 16 : 20,
-                ...(isSmallLayout
-                  ? {}
-                  : {
-                      position: "sticky",
-                      top: 12,
-                      alignSelf: "start",
-                      maxHeight: "calc(100vh - 24px)",
-                      overflowY: "auto",
-                    }),
-              }}
-            >
+            <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20, alignSelf: "start" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 24, fontWeight: 950, color: "#07153a", letterSpacing: "-0.02em" }}>
                   Preparazione ordine
