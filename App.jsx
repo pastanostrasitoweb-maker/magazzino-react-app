@@ -1103,18 +1103,6 @@ export default function App() {
       });
   }, [lots, products, lotAssignedMap]);
 
-  const filteredMagazzinoRows = useMemo(() => {
-    const q = magazzinoSearch.trim().toLowerCase();
-    if (!q) return magazzinoRows;
-    return magazzinoRows.filter(
-      (row) =>
-        row.productName.toLowerCase().includes(q) ||
-        row.productCode.toLowerCase().includes(q) ||
-        row.lotCode.toLowerCase().includes(q) ||
-        row.category.toLowerCase().includes(q)
-    );
-  }, [magazzinoRows, magazzinoSearch]);
-
   // Raggruppa per prodotto: 1 header con totali + righe lotto sotto.
   // L'IMPEGNATO del PRODOTTO e' la somma delle qtyOrdered su righe in ordini
   // non preparati (productCommittedMap), indipendentemente da quanto e' gia'
@@ -1124,7 +1112,25 @@ export default function App() {
   // ordinati piu' pezzi di quanti ce ne sono fisicamente: utile per accorgersene).
   const magazzinoGrouped = useMemo(() => {
     const groups = new Map();
-    for (const row of filteredMagazzinoRows) {
+    // 1. Semina un gruppo per OGNI prodotto a catalogo, cosi' anche i prodotti
+    //    a giacenza 0 (senza lotti) restano visibili: si vede l'impegnato e,
+    //    con la disponibile negativa, quanto bisogna produrre. (Richiesta Luca.)
+    for (const product of products) {
+      const key = String(product.id);
+      groups.set(key, {
+        productId: String(product.id),
+        productName: product.name || "(senza nome)",
+        productCode: product.code || "",
+        category: product.category || "",
+        lots: [],
+        totalLoaded: 0,
+        totalCommitted: 0, // ricalcolato da productCommittedMap dopo
+        totalAvailable: 0,
+      });
+    }
+    // 2. Attacca i lotti attivi (non esauriti) al gruppo del prodotto. Se un
+    //    lotto punta a un prodotto non piu' a catalogo, crea comunque un gruppo.
+    for (const row of magazzinoRows) {
       const key = row.productId || row.productCode || row.productName;
       if (!groups.has(key)) {
         groups.set(key, {
@@ -1134,7 +1140,7 @@ export default function App() {
           category: row.category,
           lots: [],
           totalLoaded: 0,
-          totalCommitted: 0, // ricalcolato da productCommittedMap dopo
+          totalCommitted: 0,
           totalAvailable: 0,
         });
       }
@@ -1142,7 +1148,7 @@ export default function App() {
       g.lots.push(row);
       g.totalLoaded += Number(row.loaded || 0);
     }
-    // Ricalcolo totalCommitted e totalAvailable usando productCommittedMap.
+    // 3. Ricalcolo totalCommitted e totalAvailable usando productCommittedMap.
     const out = [...groups.values()].map((g) => {
       const productCommitted = Number(productCommittedMap[String(g.productId)] || 0);
       return {
@@ -1156,7 +1162,21 @@ export default function App() {
       if (byCat !== 0) return byCat;
       return a.productName.localeCompare(b.productName);
     });
-  }, [filteredMagazzinoRows, productCommittedMap]);
+  }, [products, magazzinoRows, productCommittedMap]);
+
+  // Ricerca a livello di prodotto: filtra i gruppi (referenza, codice,
+  // categoria) o per codice lotto tra i lotti del prodotto.
+  const filteredMagazzinoGrouped = useMemo(() => {
+    const q = magazzinoSearch.trim().toLowerCase();
+    if (!q) return magazzinoGrouped;
+    return magazzinoGrouped.filter(
+      (g) =>
+        g.productName.toLowerCase().includes(q) ||
+        g.productCode.toLowerCase().includes(q) ||
+        (g.category || "").toLowerCase().includes(q) ||
+        g.lots.some((l) => l.lotCode.toLowerCase().includes(q))
+    );
+  }, [magazzinoGrouped, magazzinoSearch]);
 
   const ordersWithComputed = useMemo(() => {
     return orders.map((order) => {
@@ -5122,7 +5142,7 @@ export default function App() {
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 22, fontWeight: 800 }}>Magazzino a prima vista</div>
               <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
-                Raggruppato per prodotto: totale complessivo + dettaglio per ciascun lotto.
+                Tutti i prodotti a catalogo, anche a giacenza 0: totale complessivo + dettaglio per ciascun lotto. Disponibile negativa = da produrre.
               </div>
             </div>
 
@@ -5139,9 +5159,9 @@ export default function App() {
               />
             </div>
 
-            {filteredMagazzinoRows.length === 0 ? (
+            {filteredMagazzinoGrouped.length === 0 ? (
               <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 18, color: "#b45309" }}>
-                Nessun lotto trovato.
+                Nessun prodotto trovato.
               </div>
             ) : (
               <div style={{ display: "grid", gap: 0, border: "1px solid #e7ecf3", borderRadius: 12, overflow: "hidden" }}>
@@ -5167,14 +5187,14 @@ export default function App() {
                   </div>
                 )}
 
-                {magazzinoGrouped.map((group, gIndex) => {
+                {filteredMagazzinoGrouped.map((group, gIndex) => {
                   // Header categoria: appare solo quando la categoria cambia
                   // rispetto al gruppo precedente. Counter dei prodotti nella
                   // categoria mostrato a fianco.
-                  const prevCategory = gIndex > 0 ? (magazzinoGrouped[gIndex - 1].category || "Senza categoria") : null;
+                  const prevCategory = gIndex > 0 ? (filteredMagazzinoGrouped[gIndex - 1].category || "Senza categoria") : null;
                   const currentCategory = group.category || "Senza categoria";
                   const showCategoryHeader = prevCategory !== currentCategory;
-                  const productsInCategory = magazzinoGrouped.filter(
+                  const productsInCategory = filteredMagazzinoGrouped.filter(
                     (g) => (g.category || "Senza categoria") === currentCategory
                   ).length;
                   return (
@@ -5297,9 +5317,9 @@ export default function App() {
             )}
 
             <div style={{ marginTop: 14, color: "#617086", fontSize: 13 }}>
-              {magazzinoGrouped.length} {magazzinoGrouped.length === 1 ? "prodotto" : "prodotti"} ·{" "}
-              {filteredMagazzinoRows.length} lotti · Disponibili totali{" "}
-              {magazzinoGrouped.reduce((sum, g) => sum + g.totalAvailable, 0)}
+              {filteredMagazzinoGrouped.length} {filteredMagazzinoGrouped.length === 1 ? "prodotto" : "prodotti"} ·{" "}
+              {filteredMagazzinoGrouped.reduce((sum, g) => sum + g.lots.length, 0)} lotti · Disponibili totali{" "}
+              {filteredMagazzinoGrouped.reduce((sum, g) => sum + g.totalAvailable, 0)}
             </div>
           </div>
         )}
