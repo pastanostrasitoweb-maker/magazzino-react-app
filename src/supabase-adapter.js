@@ -668,6 +668,44 @@ async function createLot(params) {
     }
   }
 
+  // ANTI-DUPLICATO (choke point per TUTTI i chiamanti: carico manuale, on-fly,
+  // ecc.): se esiste gia' un lotto NON archiviato con stesso prodotto e stesso
+  // codice (case-insensitive), non creare un doppione. Accumula la quantita'
+  // sul lotto esistente e restituisci il suo id. Cosi' "reinserire" un lotto
+  // gia' presente non genera piu' righe doppie.
+  const codeKey = String(codiceLotto).trim().toLowerCase();
+  if (codeKey && idProdotto) {
+    const existR = await supabase
+      .from("lotti")
+      .select("id_lotto, codice_lotto, quantita_caricata, scadenza")
+      .eq("id_prodotto", String(idProdotto))
+      .eq("archiviato", false);
+    if (existR.error) return failure(existR.error);
+    const match = (existR.data || []).find(
+      (l) => String(l.codice_lotto || "").trim().toLowerCase() === codeKey
+    );
+    if (match) {
+      const newTotal = Number(match.quantita_caricata || 0) + qty;
+      const patch = { quantita_caricata: newTotal };
+      if (scadenza) patch.scadenza = scadenza;
+      const upd = await supabase
+        .from("lotti")
+        .update(patch)
+        .eq("id_lotto", String(match.id_lotto))
+        .select()
+        .maybeSingle();
+      if (upd.error) return failure(upd.error);
+      return {
+        success: true,
+        idLotto: String(match.id_lotto),
+        lotId: String(match.id_lotto),
+        lotCode: match.codice_lotto || codiceLotto,
+        newQty: newTotal,
+        reused: true,
+      };
+    }
+  }
+
   const { data, error } = await supabase
     .from("lotti")
     .insert({

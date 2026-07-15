@@ -3490,7 +3490,7 @@ export default function App() {
 
     setLots((prev) =>
       prev.map((lot) =>
-        String(lot.id) === String(editingLotId) || String(lot.lot) === String(editingLotId)
+        String(lot.id) === String(editingLotId)
           ? {
               ...lot,
               lot: editingLotCode.trim() || lot.lot,
@@ -3618,13 +3618,9 @@ export default function App() {
         return;
       }
 
-      setLots((prev) =>
-        prev.filter(
-          (lot) =>
-            String(lot.id) !== String(lotIdToDelete) &&
-            String(lot.lot) !== String(lotCodeToDelete)
-        )
-      );
+      // Rimuovi SOLO il lotto eliminato, per id univoco. Mai per codice:
+      // piu' lotti possono condividere lo stesso codice e non vanno toccati.
+      setLots((prev) => prev.filter((lot) => String(lot.id) !== String(lotIdToDelete)));
     } catch (error) {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     }
