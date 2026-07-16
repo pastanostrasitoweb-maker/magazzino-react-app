@@ -17,6 +17,7 @@ import {
   Archive,
   RotateCcw,
   Users,
+  Smartphone,
 } from "lucide-react";
 
 // Storico: backend Apps Script (JSONP) usato fino al 2026-06-09, ora sostituito
@@ -714,6 +715,9 @@ function applyStockMovementsToLots(lots, movements = []) {
 export default function App() {
   const [page, setPage] = useState("ordini");
   const [orders, setOrders] = useState([]);
+  // Ordini da APP (staging degli ordini dell'app agenti, reparto separato).
+  const [ordiniApp, setOrdiniApp] = useState([]);
+  const [ordiniAppBusy, setOrdiniAppBusy] = useState("");
   const [lots, setLots] = useState([]);
   const [products, setProducts] = useState([]);
   const [clients, setClients] = useState([]);
@@ -936,6 +940,58 @@ export default function App() {
       setLoadingData(false);
     }
   };
+
+  // Carica gli ordini in arrivo dall'app agenti (reparto "Ordini da APP").
+  const loadOrdiniApp = async () => {
+    try {
+      const res = await callSheetsApi({ action: "getOrdiniDaApp" });
+      setOrdiniApp(res?.ordini || []);
+    } catch (_) {
+      setOrdiniApp([]);
+    }
+  };
+
+  // "Sposta in ordini": importa l'ordine da app nelle tabelle operative.
+  const spostaOrdineInOrdini = async (idApp) => {
+    setOrdiniAppBusy(idApp);
+    try {
+      const res = await callSheetsApi({
+        action: "spostaOrdineInOrdini",
+        payload: JSON.stringify({ idOrdine: idApp }),
+      });
+      if (!res?.success) {
+        alert("Spostamento non riuscito: " + (res?.error || "sconosciuto"));
+        return;
+      }
+      await loadOrdiniApp();
+      await loadDataFromSheets();
+      setPage("ordini");
+      setSelectedOrderId(res.idOrdine || "");
+    } finally {
+      setOrdiniAppBusy("");
+    }
+  };
+
+  const rifiutaOrdineApp = async (idApp) => {
+    const motivo = window.prompt("Motivo del rifiuto (opzionale):", "");
+    if (motivo === null) return;
+    setOrdiniAppBusy(idApp);
+    try {
+      await callSheetsApi({
+        action: "rifiutaOrdineApp",
+        payload: JSON.stringify({ idOrdine: idApp, motivo }),
+      });
+      await loadOrdiniApp();
+    } finally {
+      setOrdiniAppBusy("");
+    }
+  };
+
+  useEffect(() => {
+    loadOrdiniApp();
+    const t = setInterval(loadOrdiniApp, 60000); // aggiorna il reparto ogni minuto
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     loadDataFromSheets();
@@ -3724,6 +3780,30 @@ export default function App() {
 
               <button
                 style={{
+                  ...btnStyle(page === "ordini-app" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                  position: "relative",
+                }}
+                onClick={() => { setPage("ordini-app"); loadOrdiniApp(); }}
+              >
+                <Smartphone size={18} /> Ordini da APP
+                {ordiniApp.length > 0 && (
+                  <span
+                    style={{
+                      marginLeft: 6, background: "#dc2626", color: "#fff",
+                      borderRadius: 999, fontSize: 12, fontWeight: 800,
+                      minWidth: 20, height: 20, display: "inline-flex",
+                      alignItems: "center", justifyContent: "center", padding: "0 5px",
+                    }}
+                  >
+                    {ordiniApp.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                style={{
                   ...btnStyle(page === "prodotti" ? "primary" : "soft"),
                   borderRadius: 999,
                   minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
@@ -5316,6 +5396,106 @@ export default function App() {
               {filteredMagazzinoGrouped.length} {filteredMagazzinoGrouped.length === 1 ? "prodotto" : "prodotti"} ·{" "}
               {filteredMagazzinoGrouped.reduce((sum, g) => sum + g.lots.length, 0)} lotti · Disponibili totali{" "}
               {filteredMagazzinoGrouped.reduce((sum, g) => sum + g.totalAvailable, 0)}
+            </div>
+          </div>
+        )}
+
+        {page === "ordini-app" && (
+          <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 800 }}>Ordini da APP</div>
+                <div style={{ fontSize: 13, color: "#64748b" }}>
+                  Ordini in arrivo dall'app agenti. Controllali e premi "Sposta in ordini": da lì seguono il flusso normale.
+                </div>
+              </div>
+              <button style={btnStyle("outline")} onClick={loadOrdiniApp}>
+                <RefreshCw size={16} /> Aggiorna
+              </button>
+            </div>
+
+            {ordiniApp.length === 0 && (
+              <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
+                Nessun ordine da controllare.
+              </div>
+            )}
+
+            <div style={{ display: "grid", gap: 12 }}>
+              {ordiniApp.map((o) => {
+                const cli = o.cliente || {};
+                const righe = o.righe || [];
+                const totPezzi = righe.reduce((t, r) => t + Number(r.quantita_ordinata || 0), 0);
+                const busy = ordiniAppBusy === o.id_ordine;
+                return (
+                  <div key={o.id_ordine} style={{ ...cardStyle(), padding: 14, border: "1px solid #e2e8f0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 800, fontSize: 16 }}>
+                          {cli.nuovo && (
+                            <span style={{ background: "#fde68a", color: "#92400e", borderRadius: 6, fontSize: 11, fontWeight: 800, padding: "2px 6px", marginRight: 6 }}>
+                              NUOVO CLIENTE
+                            </span>
+                          )}
+                          {cli.ragione_sociale || o.cliente_id || "Cliente app"}
+                        </div>
+                        <div style={{ fontSize: 12.5, color: "#64748b", marginTop: 3 }}>
+                          {o.agente_nome} · {o.canale}
+                          {cli.citta ? ` · ${cli.citta}` : ""}
+                          {" · "}{new Date(o.creato_il).toLocaleDateString("it-IT")}
+                          {o.data_consegna ? ` · consegna ${new Date(o.data_consegna).toLocaleDateString("it-IT")}` : ""}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontWeight: 800 }}>{Number(o.totale || 0).toFixed(2)} €</div>
+                        <div style={{ fontSize: 12, color: "#64748b" }}>{righe.length} righe · {totPezzi} pz</div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 10, borderTop: "1px solid #f1f5f9", paddingTop: 8 }}>
+                      {righe.map((r, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "2px 0" }}>
+                          <span style={{ minWidth: 0 }}>
+                            {r.colli ? `${r.colli} crt · ` : ""}{r.quantita_ordinata} pz — {r.descrizione_prodotto}
+                            {r.promo && (r.sconto_pct === 100 ? <b style={{ color: "#16a34a" }}> · OMAGGIO</b> : <b style={{ color: "#16a34a" }}> · PROMO</b>)}
+                            {r.su_richiesta && <b style={{ color: "#dc2626" }}> · SU RICHIESTA</b>}
+                            {r.id_prodotto_magazzino == null && <span style={{ color: "#b45309" }}> · fuori magazzino</span>}
+                          </span>
+                        </div>
+                      ))}
+                      {(o.promozioni_applicate || []).length > 0 && (
+                        <div style={{ fontSize: 12.5, color: "#16a34a", marginTop: 4 }}>
+                          🎁 {(o.promozioni_applicate || []).map((p) => p.etichetta || p.nome).join(" · ")}
+                        </div>
+                      )}
+                      {cli.nuovo && (
+                        <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>
+                          🆕 Da registrare: {cli.ragione_sociale}{cli.partita_iva ? ` · P.IVA ${cli.partita_iva}` : ""}
+                          {cli.referente ? ` · Ref. ${cli.referente}` : ""}{cli.telefono ? ` · ${cli.telefono}` : ""}
+                          {cli.email ? ` · ${cli.email}` : ""}{cli.orari_consegna ? ` · consegne ${cli.orari_consegna}` : ""}
+                        </div>
+                      )}
+                      {o.note && <div style={{ fontSize: 12.5, color: "#64748b", marginTop: 6 }}>📝 {o.note}</div>}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                      <button
+                        style={btnStyle("primary", busy)}
+                        disabled={busy}
+                        onClick={() => spostaOrdineInOrdini(o.id_ordine)}
+                      >
+                        <RotateCcw size={16} /> {busy ? "Sposto…" : "Sposta in ordini"}
+                      </button>
+                      <button
+                        style={{ ...btnStyle("soft", busy), color: "#dc2626" }}
+                        disabled={busy}
+                        onClick={() => rifiutaOrdineApp(o.id_ordine)}
+                      >
+                        <Trash2 size={16} /> Rifiuta
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

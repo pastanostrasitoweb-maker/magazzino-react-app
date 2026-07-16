@@ -1175,6 +1175,99 @@ async function deleteCliente(params) {
 
 // ---------- public entry ----------
 
+// ============================================================
+// ORDINI DA APP (reparto staging degli ordini dell'app agenti)
+// ============================================================
+
+// Elenco degli ordini in arrivo dall'app agenti, ancora da controllare.
+// Se la tabella non esiste ancora, ritorna lista vuota (non rompe la UI).
+async function getOrdiniDaApp() {
+  const q = await supabase
+    .from("ordini_agenti")
+    .select("*")
+    .eq("stato", "Da controllare")
+    .order("creato_il", { ascending: false });
+  if (q.error) {
+    // 42P01 = tabella inesistente: reparto vuoto, nessun errore all'utente.
+    return { success: true, ordini: [] };
+  }
+  return { success: true, ordini: q.data || [] };
+}
+
+// "Sposta in ordini": crea l'ordine operativo (ordini + righe_ordine) dallo
+// staging e marca lo staging come Importato. Da qui segue il flusso normale.
+async function spostaOrdineInOrdini(params) {
+  const p = parsePayload(params);
+  const idApp = p.idOrdine || p.id_ordine || p.id;
+  if (!idApp) return { success: false, error: "id ordine mancante" };
+
+  const g = await supabase.from("ordini_agenti").select("*").eq("id_ordine", String(idApp)).maybeSingle();
+  if (g.error || !g.data) return { success: false, error: "ordine app non trovato" };
+  const src = g.data;
+  if (src.stato === "Importato") return { success: false, error: "ordine già spostato" };
+
+  const cli = src.cliente || {};
+  const nomeCliente = cli.ragione_sociale || src.cliente_id || "Cliente app";
+  // Numero ordine operativo: nuovo, distinto dall'id staging.
+  const idOrdine = `ORD-${Date.now()}`;
+
+  // Righe: già appiattite dall'app agenti (cartoni + promo + polybox).
+  const lines = (src.righe || []).map((r, i) => {
+    const magId = r.id_prodotto_magazzino;
+    const productId = magId != null && magId !== "" ? String(magId) : `FUORI_MAGAZZINO-${r.codice || i}`;
+    const marker = r.promo ? (r.sconto_pct === 100 ? " (OMAGGIO)" : " (PROMO)") : "";
+    const sr = r.su_richiesta ? " [SU RICHIESTA]" : "";
+    return {
+      lineId: `RIGA-${Date.now()}-${i}`,
+      productId,
+      productName: `${r.descrizione_prodotto || r.codice || ""}${marker}${sr}`,
+      qtyOrdered: Number(r.quantita_ordinata || 0),
+      rowOrder: i + 1,
+    };
+  });
+
+  const noteParts = [`Da APP · agente ${src.agente_nome || ""} · ${src.canale || ""}`];
+  if (src.note) noteParts.push(src.note);
+  if (src.data_consegna) noteParts.push(`consegna richiesta ${src.data_consegna}`);
+  if (cli.nuovo) noteParts.push(`NUOVO CLIENTE (P.IVA ${cli.partita_iva || "n/d"})`);
+
+  const created = await createOrder({
+    payload: JSON.stringify({
+      id: idOrdine,
+      customer: nomeCliente,
+      clienteId: src.cliente_id || "",
+      notes: noteParts.join(" · "),
+      date: src.creato_il || null,
+      status: "Da preparare",
+      workStatus: "Nuovo",
+      lines,
+    }),
+  });
+  if (!created?.success) return { success: false, error: created?.error || "errore creazione ordine" };
+
+  const upd = await supabase
+    .from("ordini_agenti")
+    .update({ stato: "Importato", id_ordine_magazzino: idOrdine, importato_il: new Date().toISOString() })
+    .eq("id_ordine", String(idApp));
+  if (upd.error) return { success: false, error: upd.error.message };
+
+  return { success: true, idOrdine, idApp: String(idApp) };
+}
+
+// Rifiuta un ordine da app senza importarlo (resta tracciato, non sparisce).
+async function rifiutaOrdineApp(params) {
+  const p = parsePayload(params);
+  const idApp = p.idOrdine || p.id_ordine || p.id;
+  const motivo = p.motivo || "";
+  if (!idApp) return { success: false, error: "id ordine mancante" };
+  const upd = await supabase
+    .from("ordini_agenti")
+    .update({ stato: "Annullato", note: motivo ? `RIFIUTATO: ${motivo}` : "RIFIUTATO dal magazzino" })
+    .eq("id_ordine", String(idApp));
+  if (upd.error) return { success: false, error: upd.error.message };
+  return { success: true };
+}
+
 export async function callSheetsApi(params = {}) {
   try {
     // Bulk load: nessuna action.
@@ -1234,6 +1327,12 @@ export async function callSheetsApi(params = {}) {
         return await updateCliente(params);
       case "deleteCliente":
         return await deleteCliente(params);
+      case "getOrdiniDaApp":
+        return await getOrdiniDaApp();
+      case "spostaOrdineInOrdini":
+        return await spostaOrdineInOrdini(params);
+      case "rifiutaOrdineApp":
+        return await rifiutaOrdineApp(params);
       default:
         return { success: false, error: `Azione non supportata: ${params.action}` };
     }
