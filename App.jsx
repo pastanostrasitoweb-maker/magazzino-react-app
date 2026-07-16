@@ -18,6 +18,8 @@ import {
   RotateCcw,
   Users,
   Smartphone,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 
 // Storico: backend Apps Script (JSONP) usato fino al 2026-06-09, ora sostituito
@@ -204,6 +206,15 @@ function badgeStyle(kind = "outline") {
 }
 
 
+// Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
+// vuoto = "Da verificare" (grigio).
+function paymentBadgeInfo(status) {
+  const s = String(status || "").trim().toLowerCase();
+  if (s === "ok") return { kind: "success", label: "Pagamento OK" };
+  if (s === "ko") return { kind: "danger", label: "Pagamento KO" };
+  return { kind: "outline", label: "Pagamento da verificare" };
+}
+
 function productCategoryLabel(product) {
   return [product?.category, product?.subcategory].filter(Boolean).join(" › ");
 }
@@ -358,6 +369,9 @@ function normalizeOrders(rows) {
       workStatus: String(
         getField(row, ["Stato_Lavorazione", "Stato lavorazione", "WorkStatus"]) || "In lavorazione"
       ),
+      paymentStatus: String(
+        getField(row, ["Stato_Pagamento", "Stato pagamento", "PaymentStatus"]) || ""
+      ).trim().toLowerCase(),
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
       colliManual: (() => {
         const raw = getField(row, ["Colli", "Numero_Colli", "Colli_Ordine"]);
@@ -766,6 +780,7 @@ export default function App() {
   const [savingEditedOrder, setSavingEditedOrder] = useState(false);
   const [colliDrafts, setColliDrafts] = useState({});
   const [savingColliOrderId, setSavingColliOrderId] = useState("");
+  const [savingPaymentOrderId, setSavingPaymentOrderId] = useState("");
 
   // Anagrafica clienti (gestione) + filtri picker ordine.
   const [clientDialogOpen, setClientDialogOpen] = useState(false);
@@ -2212,6 +2227,43 @@ export default function App() {
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
       setSavingColliOrderId("");
+    }
+  };
+
+  // Stato pagamento (flag manuale contabilità, solo Admin). Valori: "ok",
+  // "ko", "" (= da verificare). Cliccando lo stato gia' attivo lo si azzera
+  // (torna a "da verificare"). Campo predisposto per futura API dal gestionale.
+  const setOrderPayment = async (orderId, status) => {
+    if (!isAdmin || !orderId) return;
+
+    const current = orders.find((o) => String(o.id) === String(orderId))?.paymentStatus || "";
+    const next = current === status ? "" : status;
+
+    const previousOrders = orders;
+    setSavingPaymentOrderId(String(orderId));
+    setOrders((prev) =>
+      prev.map((order) =>
+        String(order.id) === String(orderId) ? { ...order, paymentStatus: next } : order
+      )
+    );
+
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId, paymentStatus: next }),
+      });
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+        alert(
+          "Errore nel salvataggio dello stato pagamento: " +
+            ((result && result.error) || "errore sconosciuto")
+        );
+      }
+    } catch (error) {
+      setOrders(previousOrders);
+      alert("Errore di collegamento con Google Sheet: " + String(error));
+    } finally {
+      setSavingPaymentOrderId("");
     }
   };
 
@@ -4054,6 +4106,9 @@ export default function App() {
                           <span style={badgeStyle("warning")}>NUOVO</span>
                         ) : null}
                         <span style={badgeStyle(order.totalToAssign > 0 ? "warning" : "success")}>{order.computedStatus}</span>
+                        <span style={badgeStyle(paymentBadgeInfo(order.paymentStatus).kind)}>
+                          {paymentBadgeInfo(order.paymentStatus).label}
+                        </span>
                       </div>
                     </div>
 
@@ -4103,6 +4158,38 @@ export default function App() {
 
                         <div style={{ marginTop: 6, color: "#66758b", fontSize: 13, overflowWrap: "anywhere" }}>
                           {fmtDate(selectedOrder.date)} · ID ordine {selectedOrder.id}
+                        </div>
+
+                        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          <span style={badgeStyle(paymentBadgeInfo(selectedOrder.paymentStatus).kind)}>
+                            {paymentBadgeInfo(selectedOrder.paymentStatus).label}
+                          </span>
+                          {isAdmin ? (
+                            <div style={{ display: "flex", gap: 8 }}>
+                              <button
+                                style={compactBtnStyle(
+                                  selectedOrder.paymentStatus === "ok" ? "success" : "outline",
+                                  savingPaymentOrderId === String(selectedOrder.id)
+                                )}
+                                disabled={savingPaymentOrderId === String(selectedOrder.id)}
+                                onClick={() => setOrderPayment(selectedOrder.id, "ok")}
+                                title="Segna pagamento OK"
+                              >
+                                <ThumbsUp size={16} /> OK
+                              </button>
+                              <button
+                                style={compactBtnStyle(
+                                  selectedOrder.paymentStatus === "ko" ? "danger" : "outline",
+                                  savingPaymentOrderId === String(selectedOrder.id)
+                                )}
+                                disabled={savingPaymentOrderId === String(selectedOrder.id)}
+                                onClick={() => setOrderPayment(selectedOrder.id, "ko")}
+                                title="Segna pagamento non ricevuto"
+                              >
+                                <ThumbsDown size={16} /> KO
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
 
                         {selectedOrder.notes ? (

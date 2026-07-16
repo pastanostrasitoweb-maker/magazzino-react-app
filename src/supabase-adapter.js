@@ -123,6 +123,7 @@ async function bulkLoad() {
     Archiviato: boolToSiNo(row.archiviato),
     Stato: row.stato ?? "Da preparare",
     Stato_Lavorazione: row.stato_lavorazione ?? "",
+    Stato_Pagamento: row.stato_pagamento ?? "",
     Data_Ordine: toIsoString(row.data_ordine),
     Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
   }));
@@ -334,6 +335,8 @@ async function updateOrder(params) {
   if (p.status !== undefined) patch.stato = p.status;
   if (p.stato_lavorazione !== undefined) patch.stato_lavorazione = p.stato_lavorazione;
   if (p.workStatus !== undefined) patch.stato_lavorazione = p.workStatus;
+  if (p.statoPagamento !== undefined) patch.stato_pagamento = p.statoPagamento || null;
+  if (p.paymentStatus !== undefined) patch.stato_pagamento = p.paymentStatus || null;
   if (p.corriere !== undefined) patch.corriere = p.corriere;
   if (p.ddt_numero !== undefined) patch.ddt_numero = p.ddt_numero;
 
