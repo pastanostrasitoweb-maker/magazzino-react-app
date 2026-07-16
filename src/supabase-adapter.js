@@ -1271,6 +1271,22 @@ async function rifiutaOrdineApp(params) {
   return { success: true };
 }
 
+// Login applicativo: restituisce l'utente (salt + hash) per username.
+// La verifica della password avviene lato client (App.jsx) con SHA-256.
+async function getAppUser(params) {
+  const p = parsePayload(params);
+  const username = String(p.username || "").trim().toLowerCase();
+  if (!username) return { success: false, error: "username mancante" };
+  const { data, error } = await supabase
+    .from("app_utenti")
+    .select("username, password_hash, salt, etichetta, attivo")
+    .eq("username", username)
+    .maybeSingle();
+  if (error) return failure(error);
+  if (!data || data.attivo === false) return { success: true, user: null };
+  return { success: true, user: data };
+}
+
 export async function callSheetsApi(params = {}) {
   try {
     // Bulk load: nessuna action.
@@ -1279,6 +1295,8 @@ export async function callSheetsApi(params = {}) {
     }
 
     switch (params.action) {
+      case "getAppUser":
+        return await getAppUser(params);
       case "archivePreparedOrders":
       case "archiveAllPreparedOrders":
         return await archivePreparedOrders();

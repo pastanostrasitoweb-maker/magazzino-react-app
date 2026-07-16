@@ -206,6 +206,13 @@ function badgeStyle(kind = "outline") {
 }
 
 
+// SHA-256 esadecimale (Web Crypto). Deve combaciare con genera-account.html:
+// hash = SHA-256(salt + ":" + password).
+async function sha256hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
 // vuoto = "Da verificare" (grigio).
 function paymentBadgeInfo(status) {
@@ -744,6 +751,20 @@ export default function App() {
   const [orderSearch, setOrderSearch] = useState("");
   const [magazzinoSearch, setMagazzinoSearch] = useState("");
   const [assignments, setAssignments] = useState({});
+  // Login applicativo: utente collegato (etichetta + username), persistito
+  // in localStorage finche' non si fa "Esci".
+  const [authUser, setAuthUser] = useState(() => {
+    try {
+      const raw = localStorage.getItem("magazzino_auth");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [savingPreparedOrderId, setSavingPreparedOrderId] = useState("");
@@ -2228,6 +2249,51 @@ export default function App() {
     } finally {
       setSavingColliOrderId("");
     }
+  };
+
+  const doLogin = async (event) => {
+    if (event && event.preventDefault) event.preventDefault();
+    const username = String(loginUsername || "").trim().toLowerCase();
+    const password = String(loginPassword || "");
+    if (!username || !password) {
+      setLoginError("Inserisci nome utente e password.");
+      return;
+    }
+    setLoggingIn(true);
+    setLoginError("");
+    try {
+      const res = await callSheetsApi({
+        action: "getAppUser",
+        payload: JSON.stringify({ username }),
+      });
+      const user = res && res.success ? res.user : null;
+      if (!user) {
+        setLoginError("Nome utente o password non validi.");
+        return;
+      }
+      const hash = await sha256hex(String(user.salt) + ":" + password);
+      if (hash !== String(user.password_hash)) {
+        setLoginError("Nome utente o password non validi.");
+        return;
+      }
+      const session = { username: user.username, etichetta: user.etichetta || user.username };
+      localStorage.setItem("magazzino_auth", JSON.stringify(session));
+      setAuthUser(session);
+      setLoginUsername("");
+      setLoginPassword("");
+    } catch (err) {
+      setLoginError("Errore di collegamento. Riprova.");
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  const doLogout = () => {
+    try {
+      localStorage.removeItem("magazzino_auth");
+    } catch {}
+    setAuthUser(null);
+    setIsAdmin(false);
   };
 
   // Stato pagamento (flag manuale contabilità, solo Admin). Valori: "ok",
@@ -3734,6 +3800,76 @@ export default function App() {
     }
   };
 
+  if (!authUser) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "linear-gradient(180deg, #eef3f9 0%, #f7f9fc 42%, #eef3f9 100%)",
+          fontFamily: "Arial, sans-serif",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 20,
+          boxSizing: "border-box",
+        }}
+      >
+        <form
+          onSubmit={doLogin}
+          style={{ ...cardStyle(), padding: 28, width: "100%", maxWidth: 380, display: "grid", gap: 14 }}
+        >
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 950, color: "#07153a", fontStyle: "italic" }}>
+              Gluten Free Experience Srl
+            </div>
+            <div style={{ marginTop: 4, color: "#617086", fontSize: 13, letterSpacing: 0.5, textTransform: "uppercase", fontWeight: 800 }}>
+              Gestione ordini · lotti · disponibilità
+            </div>
+          </div>
+
+          <div style={{ marginTop: 6 }}>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 800, color: "#40516a", marginBottom: 6 }}>
+              Nome utente
+            </label>
+            <input
+              style={inputStyle()}
+              value={loginUsername}
+              onChange={(e) => setLoginUsername(e.target.value)}
+              placeholder="es. produzione"
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="username"
+            />
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 800, color: "#40516a", marginBottom: 6 }}>
+              Password
+            </label>
+            <input
+              style={inputStyle()}
+              type="password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              placeholder="password"
+              autoComplete="current-password"
+            />
+          </div>
+
+          {loginError ? (
+            <div style={{ ...cardStyle({ background: "#fff1f2" }), padding: 10, color: "#991b1b", fontSize: 13, border: "1px solid #fecaca" }}>
+              {loginError}
+            </div>
+          ) : null}
+
+          <button type="submit" style={btnStyle("primary", loggingIn)} disabled={loggingIn}>
+            <Lock size={16} /> {loggingIn ? "Accesso..." : "Entra"}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -3797,9 +3933,19 @@ export default function App() {
               </div>
             </div>
 
-            <span style={badgeStyle(isAdmin ? "dark" : "outline")}>
-              {isAdmin ? "ADMIN" : "OPERATORE"}
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {authUser ? (
+                <span style={{ ...badgeStyle("outline"), display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Users size={14} /> {authUser.etichetta || authUser.username}
+                </span>
+              ) : null}
+              <span style={badgeStyle(isAdmin ? "dark" : "outline")}>
+                {isAdmin ? "ADMIN" : "OPERATORE"}
+              </span>
+              <button style={btnStyle("outline")} onClick={doLogout} title="Esci dall'account">
+                <Lock size={16} /> Esci
+              </button>
+            </div>
           </div>
 
           <div
