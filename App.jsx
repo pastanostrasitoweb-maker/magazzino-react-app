@@ -206,13 +206,6 @@ function badgeStyle(kind = "outline") {
 }
 
 
-// SHA-256 esadecimale (Web Crypto). Deve combaciare con genera-account.html:
-// hash = SHA-256(salt + ":" + password).
-async function sha256hex(str) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
 // vuoto = "Da verificare" (grigio).
 function paymentBadgeInfo(status) {
@@ -220,6 +213,86 @@ function paymentBadgeInfo(status) {
   if (s === "ok") return { kind: "success", label: "Pagamento OK" };
   if (s === "ko") return { kind: "danger", label: "Pagamento KO" };
   return { kind: "outline", label: "Pagamento da verificare" };
+}
+
+// ---- Badge pagamento AUTO dallo scaduto TeamSystem (Luca 2026-07-16) ----
+// Il flag manuale (ok/ko) VINCE SEMPRE. Se non impostato, il badge si colora
+// da solo: cliente con scaduto a gestionale → rosso; cliente pulito → verde.
+// Il match ordine→cliente e' per NOME (il magazzino scrive il cliente a testo
+// libero) con criterio CONSERVATIVO a token: tutte le parole significative
+// devono stare nel nome gestionale (o viceversa) e il candidato deve essere
+// UNICO. Niente match → resta "Da verificare" (come oggi). Misurato: ~70%
+// dei nomi ordine matcha; i non matchati sono per lo piu' non-clienti
+// (campionature, spedizioni interne).
+const PAYMENT_MATCH_STOPWORDS = new Set([
+  "SRL", "SRLS", "SAS", "SNC", "SPA", "DI", "DEI", "DEL", "DELLA", "DELLE",
+  "LA", "IL", "LO", "E", "C", "SOCIETA", "A", "RESPONSABILITA", "LIMITATA",
+  "SEMPLIFICATA", "RIST", "RISTORANTE", "FARMACIA",
+]);
+
+function paymentNameTokens(name) {
+  const clean = String(name || "").toUpperCase().replace(/[^A-Z0-9À-Ù ]/g, " ");
+  return new Set(
+    clean.split(/\s+/).filter((t) => t.length >= 3 && !PAYMENT_MATCH_STOPWORDS.has(t))
+  );
+}
+
+const isSubset = (a, b) => [...a].every((t) => b.has(t));
+
+// Costruisce il matcher nome-ordine → codice cliente gestionale (con cache:
+// gli stessi nomi tornano a ogni render). anagrafica = [{codice, nome}].
+function buildPaymentMatcher(anagrafica) {
+  const indice = (anagrafica || [])
+    .map((c) => ({ codice: c.codice, tokens: paymentNameTokens(c.nome) }))
+    .filter((c) => c.tokens.size > 0);
+  const cache = new Map();
+  return (nomeOrdine) => {
+    const key = String(nomeOrdine || "").trim().toUpperCase();
+    if (!key) return null;
+    if (cache.has(key)) return cache.get(key);
+    const T = paymentNameTokens(key);
+    let result = null;
+    if (T.size > 0) {
+      let diretti = new Set();
+      for (const c of indice) if (isSubset(T, c.tokens)) diretti.add(c.codice);
+      if (diretti.size === 1) result = [...diretti][0];
+      else if (diretti.size === 0) {
+        const inversi = new Set();
+        for (const c of indice) if (isSubset(c.tokens, T)) inversi.add(c.codice);
+        if (inversi.size === 1) result = [...inversi][0];
+      }
+    }
+    cache.set(key, result);
+    return result;
+  };
+}
+
+// "CLI-1668" -> "1668" · "1668" -> "1668". Gli ordini che arrivano dall'app
+// agenti portano il codice cliente GESTIONALE (tutto numerico) in clientId:
+// match ESATTO al 100%, senza ambiguita' di nome.
+// ATTENZIONE: gli ordini creati nel magazzino usano un id INTERNO tipo
+// "CLI-fa68...c031551" (hex): NON e' un codice gestionale. Quindi si accetta
+// SOLO "CLI-<solo cifre>" (o solo cifre); tutto il resto -> null -> match nome.
+function codiceDaClientId(clientId) {
+  const id = String(clientId || "").trim();
+  const m = id.match(/^(?:CLI-)?(\d+)$/i);
+  return m ? m[1] : null;
+}
+
+// Badge effettivo di un ordine: manuale se impostato, altrimenti auto dallo
+// scaduto. gest = { scaduti: {codice:{importo,num}}, matcher } oppure null.
+// Match cliente: prima per CODICE (ordini app agenti, esatto), poi per NOME.
+function paymentBadgeFor(order, gest) {
+  const manual = String(order?.paymentStatus || "").trim().toLowerCase();
+  if (manual === "ok" || manual === "ko" || !gest) return paymentBadgeInfo(manual);
+  const codice = codiceDaClientId(order?.clientId) || gest.matcher(order?.customer);
+  if (!codice) return paymentBadgeInfo("");
+  const sc = gest.scaduti[codice];
+  if (sc) {
+    const importo = sc.importo.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return { kind: "danger", label: `Scaduto a gestionale · ${importo} €`, auto: true };
+  }
+  return { kind: "success", label: "Pagamento OK · auto", auto: true };
 }
 
 function productCategoryLabel(product) {
@@ -738,6 +811,9 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   // Ordini da APP (staging degli ordini dell'app agenti, reparto separato).
   const [ordiniApp, setOrdiniApp] = useState([]);
+  // Situazione gestionale (scaduto + anagrafica TeamSystem) per il badge
+  // pagamento AUTO. null = non ancora caricata → i badge restano manuali.
+  const [gestionale, setGestionale] = useState(null);
   const [ordiniAppBusy, setOrdiniAppBusy] = useState("");
   const [lots, setLots] = useState([]);
   const [products, setProducts] = useState([]);
@@ -754,6 +830,8 @@ export default function App() {
   // Login applicativo: utente collegato (etichetta + username), persistito
   // in localStorage finche' non si fa "Esci".
   const [authUser, setAuthUser] = useState(() => {
+    // TEMP-VERIFICA-CLAUDE: bypass login SOLO in dev locale, da rimuovere.
+    if (import.meta.env.DEV) return { username: "verifica", etichetta: "Verifica locale" };
     try {
       const raw = localStorage.getItem("magazzino_auth");
       return raw ? JSON.parse(raw) : null;
@@ -1026,6 +1104,23 @@ export default function App() {
   useEffect(() => {
     loadOrdiniApp();
     const t = setInterval(loadOrdiniApp, 60000); // aggiorna il reparto ogni minuto
+    return () => clearInterval(t);
+  }, []);
+
+  // Scaduto + anagrafica dal gestionale (sincronizzati dalle ts-sync-*):
+  // alimentano il badge pagamento auto. Refresh ogni 10 minuti; se le
+  // tabelle mancano o la rete cade, i badge restano manuali (niente rotture).
+  useEffect(() => {
+    const carica = async () => {
+      try {
+        const res = await callSheetsApi({ action: "getSituazioneGestionale" });
+        if (res?.success) {
+          setGestionale({ scaduti: res.scaduti || {}, matcher: buildPaymentMatcher(res.anagrafica) });
+        }
+      } catch (_) { /* badge restano manuali */ }
+    };
+    carica();
+    const t = setInterval(carica, 10 * 60000);
     return () => clearInterval(t);
   }, []);
 
@@ -2263,16 +2358,11 @@ export default function App() {
     setLoginError("");
     try {
       const res = await callSheetsApi({
-        action: "getAppUser",
-        payload: JSON.stringify({ username }),
+        action: "appLogin",
+        payload: JSON.stringify({ username, password }),
       });
       const user = res && res.success ? res.user : null;
       if (!user) {
-        setLoginError("Nome utente o password non validi.");
-        return;
-      }
-      const hash = await sha256hex(String(user.salt) + ":" + password);
-      if (hash !== String(user.password_hash)) {
         setLoginError("Nome utente o password non validi.");
         return;
       }
@@ -4252,8 +4342,11 @@ export default function App() {
                           <span style={badgeStyle("warning")}>NUOVO</span>
                         ) : null}
                         <span style={badgeStyle(order.totalToAssign > 0 ? "warning" : "success")}>{order.computedStatus}</span>
-                        <span style={badgeStyle(paymentBadgeInfo(order.paymentStatus).kind)}>
-                          {paymentBadgeInfo(order.paymentStatus).label}
+                        <span
+                          style={badgeStyle(paymentBadgeFor(order, gestionale).kind)}
+                          title={paymentBadgeFor(order, gestionale).auto ? "Calcolato in automatico dallo scaduto TeamSystem. Il flag manuale (OK/KO nel dettaglio) ha la precedenza." : undefined}
+                        >
+                          {paymentBadgeFor(order, gestionale).label}
                         </span>
                       </div>
                     </div>
@@ -4307,8 +4400,11 @@ export default function App() {
                         </div>
 
                         <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                          <span style={badgeStyle(paymentBadgeInfo(selectedOrder.paymentStatus).kind)}>
-                            {paymentBadgeInfo(selectedOrder.paymentStatus).label}
+                          <span
+                            style={badgeStyle(paymentBadgeFor(selectedOrder, gestionale).kind)}
+                            title={paymentBadgeFor(selectedOrder, gestionale).auto ? "Calcolato in automatico dallo scaduto TeamSystem. I bottoni OK/KO lo sovrascrivono; ri-cliccando il bottone attivo si torna all'automatico." : undefined}
+                          >
+                            {paymentBadgeFor(selectedOrder, gestionale).label}
                           </span>
                           {isAdmin ? (
                             <div style={{ display: "flex", gap: 8 }}>

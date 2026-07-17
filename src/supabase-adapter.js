@@ -1182,6 +1182,43 @@ async function deleteCliente(params) {
 // ORDINI DA APP (reparto staging degli ordini dell'app agenti)
 // ============================================================
 
+// SITUAZIONE GESTIONALE (Luca 2026-07-16): scaduto per cliente + anagrafica
+// TeamSystem, sincronizzate dalle Edge Function ts-sync-* (~ogni 4h / notte).
+// Servono al badge pagamento AUTO degli ordini: il match ordine→cliente
+// avviene per nome (token) in App.jsx. clienti_gestionale supera le 1000
+// righe → paginato (PostgREST taglia a 1000 per richiesta).
+async function getSituazioneGestionale() {
+  const scaduti = {};
+  {
+    const { data, error } = await supabase
+      .from("clienti_scaduto")
+      .select("codice_cliente,importo_scaduto,num_scadute")
+      .eq("scaduto", true);
+    if (error) return { success: false, error: error.message };
+    for (const r of data || []) {
+      scaduti[String(r.codice_cliente)] = {
+        importo: Number(r.importo_scaduto) || 0,
+        num: Number(r.num_scadute) || 0,
+      };
+    }
+  }
+  const anagrafica = [];
+  const PAGE = 1000;
+  for (let from = 0; from < 20000; from += PAGE) {
+    const { data, error } = await supabase
+      .from("clienti_gestionale")
+      .select("codice_cliente,ragione_sociale")
+      .order("codice_cliente")
+      .range(from, from + PAGE - 1);
+    if (error) return { success: false, error: error.message };
+    for (const r of data || []) {
+      anagrafica.push({ codice: String(r.codice_cliente), nome: r.ragione_sociale || "" });
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  return { success: true, scaduti, anagrafica };
+}
+
 // Elenco degli ordini in arrivo dall'app agenti, ancora da controllare.
 // Se la tabella non esiste ancora, ritorna lista vuota (non rompe la UI).
 async function getOrdiniDaApp() {
@@ -1271,20 +1308,24 @@ async function rifiutaOrdineApp(params) {
   return { success: true };
 }
 
-// Login applicativo: restituisce l'utente (salt + hash) per username.
-// La verifica della password avviene lato client (App.jsx) con SHA-256.
-async function getAppUser(params) {
+// Login applicativo (semplice, come l'app agenti): confronto diretto di
+// username + password sulla tabella app_utenti. Restituisce solo i campi
+// sicuri (mai la password) al client.
+async function appLogin(params) {
   const p = parsePayload(params);
   const username = String(p.username || "").trim().toLowerCase();
-  if (!username) return { success: false, error: "username mancante" };
+  const password = String(p.password || "");
+  if (!username || !password) return { success: true, user: null };
   const { data, error } = await supabase
     .from("app_utenti")
-    .select("username, password_hash, salt, etichetta, attivo")
+    .select("username, etichetta, attivo, password")
     .eq("username", username)
     .maybeSingle();
   if (error) return failure(error);
-  if (!data || data.attivo === false) return { success: true, user: null };
-  return { success: true, user: data };
+  if (!data || data.attivo === false || String(data.password) !== password) {
+    return { success: true, user: null };
+  }
+  return { success: true, user: { username: data.username, etichetta: data.etichetta } };
 }
 
 export async function callSheetsApi(params = {}) {
@@ -1295,8 +1336,8 @@ export async function callSheetsApi(params = {}) {
     }
 
     switch (params.action) {
-      case "getAppUser":
-        return await getAppUser(params);
+      case "appLogin":
+        return await appLogin(params);
       case "archivePreparedOrders":
       case "archiveAllPreparedOrders":
         return await archivePreparedOrders();
@@ -1348,6 +1389,8 @@ export async function callSheetsApi(params = {}) {
         return await updateCliente(params);
       case "deleteCliente":
         return await deleteCliente(params);
+      case "getSituazioneGestionale":
+        return await getSituazioneGestionale();
       case "getOrdiniDaApp":
         return await getOrdiniDaApp();
       case "spostaOrdineInOrdini":
