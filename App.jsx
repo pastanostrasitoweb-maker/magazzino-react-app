@@ -831,14 +831,16 @@ export default function App() {
   // in localStorage finche' non si fa "Esci".
   const [authUser, setAuthUser] = useState(() => {
     try {
-      const raw = localStorage.getItem("magazzino_auth");
+      const raw = localStorage.getItem("magazzino_auth") || sessionStorage.getItem("magazzino_auth");
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
     }
   });
+  const [loginUsers, setLoginUsers] = useState([]);
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [loginRemember, setLoginRemember] = useState(true);
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
@@ -988,6 +990,25 @@ export default function App() {
 
     return () => {
       window.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  // Carica l'elenco utenti per il menu a tendina della login.
+  useEffect(() => {
+    let annullato = false;
+    (async () => {
+      try {
+        const res = await callSheetsApi({ action: "listAppUsers" });
+        if (annullato) return;
+        const users = res && res.success ? res.users || [] : [];
+        setLoginUsers(users);
+        setLoginUsername((prev) => prev || (users[0] ? users[0].username : ""));
+      } catch {
+        /* la login accetta anche username digitato a mano come fallback */
+      }
+    })();
+    return () => {
+      annullato = true;
     };
   }, []);
 
@@ -2365,9 +2386,17 @@ export default function App() {
         return;
       }
       const session = { username: user.username, etichetta: user.etichetta || user.username };
-      localStorage.setItem("magazzino_auth", JSON.stringify(session));
+      try {
+        const raw = JSON.stringify(session);
+        if (loginRemember) {
+          localStorage.setItem("magazzino_auth", raw);
+          sessionStorage.removeItem("magazzino_auth");
+        } else {
+          sessionStorage.setItem("magazzino_auth", raw);
+          localStorage.removeItem("magazzino_auth");
+        }
+      } catch {}
       setAuthUser(session);
-      setLoginUsername("");
       setLoginPassword("");
     } catch (err) {
       setLoginError("Errore di collegamento. Riprova.");
@@ -2379,6 +2408,7 @@ export default function App() {
   const doLogout = () => {
     try {
       localStorage.removeItem("magazzino_auth");
+      sessionStorage.removeItem("magazzino_auth");
     } catch {}
     setAuthUser(null);
     setIsAdmin(false);
@@ -3917,17 +3947,31 @@ export default function App() {
 
           <div style={{ marginTop: 6 }}>
             <label style={{ display: "block", fontSize: 13, fontWeight: 800, color: "#40516a", marginBottom: 6 }}>
-              Nome utente
+              Utente
             </label>
-            <input
-              style={inputStyle()}
-              value={loginUsername}
-              onChange={(e) => setLoginUsername(e.target.value)}
-              placeholder="es. produzione"
-              autoCapitalize="none"
-              autoCorrect="off"
-              autoComplete="username"
-            />
+            {loginUsers.length > 0 ? (
+              <select
+                style={inputStyle()}
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+              >
+                {loginUsers.map((u) => (
+                  <option key={u.username} value={u.username}>
+                    {u.etichetta || u.username}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                style={inputStyle()}
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                placeholder="es. produzione"
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="username"
+              />
+            )}
           </div>
 
           <div>
@@ -3949,6 +3993,16 @@ export default function App() {
               {loginError}
             </div>
           ) : null}
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "#40516a", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={loginRemember}
+              onChange={(e) => setLoginRemember(e.target.checked)}
+              style={{ width: 18, height: 18 }}
+            />
+            Rimani collegato su questo dispositivo
+          </label>
 
           <button type="submit" style={btnStyle("primary", loggingIn)} disabled={loggingIn}>
             <Lock size={16} /> {loggingIn ? "Accesso..." : "Entra"}

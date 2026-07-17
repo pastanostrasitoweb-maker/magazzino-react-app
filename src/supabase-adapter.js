@@ -1308,6 +1308,18 @@ async function rifiutaOrdineApp(params) {
   return { success: true };
 }
 
+// Elenco utenti per il menu a tendina della schermata di login (solo
+// username + etichetta, mai la password).
+async function listAppUsers() {
+  const { data, error } = await supabase
+    .from("app_utenti")
+    .select("username, etichetta")
+    .eq("attivo", true)
+    .order("etichetta");
+  if (error) return failure(error);
+  return { success: true, users: data || [] };
+}
+
 // Login applicativo (semplice, come l'app agenti): confronto diretto di
 // username + password sulla tabella app_utenti. Restituisce solo i campi
 // sicuri (mai la password) al client.
@@ -1338,6 +1350,8 @@ export async function callSheetsApi(params = {}) {
     switch (params.action) {
       case "appLogin":
         return await appLogin(params);
+      case "listAppUsers":
+        return await listAppUsers();
       case "archivePreparedOrders":
       case "archiveAllPreparedOrders":
         return await archivePreparedOrders();
