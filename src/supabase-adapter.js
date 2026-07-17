@@ -1261,7 +1261,10 @@ async function spostaOrdineInOrdini(params) {
       lineId: `RIGA-${Date.now()}-${i}`,
       productId,
       productName: `${r.descrizione_prodotto || r.codice || ""}${marker}${sr}`,
-      qtyOrdered: Number(r.quantita_ordinata || 0),
+      // Il magazzino conta in CARTONI: l'app manda r.colli (cartoni) e
+      // r.quantita_ordinata (pezzi). I pezzi sciolti dei polybox frozen
+      // hanno colli null e restano a pezzi. (Bug 1 crt -> 8 crt, 2026-07-17.)
+      qtyOrdered: Number(r.colli ?? r.quantita_ordinata ?? 0),
       rowOrder: i + 1,
     };
   });
