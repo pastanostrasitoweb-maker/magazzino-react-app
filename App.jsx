@@ -867,6 +867,9 @@ export default function App() {
 
   const [newOrderCustomer, setNewOrderCustomer] = useState("");
   const [newOrderClientId, setNewOrderClientId] = useState("");
+  // Cliente a mano SOLO come eccezione dichiarata (Luca 2026-07-17):
+  // la normalita' e' selezionarlo dall'anagrafica (ora c'e' quella GAMMA).
+  const [newOrderManual, setNewOrderManual] = useState(false);
   const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
   const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
@@ -2888,8 +2891,12 @@ export default function App() {
   };
 
   const createOrder = async () => {
+    if (!newOrderClientId && !newOrderManual) {
+      alert("Seleziona il cliente dall'anagrafica. Se proprio non c'e', attiva \"scrivi a mano\".");
+      return;
+    }
     if (!newOrderCustomer.trim()) {
-      alert("Inserisci il nome ordine/cliente");
+      alert(newOrderManual ? "Scrivi il nome del cliente" : "Seleziona il cliente dall'anagrafica");
       return;
     }
 
@@ -6416,26 +6423,44 @@ export default function App() {
                 </select>
               </div>
 
-              <input
-                style={{ ...inputStyle(), marginTop: 10 }}
-                value={newOrderCustomer}
-                onChange={(event) => {
-                  setNewOrderCustomer(event.target.value);
-                  // Se scrivo a mano, scollego dall'anagrafica (cliente non mappato).
-                  setNewOrderClientId("");
-                }}
-                placeholder="Nome ordine o cliente (oppure scrivi a mano)"
-              />
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13, color: "#475569", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={newOrderManual}
+                  onChange={(e) => {
+                    setNewOrderManual(e.target.checked);
+                    if (e.target.checked) {
+                      setNewOrderClientId("");
+                      setNewOrderCustomer("");
+                    } else if (!newOrderClientId) {
+                      setNewOrderCustomer("");
+                    }
+                  }}
+                />
+                ✍️ Non trovo il cliente in lista: scrivilo a mano (eccezione)
+              </label>
+
+              {newOrderManual && (
+                <input
+                  style={{ ...inputStyle(), marginTop: 8 }}
+                  value={newOrderCustomer}
+                  onChange={(event) => {
+                    setNewOrderCustomer(event.target.value);
+                    setNewOrderClientId("");
+                  }}
+                  placeholder="Nome cliente (scritto a mano, non collegato all'anagrafica)"
+                />
+              )}
 
               {newOrderClientId && clientsById[newOrderClientId] ? (
                 <div style={{ fontSize: 12, color: "#475569", marginTop: 6 }}>
                   {clientsById[newOrderClientId].codeTs
-                    ? `Codice GAMMA: ${clientsById[newOrderClientId].codeTs}`
+                    ? `Codice GAMMA: ${clientsById[newOrderClientId].codeTs} · agganciato all'anagrafica ✓`
                     : "Cliente in anagrafica senza codice GAMMA (verra' agganciato quando arriva il ponte)."}
                 </div>
-              ) : newOrderCustomer.trim() ? (
+              ) : newOrderManual && newOrderCustomer.trim() ? (
                 <div style={{ fontSize: 12, color: "#b45309", marginTop: 6 }}>
-                  Cliente scritto a mano, non collegato all'anagrafica.
+                  ⚠ Cliente scritto a mano, NON collegato all'anagrafica: niente aggancio pagamenti/ultima vendita.
                 </div>
               ) : null}
             </div>

@@ -147,7 +147,7 @@ async function bulkLoad() {
   }));
 
   // clienti: tollerante alla tabella mancante (clientiR.error -> lista vuota).
-  const clienti = (clientiR && !clientiR.error ? clientiR.data || [] : []).map((row) => ({
+  const clientiLocali = (clientiR && !clientiR.error ? clientiR.data || [] : []).map((row) => ({
     ID_Cliente: String(row.id_cliente ?? ""),
     Ragione_Sociale: row.ragione_sociale ?? "",
     Categoria: row.categoria ?? "",
@@ -160,6 +160,45 @@ async function bulkLoad() {
     Attivo: row.attivo === false ? false : true,
     Note: row.note ?? "",
   }));
+
+  // ANAGRAFICA GAMMA nel selettore clienti (Luca 2026-07-17): la tabella
+  // clienti locale e' vuota, ma clienti_gestionale (sync notturna TeamSystem,
+  // ~2000 record) ha tutto. Si aggiunge come fonte del selettore ordini:
+  // ID 'CLI-<codice>' cosi' l'ordine salva un id_cliente aggan ciabile da
+  // badge pagamento e app agenti. Dedup sui codici gia' presenti in locale.
+  const clienti = [...clientiLocali];
+  try {
+    const codici = new Set(clientiLocali.map((c) => String(c.Codice_Cliente_TS || "")));
+    const PAGE = 1000;
+    for (let from = 0; from < 20000; from += PAGE) {
+      const { data, error } = await supabase
+        .from("clienti_gestionale")
+        .select("codice_cliente,ragione_sociale,piva,citta")
+        .order("codice_num")
+        .range(from, from + PAGE - 1);
+      if (error) break;
+      for (const r of data || []) {
+        const cod = String(r.codice_cliente || "");
+        if (!cod || codici.has(cod) || !r.ragione_sociale) continue;
+        clienti.push({
+          ID_Cliente: `CLI-${cod}`,
+          Ragione_Sociale: r.citta ? `${r.ragione_sociale} · ${r.citta}` : r.ragione_sociale,
+          Categoria: "Anagrafica GAMMA",
+          Categoria_TS: "",
+          Codice_Cliente_TS: cod,
+          PIVA: r.piva || "",
+          Codice_Fiscale: "",
+          Codice_Destinatario_TS: "",
+          Fonte: "GAMMA",
+          Attivo: true,
+          Note: "",
+        });
+      }
+      if (!data || data.length < PAGE) break;
+    }
+  } catch (_) {
+    // anagrafica gestionale non disponibile: il selettore resta coi locali
+  }
 
   return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti };
 }
