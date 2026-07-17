@@ -830,8 +830,6 @@ export default function App() {
   // Login applicativo: utente collegato (etichetta + username), persistito
   // in localStorage finche' non si fa "Esci".
   const [authUser, setAuthUser] = useState(() => {
-    // TEMP-VERIFICA-CLAUDE: bypass login SOLO in dev locale, da rimuovere.
-    if (import.meta.env.DEV) return { username: "verifica", etichetta: "Verifica locale" };
     try {
       const raw = localStorage.getItem("magazzino_auth");
       return raw ? JSON.parse(raw) : null;
