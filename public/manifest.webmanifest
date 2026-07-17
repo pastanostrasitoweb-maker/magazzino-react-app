@@ -1,0 +1,15 @@
+{
+  "name": "Magazzino 2.0 — Gluten Free Experience",
+  "short_name": "Magazzino 2.0",
+  "description": "Gestione ordini, lotti e disponibilità del magazzino Pasta Nostra",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#122641",
+  "theme_color": "#1e3a5f",
+  "lang": "it",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
