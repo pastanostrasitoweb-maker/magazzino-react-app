@@ -1,6 +1,7 @@
 // hotfix assegnazione prodotti senza lotto su ID disponibilità reale
 import React, { useEffect, useMemo, useState } from "react";
 import { callSheetsApi } from "./src/supabase-adapter.js";
+import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
 import {
   Package,
   ClipboardList,
@@ -398,8 +399,14 @@ function normalizeProducts(rows) {
           .toLowerCase()
       ),
       // Peso in kg per 1 unita' d'ordine (per l'UM del prodotto: peso del
-      // cartone per i CT, del pezzo per i PZ). 0 se non impostato.
-      weightKg: Number(getField(row, ["peso_kg", "Peso_Kg", "peso", "Peso"])) || 0,
+      // cartone per i CT, del pezzo per i PZ). Fonte: tabella statica
+      // PESI_PRODOTTI (dai cataloghi app agenti); fallback colonna peso_kg se
+      // un giorno esistera'. 0 se non noto.
+      weightKg:
+        Number(
+          PESI_PRODOTTI[String(getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "code"])).trim()] ??
+            getField(row, ["peso_kg", "Peso_Kg", "peso", "Peso"])
+        ) || 0,
     }))
     .filter((product) => product.code || product.name);
 }
