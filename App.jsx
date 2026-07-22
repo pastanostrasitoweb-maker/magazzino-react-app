@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { callSheetsApi } from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
+import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
 import {
   Package,
   ClipboardList,
@@ -21,6 +22,7 @@ import {
   Smartphone,
   ThumbsUp,
   ThumbsDown,
+  Truck,
 } from "lucide-react";
 
 // Storico: backend Apps Script (JSONP) usato fino al 2026-06-09, ora sostituito
@@ -210,6 +212,34 @@ function badgeStyle(kind = "outline") {
 // Formatta un peso in kg all'italiana (max 2 decimali).
 function fmtKg(kg) {
   return Number(kg || 0).toLocaleString("it-IT", { maximumFractionDigits: 2 });
+}
+
+// Euro all'italiana.
+function fmtEur(n) {
+  return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Temperatura di spedizione dell'ordine, dedotta dai prodotti (vince il piu'
+// freddo): surgelato -18 → frozen (a collo/poly box), pasta fresca → fresh,
+// resto → secco. Ordini misti: se c'e' del surgelato tutto va gestito frozen.
+function temperaturaOrdine(lines) {
+  const txt = (lines || [])
+    .map((l) => `${l.category || ""} ${l.productName || ""}`)
+    .join(" ")
+    .toLowerCase();
+  if (/-18|frozen|surgel/.test(txt)) return "frozen";
+  if (/fresc|frigo|refriger/.test(txt)) return "fresh";
+  return "secco";
+}
+
+// Aspetto del badge trasporto: verde col corriere+costo se calcolato,
+// grigio con il motivo se manca un dato (CAP/peso).
+function transportBadgeInfo(transport) {
+  if (!transport || transport.errore) {
+    return { kind: "outline", label: `Trasporto: ${transport?.errore || "n/d"}`, ok: false };
+  }
+  const c = transport.consigliato;
+  return { kind: "success", label: `${c.corriere} · ${fmtEur(c.totale)} €`, ok: true };
 }
 
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
@@ -503,6 +533,9 @@ function normalizeClients(rows) {
       source: String(getField(row, ["Fonte", "fonte"]) || "").trim(),
       active: getField(row, ["Attivo", "attivo"]) === false ? false : true,
       notes: String(getField(row, ["Note", "note"]) || "").trim(),
+      cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
+      provincia: String(getField(row, ["Provincia", "provincia"]) || "").trim(),
+      citta: String(getField(row, ["Citta", "citta", "Città"]) || "").trim(),
     }))
     .filter((c) => c.id && c.name);
 }
@@ -898,6 +931,7 @@ export default function App() {
   const [colliDrafts, setColliDrafts] = useState({});
   const [savingColliOrderId, setSavingColliOrderId] = useState("");
   const [savingPaymentOrderId, setSavingPaymentOrderId] = useState("");
+  const [transportModalOrderId, setTransportModalOrderId] = useState("");
 
   // Anagrafica clienti (gestione) + filtri picker ordine.
   const [clientDialogOpen, setClientDialogOpen] = useState(false);
@@ -1426,7 +1460,7 @@ export default function App() {
         const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
 
         const weightKg = Number(product?.weightKg || 0);
-        return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock, lotOptional, weightKg };
+        return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock, lotOptional, weightKg, category: String(product?.category || "") };
       });
 
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
@@ -1437,6 +1471,14 @@ export default function App() {
         (sum, line) => sum + Number(line.qtyOrdered || 0) * Number(line.weightKg || 0),
         0
       );
+      // Trasporto: preventivo corriere dal motore logistica, con peso ordine +
+      // CAP del cliente (anagrafica GAMMA) + temperatura dedotta dai prodotti.
+      const temperatura = temperaturaOrdine(lines);
+      const capDest = String(clientsById[String(order.clientId)]?.cap || "").trim();
+      const transport =
+        pesoTotale > 0 && capDest
+          ? calcolaPreventivo({ peso: pesoTotale, cap: capDest, temperatura })
+          : { errore: !capDest ? "CAP destinazione mancante" : "Peso ordine 0" };
 
       // Colli: suggerito = somma delle quantità di tutte le righe. Se l'utente ha
       // inserito un valore manuale (colliManual) quello prevale.
@@ -1474,10 +1516,13 @@ export default function App() {
         colliSuggested,
         colli,
         pesoTotale,
+        temperatura,
+        capDest,
+        transport,
         colliIsManual: order.colliManual !== null && order.colliManual !== undefined,
       };
     });
-  }, [orders, assignments, products]);
+  }, [orders, assignments, products, clientsById]);
 
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
@@ -4516,6 +4561,27 @@ export default function App() {
                           ) : null}
                         </div>
 
+                        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          <button
+                            onClick={() => setTransportModalOrderId(String(selectedOrder.id))}
+                            style={{
+                              ...badgeStyle(transportBadgeInfo(selectedOrder.transport).kind),
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              cursor: "pointer",
+                            }}
+                            title="Vedi opzioni corriere, tempi e costi"
+                          >
+                            <Truck size={14} /> {transportBadgeInfo(selectedOrder.transport).label}
+                          </button>
+                          {selectedOrder.transport && !selectedOrder.transport.errore ? (
+                            <span style={{ color: "#8595a8", fontSize: 12 }}>
+                              {temperaturaLabel(selectedOrder.temperatura)} · {selectedOrder.transport.consigliato.giorni} gg
+                            </span>
+                          ) : null}
+                        </div>
+
                         {selectedOrder.notes ? (
                           <div
                             style={{
@@ -7081,6 +7147,69 @@ export default function App() {
               {savingEditedLine ? "Salvataggio..." : "Salva quantità"}
             </button>
           </div>
+        </Modal>
+
+        <Modal
+          open={!!transportModalOrderId}
+          title="Opzioni trasporto"
+          onClose={() => setTransportModalOrderId("")}
+          maxWidth={560}
+        >
+          {(() => {
+            const ord = ordersWithComputed.find((o) => String(o.id) === String(transportModalOrderId));
+            if (!ord) return null;
+            const t = ord.transport;
+            if (!t || t.errore) {
+              return (
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ color: "#40516a", fontWeight: 700 }}>{ord.customer || "Ordine"}</div>
+                  <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 14, color: "#b45309" }}>
+                    Impossibile calcolare il trasporto: {t?.errore || "dati mancanti"}.
+                    {t?.errore === "CAP destinazione mancante"
+                      ? " Il cliente non ha un CAP nell'anagrafica GAMMA."
+                      : ""}
+                  </div>
+                </div>
+              );
+            }
+            const opzioni = [t.consigliato, ...t.alternative];
+            return (
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ color: "#40516a", fontSize: 14 }}>
+                  {ord.customer} · {fmtKg(ord.pesoTotale)} kg · {temperaturaLabel(ord.temperatura)} · CAP {ord.capDest}
+                </div>
+                {opzioni.map((o, i) => (
+                  <div
+                    key={o.corriereId}
+                    style={{
+                      ...cardStyle({ background: i === 0 ? "linear-gradient(135deg,#f0fdf4,#ffffff)" : "#fff" }),
+                      padding: 14,
+                      border: i === 0 ? "1px solid #bbf7d0" : "1px solid #e5edf6",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 12,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 900, color: "#07153a", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {o.corriere}
+                        {i === 0 ? <span style={badgeStyle("success")}>consigliato</span> : null}
+                      </div>
+                      <div style={{ color: "#66758b", fontSize: 12, marginTop: 2 }}>
+                        consegna {o.giorni} gg · zona {o.zona} · {o.scaglione}
+                        {o.componenti.imballo > 0 ? ` · imballo ${fmtEur(o.componenti.imballo)} €` : ""}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 20, fontWeight: 950, color: i === 0 ? "#15803d" : "#07153a" }}>
+                      {fmtEur(o.totale)} €
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </Modal>
 
         <Modal

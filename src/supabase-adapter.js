@@ -173,7 +173,7 @@ async function bulkLoad() {
     for (let from = 0; from < 20000; from += PAGE) {
       const { data, error } = await supabase
         .from("clienti_gestionale")
-        .select("codice_cliente,ragione_sociale,piva,citta")
+        .select("codice_cliente,ragione_sociale,piva,citta,cap,provincia")
         .order("codice_num")
         .range(from, from + PAGE - 1);
       if (error) break;
@@ -192,6 +192,9 @@ async function bulkLoad() {
           Fonte: "GAMMA",
           Attivo: true,
           Note: "",
+          Cap: r.cap || "",
+          Provincia: r.provincia || "",
+          Citta: r.citta || "",
         });
       }
       if (!data || data.length < PAGE) break;
