@@ -206,6 +206,11 @@ function badgeStyle(kind = "outline") {
 }
 
 
+// Formatta un peso in kg all'italiana (max 2 decimali).
+function fmtKg(kg) {
+  return Number(kg || 0).toLocaleString("it-IT", { maximumFractionDigits: 2 });
+}
+
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
 // vuoto = "Da verificare" (grigio).
 function paymentBadgeInfo(status) {
@@ -392,6 +397,9 @@ function normalizeProducts(rows) {
           .trim()
           .toLowerCase()
       ),
+      // Peso in kg per 1 unita' d'ordine (per l'UM del prodotto: peso del
+      // cartone per i CT, del pezzo per i PZ). 0 se non impostato.
+      weightKg: Number(getField(row, ["peso_kg", "Peso_Kg", "peso", "Peso"])) || 0,
     }))
     .filter((product) => product.code || product.name);
 }
@@ -1410,11 +1418,18 @@ export default function App() {
 
         const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
 
-        return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock, lotOptional };
+        const weightKg = Number(product?.weightKg || 0);
+        return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock, lotOptional, weightKg };
       });
 
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
       const totalOrdered = lines.reduce((sum, line) => sum + line.qtyOrdered, 0);
+      // Peso totale ordine = somma di (quantita' ordinata × peso unitario) per
+      // ogni riga di magazzino con peso noto.
+      const pesoTotale = lines.reduce(
+        (sum, line) => sum + Number(line.qtyOrdered || 0) * Number(line.weightKg || 0),
+        0
+      );
 
       // Colli: suggerito = somma delle quantità di tutte le righe. Se l'utente ha
       // inserito un valore manuale (colliManual) quello prevale.
@@ -1451,6 +1466,7 @@ export default function App() {
         computedStatus,
         colliSuggested,
         colli,
+        pesoTotale,
         colliIsManual: order.colliManual !== null && order.colliManual !== undefined,
       };
     });
@@ -4585,6 +4601,31 @@ export default function App() {
                             ) : null}
                           </div>
                         </div>
+
+                        <div
+                          style={{
+                            marginTop: 12,
+                            padding: 12,
+                            borderRadius: 16,
+                            background: "#f0fdf4",
+                            border: "1px solid #bbf7d0",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Package size={18} style={{ color: "#15803d" }} />
+                            <span style={{ fontWeight: 800, color: "#14532d" }}>Peso totale</span>
+                          </div>
+                          <span style={{ fontSize: 20, fontWeight: 950, color: "#14532d" }}>
+                            {fmtKg(selectedOrder.pesoTotale)} kg
+                          </span>
+                          <span style={{ color: "#5b6b82", fontSize: 13, marginLeft: "auto" }}>
+                            {selectedOrder.colli} colli
+                          </span>
+                        </div>
                       </div>
 
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -5582,6 +5623,12 @@ export default function App() {
                                 {order.notes}
                               </div>
                             ) : null}
+                            <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <span style={{ ...badgeStyle("success"), display: "inline-flex", alignItems: "center", gap: 6 }}>
+                                <Package size={13} /> {fmtKg(order.pesoTotale)} kg
+                              </span>
+                              <span style={badgeStyle("outline")}>{order.colli} colli</span>
+                            </div>
                           </div>
 
                           {isAdmin ? (
