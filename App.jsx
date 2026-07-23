@@ -1472,9 +1472,13 @@ export default function App() {
         0
       );
       // Trasporto: preventivo corriere dal motore logistica, con peso ordine +
-      // CAP del cliente (anagrafica GAMMA) + temperatura dedotta dai prodotti.
+      // CAP + temperatura dedotta dai prodotti. Il CAP e' quello SALVATO
+      // sull'ordine (order.cap, congelato alla creazione, vale per ogni cliente
+      // anche agenti/testo libero); in mancanza, ripiego sull'anagrafica GAMMA.
       const temperatura = temperaturaOrdine(lines);
-      const capDest = String(clientsById[String(order.clientId)]?.cap || "").trim();
+      const capDest = String(
+        order.cap || clientsById[String(order.clientId)]?.cap || ""
+      ).trim();
       const transport =
         pesoTotale > 0 && capDest
           ? calcolaPreventivo({ peso: pesoTotale, cap: capDest, temperatura })
