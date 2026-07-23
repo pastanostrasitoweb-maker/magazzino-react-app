@@ -1661,7 +1661,7 @@ export default function App() {
     const q = orderSearch.trim().toLowerCase();
 
     const ordersToShow = ordersWithComputed
-      .filter((order) => !order.archived && ["Preparato", "Spedito"].includes(String(order.computedStatus)))
+      .filter((order) => !order.archived && String(order.computedStatus) === "Preparato")
       .sort((a, b) => String(b.dataPrepared || b.date || "").localeCompare(String(a.dataPrepared || a.date || "")));
 
     if (!q) return ordersToShow;
@@ -1673,6 +1673,16 @@ export default function App() {
         String(order.notes).toLowerCase().includes(q)
     );
   }, [ordersWithComputed, orderSearch]);
+
+  // Ordini SPEDITI del giorno (non archiviati): la sezione dedicata dove si
+  // vede cosa e' uscito e con quale corriere. A mezzanotte si archiviano.
+  const speditiOrders = useMemo(
+    () =>
+      ordersWithComputed
+        .filter((order) => !order.archived && String(order.computedStatus) === "Spedito")
+        .sort((a, b) => String(b.dataPrepared || b.date || "").localeCompare(String(a.dataPrepared || a.date || ""))),
+    [ordersWithComputed]
+  );
 
   const selectedOrder =
     activeOrders.find((order) => String(order.id) === String(selectedOrderId)) ||
@@ -4493,6 +4503,31 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 
               <button
                 style={{
+                  ...btnStyle(page === "spediti" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                }}
+                onClick={() => setPage("spediti")}
+              >
+                🚚 Spediti
+                {speditiOrders.length > 0 ? (
+                  <span
+                    style={{
+                      background: "#16a34a",
+                      color: "#fff",
+                      borderRadius: 999,
+                      padding: "2px 8px",
+                      fontSize: 12,
+                      fontWeight: 900,
+                    }}
+                  >
+                    {speditiOrders.length}
+                  </span>
+                ) : null}
+              </button>
+
+              <button
+                style={{
                   ...btnStyle(page === "archivio" ? "primary" : "soft"),
                   borderRadius: 999,
                   minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
@@ -5908,6 +5943,94 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {page === "spediti" && (
+          <div style={{ ...cardStyle(), padding: 20 }}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>🚚 Ordini spediti</div>
+              <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
+                Gli ordini usciti oggi, ciascuno col suo corriere. A mezzanotte passano in archivio.
+              </div>
+            </div>
+
+            {speditiOrders.length > 0 ? (
+              <div
+                style={{
+                  ...cardStyle({ background: "linear-gradient(135deg, #f0fdf4, #ffffff)" }),
+                  padding: 14,
+                  marginBottom: 16,
+                  display: "flex",
+                  gap: 18,
+                  flexWrap: "wrap",
+                  fontWeight: 800,
+                  color: "#14532d",
+                }}
+              >
+                <span>{speditiOrders.length} {speditiOrders.length === 1 ? "ordine spedito" : "ordini spediti"}</span>
+                <span>{speditiOrders.reduce((s, o) => s + Number(o.colli || 0), 0)} colli</span>
+                <span>{fmtKg(speditiOrders.reduce((s, o) => s + Number(o.pesoTotale || 0), 0))} kg</span>
+              </div>
+            ) : null}
+
+            {speditiOrders.length === 0 ? (
+              <div style={{ color: "#66758b" }}>Nessun ordine spedito oggi.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 12 }}>
+                {speditiOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    style={{
+                      ...cardStyle({ background: "linear-gradient(135deg, #f8fbff, #ffffff)" }),
+                      padding: 16,
+                      borderLeft: "6px solid #07153a",
+                      display: "grid",
+                      gridTemplateColumns: isSmallLayout ? "1fr" : "1fr auto",
+                      gap: 12,
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <div style={{ fontSize: 18, fontWeight: 950, color: "#07153a" }}>
+                          {order.customer || "Ordine senza nome"}
+                        </div>
+                        <span style={badgeStyle("dark")}>🚚 {order.courier || "spedito"}</span>
+                        {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
+                      </div>
+                      <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
+                        {fmtDate(order.dataPrepared || order.date)} · ID {order.id}
+                      </div>
+                      <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ ...badgeStyle("success"), display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <Package size={13} /> {fmtKg(order.pesoTotale)} kg
+                        </span>
+                        <span style={badgeStyle("outline")}>{order.colli} colli</span>
+                      </div>
+                      {order.notes ? (
+                        <div style={{ marginTop: 8, color: "#40516a", fontSize: 13, lineHeight: 1.4 }}>
+                          {order.notes}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <button
+                        style={btnStyle("outline")}
+                        onClick={() => generaDDT(order)}
+                        title={order.ddtNumero ? `Ristampa ${order.ddtNumero}` : "Genera Documento di Trasporto"}
+                      >
+                        📄 {order.ddtNumero ? "Ristampa DDT" : "Genera DDT"}
+                      </button>
+                      <button style={btnStyle("primary")} onClick={() => archivePreparedOrder(order.id)}>
+                        <Archive size={16} /> Archivia
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
