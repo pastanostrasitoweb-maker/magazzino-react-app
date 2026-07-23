@@ -3059,6 +3059,11 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 
       setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements || []));
 
+      // Dopo il "Preparato" si atterra sulla pagina Preparati: e' li' che
+      // vivono i bottoni Spedito e Genera DDT per quest'ordine (flusso Luca:
+      // preparato -> spedito -> documento, tutto nello stesso posto).
+      setPage("preparati");
+
       // L'ordine viene evaso anche se per qualche lotto la giacenza fisica era
       // inferiore (es. merce gia' uscita ma non scaricata). Avvisiamo l'operatore
       // di quali lotti sono andati sotto zero cosi' puo' sistemare la giacenza.
