@@ -368,6 +368,7 @@ async function updateOrder(params) {
   if (p.id_cliente !== undefined) patch.id_cliente = p.id_cliente ? String(p.id_cliente) : null;
   if (p.notes !== undefined) patch.note = p.notes;
   if (p.note !== undefined) patch.note = p.note;
+  if (p.cap !== undefined) patch.cap = p.cap ? String(p.cap).trim() : null;
   if (p.colli !== undefined) {
     // colli "" significa "ripristina default" (campo nullable).
     patch.colli = p.colli === "" || p.colli === null ? null : Number(p.colli);
@@ -570,6 +571,7 @@ async function createOrder(params) {
   const dataOrdine = p.date || p.data_ordine || null;
   const stato = p.status || p.stato || "Da preparare";
   const statoLav = p.workStatus || p.stato_lavorazione || "Nuovo";
+  const cap = (p.cap ?? p.Cap ?? "") ? String(p.cap ?? p.Cap).trim() : null;
 
   const insOrder = await supabase
     .from("ordini")
@@ -581,6 +583,7 @@ async function createOrder(params) {
       data_ordine: dataOrdine,
       stato,
       stato_lavorazione: statoLav,
+      cap,
       archiviato: false,
     })
     .select()
@@ -1326,6 +1329,9 @@ async function spostaOrdineInOrdini(params) {
       date: src.creato_il || null,
       status: "Da preparare",
       workStatus: "Nuovo",
+      // CAP per il costo trasporto: appena l'app agenti includera' cli.cap
+      // nel JSON cliente, l'ordine agente lo salva. (Oggi manda solo citta.)
+      cap: cli.cap || cli.CAP || cli.cap_destinazione || "",
       lines,
     }),
   });

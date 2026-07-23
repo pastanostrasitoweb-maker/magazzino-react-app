@@ -3023,6 +3023,9 @@ export default function App() {
       status: "Da preparare",
       workStatus: "Nuovo",
       date: new Date().toISOString().slice(0, 10),
+      // CAP di destinazione congelato dall'anagrafica del cliente scelto, per
+      // il costo trasporto. Vuoto per cliente a testo libero senza anagrafica.
+      cap: String(clientsById[newOrderClientId]?.cap || "").trim(),
       lines: validLines,
     };
 
@@ -3037,6 +3040,7 @@ export default function App() {
           status: newOrder.status,
           workStatus: newOrder.workStatus,
           date: newOrder.date,
+          cap: newOrder.cap,
           lines: newOrder.lines,
         }),
       });
