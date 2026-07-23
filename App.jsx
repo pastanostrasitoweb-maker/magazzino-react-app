@@ -920,6 +920,9 @@ export default function App() {
   // Cliente a mano SOLO come eccezione dichiarata (Luca 2026-07-17):
   // la normalita' e' selezionarlo dall'anagrafica (ora c'e' quella GAMMA).
   const [newOrderManual, setNewOrderManual] = useState(false);
+  // CAP a mano per il cliente scritto a mano (serve al costo trasporto, che
+  // altrimenti non ha destinazione per gli ordini a testo libero).
+  const [newOrderCap, setNewOrderCap] = useState("");
   const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
   const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
@@ -3023,9 +3026,10 @@ export default function App() {
       status: "Da preparare",
       workStatus: "Nuovo",
       date: new Date().toISOString().slice(0, 10),
-      // CAP di destinazione congelato dall'anagrafica del cliente scelto, per
-      // il costo trasporto. Vuoto per cliente a testo libero senza anagrafica.
-      cap: String(clientsById[newOrderClientId]?.cap || "").trim(),
+      // CAP di destinazione congelato: dall'anagrafica del cliente scelto,
+      // oppure quello digitato a mano (ordine a testo libero). Per il costo
+      // trasporto.
+      cap: String(clientsById[newOrderClientId]?.cap || newOrderCap || "").trim(),
       lines: validLines,
     };
 
@@ -3058,6 +3062,7 @@ export default function App() {
       setSelectedLineId(newOrder.lines[0]?.lineId || "");
       setNewOrderCustomer("");
       setNewOrderClientId("");
+      setNewOrderCap("");
       setNewOrderCategory("");
       setNewOrderNotes("");
       setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
@@ -6571,15 +6576,24 @@ export default function App() {
               </label>
 
               {newOrderManual && (
-                <input
-                  style={{ ...inputStyle(), marginTop: 8 }}
-                  value={newOrderCustomer}
-                  onChange={(event) => {
-                    setNewOrderCustomer(event.target.value);
-                    setNewOrderClientId("");
-                  }}
-                  placeholder="Nome cliente (scritto a mano, non collegato all'anagrafica)"
-                />
+                <>
+                  <input
+                    style={{ ...inputStyle(), marginTop: 8 }}
+                    value={newOrderCustomer}
+                    onChange={(event) => {
+                      setNewOrderCustomer(event.target.value);
+                      setNewOrderClientId("");
+                    }}
+                    placeholder="Nome cliente (scritto a mano, non collegato all'anagrafica)"
+                  />
+                  <input
+                    style={{ ...inputStyle(), marginTop: 8 }}
+                    value={newOrderCap}
+                    onChange={(event) => setNewOrderCap(event.target.value.replace(/[^0-9]/g, "").slice(0, 5))}
+                    inputMode="numeric"
+                    placeholder="CAP destinazione (per il costo trasporto)"
+                  />
+                </>
               )}
 
               {newOrderClientId && clientsById[newOrderClientId] ? (
