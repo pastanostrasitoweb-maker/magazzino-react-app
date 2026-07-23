@@ -242,6 +242,28 @@ function transportBadgeInfo(transport) {
   return { kind: "success", label: `${c.corriere} · ${fmtEur(c.totale)} €`, ok: true };
 }
 
+// Campi anagrafici OBBLIGATORI per un cliente arrivato dall'APP agenti
+// (lista Luca 2026-07-23). Se ne manca uno l'anagrafica e' in errore e
+// l'ordine non puo' caricare i lotti finche' non viene completata.
+// L'insegna e' richiesta solo se diversa dalla ragione sociale: non blocca.
+function checkAnagraficaApp(cli) {
+  const has = (v) => String(v ?? "").trim() !== "";
+  const mancanti = [];
+  if (!has(cli.ragione_sociale)) mancanti.push("Ragione sociale");
+  if (!has(cli.partita_iva)) mancanti.push("Partita IVA");
+  if (!has(cli.sede_legale) && !has(cli.indirizzo)) mancanti.push("Sede legale");
+  if (!has(cli.cap)) mancanti.push("CAP");
+  if (!has(cli.indirizzo_spedizione)) mancanti.push("Indirizzo di spedizione");
+  if (!has(cli.orari_consegna) && !has(cli.orario_scarico))
+    mancanti.push("Orario di scarico (finestra di almeno 3 ore)");
+  if (!has(cli.giorno_chiusura)) mancanti.push("Giorno di chiusura");
+  if (!has(cli.codice_univoco) && !has(cli.pec)) mancanti.push("Codice univoco o PEC");
+  if (!has(cli.email)) mancanti.push("Email");
+  if (!has(cli.telefono)) mancanti.push("Telefono referente");
+  if (!has(cli.metodo_pagamento)) mancanti.push("Metodo di pagamento");
+  return mancanti;
+}
+
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
 // vuoto = "Da verificare" (grigio).
 function paymentBadgeInfo(status) {
@@ -500,6 +522,9 @@ function normalizeOrders(rows) {
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
       // CAP di destinazione salvato sull'ordine (congelato alla creazione).
       cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
+      // Corriere scelto per la spedizione + numero DDT (se generato).
+      courier: String(getField(row, ["Corriere", "corriere"]) || "").trim(),
+      ddtNumero: String(getField(row, ["DDT_Numero", "ddt_numero"]) || "").trim(),
       colliManual: (() => {
         const raw = getField(row, ["Colli", "Numero_Colli", "Colli_Ordine"]);
         if (raw === undefined || raw === null || String(raw).trim() === "") return null;
@@ -538,6 +563,9 @@ function normalizeClients(rows) {
       cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
       provincia: String(getField(row, ["Provincia", "provincia"]) || "").trim(),
       citta: String(getField(row, ["Citta", "citta", "Città"]) || "").trim(),
+      indirizzo: String(getField(row, ["Indirizzo", "indirizzo"]) || "").trim(),
+      telefono: String(getField(row, ["Telefono", "telefono"]) || "").trim(),
+      email: String(getField(row, ["Email", "email"]) || "").trim(),
     }))
     .filter((c) => c.id && c.name);
 }
@@ -868,6 +896,9 @@ export default function App() {
   const [lots, setLots] = useState([]);
   const [products, setProducts] = useState([]);
   const [clients, setClients] = useState([]);
+  // Anagrafiche snapshot degli ordini arrivati dall'APP agenti
+  // (id ordine magazzino -> oggetto cliente). Per semaforo Anagrafica e DDT.
+  const [appAnagrafiche, setAppAnagrafiche] = useState({});
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [selectedLineId, setSelectedLineId] = useState("");
   const [productSearch, setProductSearch] = useState("");
@@ -964,6 +995,46 @@ export default function App() {
     for (const c of clients) m[c.id] = c;
     return m;
   }, [clients]);
+
+  // Semaforo anagrafica di un ordine.
+  // - Ordine dall'APP agenti: checklist COMPLETA (lista Luca) sullo snapshot.
+  // - Cliente GAMMA: check sui campi che il gestionale espone (PIVA,
+  //   indirizzo, CAP): GAMMA e' la fonte ufficiale per il resto.
+  // - Cliente scritto a mano: anagrafica assente (avviso, non blocca).
+  const anagraficaFor = (order) => {
+    const app = appAnagrafiche[String(order?.id || "")];
+    if (app) {
+      const mancanti = checkAnagraficaApp(app);
+      return mancanti.length
+        ? { stato: "ko", label: "Anagrafica incompleta", mancanti, fonte: "APP" }
+        : { stato: "ok", label: "Anagrafica OK", mancanti: [], fonte: "APP" };
+    }
+    const c = clientsById[String(order?.clientId || "")];
+    if (c) {
+      const has = (v) => String(v ?? "").trim() !== "";
+      const mancanti = [];
+      if (!has(c.piva)) mancanti.push("Partita IVA");
+      if (!has(c.indirizzo)) mancanti.push("Indirizzo");
+      if (!has(c.cap) && !has(order?.cap)) mancanti.push("CAP");
+      return mancanti.length
+        ? { stato: "ko", label: "Anagrafica incompleta", mancanti, fonte: "GAMMA" }
+        : { stato: "ok", label: "Anagrafica OK", mancanti: [], fonte: "GAMMA" };
+    }
+    return { stato: "assente", label: "Anagrafica assente", mancanti: [], fonte: "" };
+  };
+
+  // Blocco caricamento lotti se l'anagrafica e' in errore (richiesta Luca):
+  // l'ordine non si lavora finche' l'anagrafica non viene completata.
+  const anagraficaBloccaLotti = (order) => {
+    const a = anagraficaFor(order);
+    if (a.stato !== "ko") return false;
+    alert(
+      "ANAGRAFICA INCOMPLETA (" + a.fonte + ") - ordine bloccato.\n\n" +
+        "Campi mancanti:\n- " + a.mancanti.join("\n- ") +
+        "\n\nCompleta l'anagrafica del cliente prima di caricare i lotti."
+    );
+    return true;
+  };
   // Tutti i clienti attivi raggruppati per canale (quelli senza canale in coda).
   const activeClientsGrouped = useMemo(() => {
     const groups = new Map();
@@ -1112,6 +1183,7 @@ export default function App() {
       setLots(safeLots);
       setOrders(mergedOrders);
       setClients(normalizedClients);
+      setAppAnagrafiche(raw.anagraficheApp || {});
       setAssignments(normalizedAssignments);
       setSelectedOrderId(mergedOrders[0]?.id ?? "");
       setSelectedLineId(mergedOrders[0]?.lines?.[0]?.lineId ?? "");
@@ -1509,13 +1581,15 @@ export default function App() {
       const computedStatus =
         explicitStatusLower === "fermo" || workStatusLower === "fermato"
           ? "Fermo"
-          : explicitStatusLower === "preparato"
-            ? "Preparato"
-            : totalToAssign === 0
-              ? "Pronto"
-              : totalToAssign < totalOrdered
-                ? "Parziale"
-                : "Da preparare";
+          : explicitStatusLower === "spedito"
+            ? "Spedito"
+            : explicitStatusLower === "preparato"
+              ? "Preparato"
+              : totalToAssign === 0
+                ? "Pronto"
+                : totalToAssign < totalOrdered
+                  ? "Parziale"
+                  : "Da preparare";
 
       return {
         ...order,
@@ -1539,6 +1613,7 @@ export default function App() {
       .filter((order) => !order.archived)
       .filter((order) => String(order.computedStatus) !== "Fermo")
       .filter((order) => String(order.computedStatus) !== "Preparato")
+      .filter((order) => String(order.computedStatus) !== "Spedito")
       // Sempre in ordine cronologico di caricamento: i piu' recenti in cima.
       // (Richiesta Luca.)
       .sort((a, b) => orderLoadTs(b) - orderLoadTs(a));
@@ -1559,7 +1634,8 @@ export default function App() {
         (order) =>
           !order.archived &&
           String(order.computedStatus) !== "Fermo" &&
-          String(order.computedStatus) !== "Preparato"
+          String(order.computedStatus) !== "Preparato" &&
+          String(order.computedStatus) !== "Spedito"
       ),
     [ordersWithComputed]
   );
@@ -1585,7 +1661,7 @@ export default function App() {
     const q = orderSearch.trim().toLowerCase();
 
     const ordersToShow = ordersWithComputed
-      .filter((order) => !order.archived && String(order.computedStatus) === "Preparato")
+      .filter((order) => !order.archived && ["Preparato", "Spedito"].includes(String(order.computedStatus)))
       .sort((a, b) => String(b.dataPrepared || b.date || "").localeCompare(String(a.dataPrepared || a.date || "")));
 
     if (!q) return ordersToShow;
@@ -1779,6 +1855,10 @@ export default function App() {
   const createLotOnFly = async () => {
     const { lineId, code, expiry, qty } = lotOnFlyDialog;
     if (!lineId) return;
+    const ordineDellaRiga = ordersWithComputed.find((o) =>
+      (o.lines || []).some((l) => String(l.lineId) === String(lineId))
+    );
+    if (ordineDellaRiga && anagraficaBloccaLotti(ordineDellaRiga)) return;
     const line = ordersWithComputed
       .flatMap((o) => o.lines)
       .find((l) => String(l.lineId) === String(lineId));
@@ -1931,6 +2011,7 @@ export default function App() {
 
   const confirmInlineAssignment = async (line) => {
     if (!line) return;
+    if (selectedOrder && anagraficaBloccaLotti(selectedOrder)) return;
 
     const form = getInlineAssignmentForm(line.lineId);
     const requiresLots = line.requiresLots !== false;
@@ -2122,6 +2203,7 @@ export default function App() {
 
   const confirmAssignment = async () => {
     if (!selectedLine || !selectedLotId || !assignQty) return;
+    if (selectedOrder && anagraficaBloccaLotti(selectedOrder)) return;
 
     const qty = Number(assignQty);
 
@@ -2497,6 +2579,145 @@ export default function App() {
   // Stato pagamento (flag manuale contabilità, solo Admin). Valori: "ok",
   // "ko", "" (= da verificare). Cliccando lo stato gia' attivo lo si azzera
   // (torna a "da verificare"). Campo predisposto per futura API dal gestionale.
+  // Corriere scelto per l'ordine (dal modale Opzioni trasporto). Persiste su
+  // ordini.corriere: e' quello che poi finisce su Spedito e sul DDT.
+  const setOrderCourier = async (orderId, corriere) => {
+    if (!orderId) return;
+    const previousOrders = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(orderId) ? { ...o, courier: corriere } : o))
+    );
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId, corriere }),
+      });
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+        alert("Errore nel salvataggio del corriere: " + ((result && result.error) || "sconosciuto"));
+      }
+    } catch (error) {
+      setOrders(previousOrders);
+      alert("Errore di collegamento: " + String(error));
+    }
+  };
+
+  // SPEDITO: l'ordine preparato esce fisicamente dalle celle. Salva stato +
+  // corriere (quello scelto, altrimenti il consigliato del preventivo).
+  const markOrderShipped = async (order) => {
+    if (!order) return;
+    const corriere =
+      order.courier || order.transport?.consigliato?.corriere || "";
+    const conferma = window.confirm(
+      `Segnare come SPEDITO l'ordine di ${order.customer || order.id}?` +
+        (corriere ? `\nCorriere: ${corriere}` : "\nNessun corriere selezionato.")
+    );
+    if (!conferma) return;
+    const previousOrders = orders;
+    setOrders((prev) =>
+      prev.map((o) =>
+        String(o.id) === String(order.id)
+          ? { ...o, status: "Spedito", courier: corriere }
+          : o
+      )
+    );
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId: order.id, status: "Spedito", corriere }),
+      });
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+        alert("Errore nel segnare spedito: " + ((result && result.error) || "sconosciuto"));
+      }
+    } catch (error) {
+      setOrders(previousOrders);
+      alert("Errore di collegamento: " + String(error));
+    }
+  };
+
+  // DDT: genera (o ristampa) il documento di trasporto in una finestra
+  // stampabile. Numerazione progressiva per anno, salvata su ordini.ddt_numero.
+  const generaDDT = async (order) => {
+    if (!order) return;
+    const anag = anagraficaFor(order);
+    if (anag.stato === "ko") {
+      alert(
+        "Anagrafica incompleta, DDT non generabile.\n\nCampi mancanti:\n- " +
+          anag.mancanti.join("\n- ")
+      );
+      return;
+    }
+    let numero = order.ddtNumero;
+    if (!numero) {
+      const anno = new Date().getFullYear();
+      const prefisso = `DDT-${anno}-`;
+      const seq =
+        orders.filter((o) => String(o.ddtNumero || "").startsWith(prefisso)).length + 1;
+      numero = `${prefisso}${String(seq).padStart(3, "0")}`;
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId: order.id, ddt_numero: numero }),
+      });
+      if (!result || !result.success) {
+        alert("Errore nel salvataggio numero DDT: " + ((result && result.error) || "sconosciuto"));
+        return;
+      }
+      setOrders((prev) =>
+        prev.map((o) => (String(o.id) === String(order.id) ? { ...o, ddtNumero: numero } : o))
+      );
+    }
+
+    // Dati destinatario: snapshot APP agenti oppure anagrafica GAMMA.
+    const app = appAnagrafiche[String(order.id)] || {};
+    const cli = clientsById[String(order.clientId)] || {};
+    const dest = {
+      ragione: app.ragione_sociale || cli.name || order.customer || "",
+      piva: app.partita_iva || cli.piva || "",
+      indirizzo: app.indirizzo_spedizione || app.sede_legale || app.indirizzo || cli.indirizzo || "",
+      cap: app.cap || cli.cap || order.cap || "",
+      citta: app.citta || cli.citta || "",
+      provincia: app.provincia || cli.provincia || "",
+      telefono: app.telefono || cli.telefono || "",
+    };
+    const corriere = order.courier || order.transport?.consigliato?.corriere || "";
+    const oggi = new Date().toLocaleDateString("it-IT");
+    const lotCodeById = Object.fromEntries(lots.map((l) => [String(l.id), l.lot || ""]));
+    const righeHtml = (order.lines || [])
+      .map((line) => {
+        const lotti = (assignments[line.lineId] || [])
+          .map((a) => lotCodeById[String(a.lotId)] || (String(a.lotId).startsWith("LOT-") ? "" : a.lotId))
+          .filter(Boolean)
+          .join(", ");
+        return `<tr><td>${line.productCode || line.productId || ""}</td><td>${(line.productName || "").replace(/</g, "&lt;")}</td><td>${lotti || "—"}</td><td style="text-align:right">${line.qtyOrdered}</td></tr>`;
+      })
+      .join("");
+    const html = `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${numero}</title>
+<style>body{font-family:Arial,sans-serif;margin:32px;color:#111}h1{font-size:20px;margin:0}
+.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:12px;margin-bottom:16px}
+.box{border:1px solid #999;border-radius:6px;padding:10px 12px;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #999;padding:6px 8px;font-size:13px;text-align:left}
+th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
+.firma{display:flex;gap:40px;margin-top:40px}.firma div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px}
+@media print{.noprint{display:none}}</style></head><body>
+<div class="top"><div><h1>GLUTEN FREE EXPERIENCE SRL</h1><div style="font-size:12px">Documento di Trasporto (D.d.T.) — D.P.R. 472/96</div></div>
+<div style="text-align:right"><div style="font-size:18px;font-weight:bold">${numero}</div><div>Data: ${oggi}</div></div></div>
+<div class="box"><b>Destinatario</b><br>${dest.ragione}<br>${dest.indirizzo}<br>${dest.cap} ${dest.citta}${dest.provincia ? " (" + dest.provincia + ")" : ""}<br>${dest.piva ? "P.IVA: " + dest.piva : ""}${dest.telefono ? " · Tel: " + dest.telefono : ""}</div>
+<div class="box"><b>Trasporto a mezzo:</b> ${corriere || "vettore"} · <b>Causale:</b> Vendita · <b>Porto:</b> franco · <b>Ordine:</b> ${order.id}</div>
+<table><thead><tr><th>Codice</th><th>Descrizione</th><th>Lotto</th><th style="text-align:right">Qta</th></tr></thead><tbody>${righeHtml}</tbody></table>
+<div class="tot"><span>Colli: ${order.colli ?? ""}</span><span>Peso lordo: ${fmtKg(order.pesoTotale)} kg</span></div>
+<div class="firma"><div>Firma conducente</div><div>Firma destinatario</div></div>
+<button class="noprint" onclick="window.print()" style="margin-top:24px;padding:10px 18px;font-size:14px">Stampa</button>
+</body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) {
+      alert("Il browser ha bloccato la finestra del DDT: consenti i popup e riprova.");
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+  };
+
   const setOrderPayment = async (orderId, status) => {
     if (!isAdmin || !orderId) return;
 
@@ -4490,6 +4711,17 @@ export default function App() {
                         >
                           {paymentBadgeFor(order, gestionale).label}
                         </span>
+                        {(() => {
+                          const a = anagraficaFor(order);
+                          return (
+                            <span
+                              style={badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline")}
+                              title={a.stato === "ko" ? "Mancano: " + a.mancanti.join(", ") : undefined}
+                            >
+                              {a.label}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -4548,6 +4780,21 @@ export default function App() {
                           >
                             {paymentBadgeFor(selectedOrder, gestionale).label}
                           </span>
+                          {(() => {
+                            const a = anagraficaFor(selectedOrder);
+                            return (
+                              <span
+                                style={{ ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline"), cursor: a.stato === "ko" ? "pointer" : "default" }}
+                                onClick={() => {
+                                  if (a.stato === "ko")
+                                    alert("Anagrafica incompleta (" + a.fonte + ").\n\nCampi mancanti:\n- " + a.mancanti.join("\n- "));
+                                }}
+                                title={a.stato === "ko" ? "Clicca per l'elenco dei campi mancanti" : undefined}
+                              >
+                                {a.label}
+                              </span>
+                            );
+                          })()}
                           {isAdmin ? (
                             <div style={{ display: "flex", gap: 8 }}>
                               <button
@@ -5360,7 +5607,31 @@ export default function App() {
                             <div style={{ fontSize: 19, fontWeight: 950, color: "#07153a" }}>
                               {order.customer || "Ordine senza nome"}
                             </div>
-                            <span style={badgeStyle("success")}>Preparato</span>
+                            {order.computedStatus === "Spedito" ? (
+                              <span style={badgeStyle("dark")}>🚚 SPEDITO{order.courier ? ` · ${order.courier}` : ""}</span>
+                            ) : (
+                              <span style={badgeStyle("success")}>Preparato</span>
+                            )}
+                            {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
+                            {order.transport && !order.transport.errore ? (
+                              <button
+                                style={{ ...badgeStyle(order.courier ? "dark" : "outline"), border: "1px solid #cfd8e6", cursor: "pointer" }}
+                                onClick={() => setTransportModalOrderId(order.id)}
+                                title="Opzioni trasporto: scegli il corriere"
+                              >
+                                {order.courier
+                                  ? `${order.courier} ✓`
+                                  : `${order.transport.consigliato.corriere} · ${fmtEur(order.transport.consigliato.totale)} €`}
+                              </button>
+                            ) : null}
+                            {(() => {
+                              const a = anagraficaFor(order);
+                              return a.stato === "ko" ? (
+                                <span style={badgeStyle("danger")} title={"Mancano: " + a.mancanti.join(", ")}>
+                                  {a.label}
+                                </span>
+                              ) : null;
+                            })()}
                           </div>
 
                           <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
@@ -5435,6 +5706,24 @@ export default function App() {
 
                           <button style={btnStyle("warning")} onClick={() => reopenPreparedOrderForEditing(order.id)}>
                             <Pencil size={16} /> Modifica
+                          </button>
+
+                          {order.computedStatus !== "Spedito" ? (
+                            <button
+                              style={btnStyle("success")}
+                              onClick={() => markOrderShipped(order)}
+                              title={order.courier ? `Corriere: ${order.courier}` : order.transport?.consigliato ? `Corriere consigliato: ${order.transport.consigliato.corriere}` : "Nessun corriere selezionato"}
+                            >
+                              🚚 Spedito
+                            </button>
+                          ) : null}
+
+                          <button
+                            style={btnStyle("outline")}
+                            onClick={() => generaDDT(order)}
+                            title={order.ddtNumero ? `Ristampa ${order.ddtNumero}` : "Genera Documento di Trasporto"}
+                          >
+                            📄 {order.ddtNumero ? "Ristampa DDT" : "Genera DDT"}
                           </button>
 
                           <button style={btnStyle("primary")} onClick={() => archivePreparedOrder(order.id)}>
@@ -7232,14 +7521,24 @@ export default function App() {
                       <div style={{ fontWeight: 900, color: "#07153a", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         {o.corriere}
                         {i === 0 ? <span style={badgeStyle("success")}>consigliato</span> : null}
+                        {ord.courier === o.corriere ? <span style={badgeStyle("dark")}>SCELTO ✓</span> : null}
                       </div>
                       <div style={{ color: "#66758b", fontSize: 12, marginTop: 2 }}>
                         consegna {o.giorni} gg · zona {o.zona} · {o.scaglione}
                         {o.componenti.imballo > 0 ? ` · imballo ${fmtEur(o.componenti.imballo)} €` : ""}
                       </div>
                     </div>
-                    <div style={{ fontSize: 20, fontWeight: 950, color: i === 0 ? "#15803d" : "#07153a" }}>
-                      {fmtEur(o.totale)} €
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ fontSize: 20, fontWeight: 950, color: i === 0 ? "#15803d" : "#07153a" }}>
+                        {fmtEur(o.totale)} €
+                      </div>
+                      <button
+                        style={compactBtnStyle(ord.courier === o.corriere ? "dark" : "outline")}
+                        onClick={() => setOrderCourier(ord.id, o.corriere)}
+                        title="Usa questo corriere per la spedizione"
+                      >
+                        {ord.courier === o.corriere ? "Scelto" : "Usa"}
+                      </button>
                     </div>
                   </div>
                 ))}

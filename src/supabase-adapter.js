@@ -125,6 +125,8 @@ async function bulkLoad() {
     Stato_Lavorazione: row.stato_lavorazione ?? "",
     Stato_Pagamento: row.stato_pagamento ?? "",
     Cap: row.cap ?? "",
+    Corriere: row.corriere ?? "",
+    DDT_Numero: row.ddt_numero ?? "",
     Data_Ordine: toIsoString(row.data_ordine),
     Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
   }));
@@ -174,7 +176,7 @@ async function bulkLoad() {
     for (let from = 0; from < 20000; from += PAGE) {
       const { data, error } = await supabase
         .from("clienti_gestionale")
-        .select("codice_cliente,ragione_sociale,piva,citta,cap,provincia")
+        .select("codice_cliente,ragione_sociale,piva,citta,cap,provincia,indirizzo,telefono,email")
         .order("codice_num")
         .range(from, from + PAGE - 1);
       if (error) break;
@@ -196,6 +198,9 @@ async function bulkLoad() {
           Cap: r.cap || "",
           Provincia: r.provincia || "",
           Citta: r.citta || "",
+          Indirizzo: r.indirizzo || "",
+          Telefono: r.telefono || "",
+          Email: r.email || "",
         });
       }
       if (!data || data.length < PAGE) break;
@@ -204,7 +209,26 @@ async function bulkLoad() {
     // anagrafica gestionale non disponibile: il selettore resta coi locali
   }
 
-  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti };
+  // Anagrafiche degli ordini arrivati dall'APP agenti: lo snapshot JSON del
+  // cliente (crm_clienti non e' leggibile da anon, ma lo snapshot viaggia
+  // con l'ordine). Serve al semaforo "Anagrafica OK/KO" e al DDT.
+  // Mappa: id_ordine_magazzino -> oggetto cliente.
+  const anagraficheApp = {};
+  try {
+    const { data } = await supabase
+      .from("ordini_agenti")
+      .select("id_ordine_magazzino,cliente")
+      .not("id_ordine_magazzino", "is", null);
+    for (const r of data || []) {
+      if (r.id_ordine_magazzino && r.cliente && typeof r.cliente === "object") {
+        anagraficheApp[String(r.id_ordine_magazzino)] = r.cliente;
+      }
+    }
+  } catch (_) {
+    // tabella non disponibile: il semaforo resta sul solo dato GAMMA
+  }
+
+  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti, anagraficheApp };
 }
 
 // ---------- action handlers ----------
@@ -227,7 +251,7 @@ async function archivePreparedOrders() {
   if (error) return failure(error);
 
   const toArchive = (data || [])
-    .filter((r) => String(r.stato || "").trim().toLowerCase() === "preparato")
+    .filter((r) => ["preparato", "spedito"].includes(String(r.stato || "").trim().toLowerCase()))
     .map((r) => r.id_ordine);
 
   if (toArchive.length === 0) return { success: true };
