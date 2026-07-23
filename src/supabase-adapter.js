@@ -124,6 +124,7 @@ async function bulkLoad() {
     Stato: row.stato ?? "Da preparare",
     Stato_Lavorazione: row.stato_lavorazione ?? "",
     Stato_Pagamento: row.stato_pagamento ?? "",
+    Cap: row.cap ?? "",
     Data_Ordine: toIsoString(row.data_ordine),
     Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
   }));
@@ -1354,35 +1355,31 @@ async function rifiutaOrdineApp(params) {
 }
 
 // Elenco utenti per il menu a tendina della schermata di login (solo
-// username + etichetta, mai la password).
+// username + etichetta, mai la password). Via RPC SECURITY DEFINER:
+// la tabella app_utenti non e' piu' leggibile direttamente dalla anon key.
 async function listAppUsers() {
-  const { data, error } = await supabase
-    .from("app_utenti")
-    .select("username, etichetta")
-    .eq("attivo", true)
-    .order("etichetta");
+  const { data, error } = await supabase.rpc("lista_utenti_attivi");
   if (error) return failure(error);
   return { success: true, users: data || [] };
 }
 
-// Login applicativo (semplice, come l'app agenti): confronto diretto di
-// username + password sulla tabella app_utenti. Restituisce solo i campi
-// sicuri (mai la password) al client.
+// Login applicativo: la verifica di username + password avviene lato DB
+// nella funzione SECURITY DEFINER verify_login. La anon key non legge piu'
+// la tabella app_utenti (ne' le password): il client riceve solo i campi
+// sicuri se le credenziali sono corrette.
 async function appLogin(params) {
   const p = parsePayload(params);
   const username = String(p.username || "").trim().toLowerCase();
   const password = String(p.password || "");
   if (!username || !password) return { success: true, user: null };
-  const { data, error } = await supabase
-    .from("app_utenti")
-    .select("username, etichetta, attivo, password")
-    .eq("username", username)
-    .maybeSingle();
+  const { data, error } = await supabase.rpc("verify_login", {
+    p_username: username,
+    p_password: password,
+  });
   if (error) return failure(error);
-  if (!data || data.attivo === false || String(data.password) !== password) {
-    return { success: true, user: null };
-  }
-  return { success: true, user: { username: data.username, etichetta: data.etichetta } };
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row || row.attivo === false) return { success: true, user: null };
+  return { success: true, user: { username: row.username, etichetta: row.etichetta } };
 }
 
 export async function callSheetsApi(params = {}) {

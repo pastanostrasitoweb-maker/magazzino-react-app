@@ -498,6 +498,8 @@ function normalizeOrders(rows) {
         getField(row, ["Stato_Pagamento", "Stato pagamento", "PaymentStatus"]) || ""
       ).trim().toLowerCase(),
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
+      // CAP di destinazione salvato sull'ordine (congelato alla creazione).
+      cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
       colliManual: (() => {
         const raw = getField(row, ["Colli", "Numero_Colli", "Colli_Ordine"]);
         if (raw === undefined || raw === null || String(raw).trim() === "") return null;
