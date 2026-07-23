@@ -5951,7 +5951,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 22, fontWeight: 800 }}>🚚 Ordini spediti</div>
               <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
-                Gli ordini usciti oggi, ciascuno col suo corriere. A mezzanotte passano in archivio.
+                Gli ordini usciti, ciascuno col suo corriere. Restano qui finché non premi Archivia.
               </div>
             </div>
 

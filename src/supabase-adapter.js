@@ -250,8 +250,11 @@ async function archivePreparedOrders() {
     .lt("data_preparato", midnightIso);
   if (error) return failure(error);
 
+  // Solo i PREPARATO si auto-archiviano a mezzanotte. Gli SPEDITI restano
+  // nella loro sezione finche' non si preme Archivia (richiesta Luca: la
+  // vista degli ordini usciti deve restare consultabile, es. review col team).
   const toArchive = (data || [])
-    .filter((r) => ["preparato", "spedito"].includes(String(r.stato || "").trim().toLowerCase()))
+    .filter((r) => String(r.stato || "").trim().toLowerCase() === "preparato")
     .map((r) => r.id_ordine);
 
   if (toArchive.length === 0) return { success: true };
