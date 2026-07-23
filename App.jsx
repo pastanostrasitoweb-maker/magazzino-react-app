@@ -3029,7 +3029,7 @@ export default function App() {
       // CAP di destinazione congelato: dall'anagrafica del cliente scelto,
       // oppure quello digitato a mano (ordine a testo libero). Per il costo
       // trasporto.
-      cap: String(clientsById[newOrderClientId]?.cap || newOrderCap || "").trim(),
+      cap: String(newOrderCap || clientsById[newOrderClientId]?.cap || "").trim(),
       lines: validLines,
     };
 
@@ -6542,6 +6542,10 @@ export default function App() {
                     if (c) {
                       setNewOrderCustomer(c.name);
                       if (c.category) setNewOrderCategory(c.category);
+                      // CAP auto-compilato dall'anagrafica del cliente scelto.
+                      setNewOrderCap(String(c.cap || ""));
+                    } else {
+                      setNewOrderCap("");
                     }
                   }}
                 >
@@ -6567,8 +6571,10 @@ export default function App() {
                     if (e.target.checked) {
                       setNewOrderClientId("");
                       setNewOrderCustomer("");
+                      setNewOrderCap("");
                     } else if (!newOrderClientId) {
                       setNewOrderCustomer("");
+                      setNewOrderCap("");
                     }
                   }}
                 />
@@ -6576,25 +6582,31 @@ export default function App() {
               </label>
 
               {newOrderManual && (
-                <>
-                  <input
-                    style={{ ...inputStyle(), marginTop: 8 }}
-                    value={newOrderCustomer}
-                    onChange={(event) => {
-                      setNewOrderCustomer(event.target.value);
-                      setNewOrderClientId("");
-                    }}
-                    placeholder="Nome cliente (scritto a mano, non collegato all'anagrafica)"
-                  />
-                  <input
-                    style={{ ...inputStyle(), marginTop: 8 }}
-                    value={newOrderCap}
-                    onChange={(event) => setNewOrderCap(event.target.value.replace(/[^0-9]/g, "").slice(0, 5))}
-                    inputMode="numeric"
-                    placeholder="CAP destinazione (per il costo trasporto)"
-                  />
-                </>
+                <input
+                  style={{ ...inputStyle(), marginTop: 8 }}
+                  value={newOrderCustomer}
+                  onChange={(event) => {
+                    setNewOrderCustomer(event.target.value);
+                    setNewOrderClientId("");
+                  }}
+                  placeholder="Nome cliente (scritto a mano, non collegato all'anagrafica)"
+                />
               )}
+
+              {/* CAP destinazione: auto-compilato dal cliente scelto, oppure a
+                  mano per il testo libero. Serve al costo trasporto. */}
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 12, color: "#5a6e90", fontWeight: 700, marginBottom: 4 }}>
+                  CAP destinazione {newOrderClientId ? "(dall'anagrafica, correggibile)" : "(per il costo trasporto)"}
+                </div>
+                <input
+                  style={inputStyle()}
+                  value={newOrderCap}
+                  onChange={(event) => setNewOrderCap(event.target.value.replace(/[^0-9]/g, "").slice(0, 5))}
+                  inputMode="numeric"
+                  placeholder="Es. 00185"
+                />
+              </div>
 
               {newOrderClientId && clientsById[newOrderClientId] ? (
                 <div style={{ fontSize: 12, color: "#475569", marginTop: 6 }}>
