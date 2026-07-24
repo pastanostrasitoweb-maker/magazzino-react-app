@@ -733,6 +733,28 @@ async function saveClienteOverride(params) {
   return { success: true, override: data || row };
 }
 
+// Foto di una bolla/DDT ricevuta, scattata dalla produzione. La scriviamo nella
+// coda condivisa dell'APP ACQUISTI (acq_ricevimenti_foto, stesso Supabase): con
+// stato 'Da analizzare' entra nella pipeline esistente (la routine la analizza e
+// la propone all'ufficio, come le foto del bot Telegram). RLS off su quella tabella.
+async function salvaFotoBolla(params) {
+  const p = parsePayload(params);
+  if (!p.foto) return failure("foto mancante");
+  const { data, error } = await supabase
+    .from("acq_ricevimenti_foto")
+    .insert({
+      canale: "magazzino",
+      mittente: p.operatore || "magazzino",
+      caption: p.caption || "",
+      foto_locale: String(p.foto),
+      stato: "Da analizzare",
+    })
+    .select("id")
+    .maybeSingle();
+  if (error) return failure(error);
+  return { success: true, id: data?.id ?? null };
+}
+
 async function deleteOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
@@ -1540,6 +1562,8 @@ export async function callSheetsApi(params = {}) {
         return await logProduzione(params);
       case "saveClienteOverride":
         return await saveClienteOverride(params);
+      case "salvaFotoBolla":
+        return await salvaFotoBolla(params);
       case "createProduct":
         return await createProduct(params);
       case "updateProduct":

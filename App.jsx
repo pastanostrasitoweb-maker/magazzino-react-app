@@ -22,6 +22,7 @@ import {
   Smartphone,
   ThumbsUp,
   ThumbsDown,
+  Camera,
   Truck,
 } from "lucide-react";
 
@@ -297,6 +298,36 @@ function normalizeTipologia(raw) {
   if (/farma|pharma|farmacia|parafarm/.test(s)) return "FARMA";
   if (/gdo|grande distribuzione|supermerc|iper\b|discount/.test(s)) return "GDO";
   return "";
+}
+
+// Riduce una foto (File) a data URL JPEG, lato lungo max ~1400px, qualita' 0.7:
+// la bolla resta leggibile ma pesa poco (~100-250KB) in acq_ricevimenti_foto.
+function riduciImmagine(file, maxLato = 1400, qualita = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("lettura file fallita"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("immagine non valida"));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width >= height && width > maxLato) {
+          height = Math.round((height * maxLato) / width);
+          width = maxLato;
+        } else if (height > width && height > maxLato) {
+          width = Math.round((width * maxLato) / height);
+          height = maxLato;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", qualita));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
@@ -1271,6 +1302,13 @@ export default function App() {
   const [savingProdLoad, setSavingProdLoad] = useState(false);
   const [prodTodayList, setProdTodayList] = useState([]);
 
+  // Foto bolle (solo produzione): scatti la foto della bolla ricevuta e la mandi
+  // alla coda dell'app acquisti. bollaPreview = data URL ridotta pronta all'invio.
+  const [bollaPreview, setBollaPreview] = useState("");
+  const [bollaCaption, setBollaCaption] = useState("");
+  const [savingBolla, setSavingBolla] = useState(false);
+  const [bolleInviate, setBolleInviate] = useState([]);
+
   const [editingLotId, setEditingLotId] = useState("");
   const [editingLotCode, setEditingLotCode] = useState("");
   const [editingLotExpiry, setEditingLotExpiry] = useState("");
@@ -1339,6 +1377,15 @@ export default function App() {
 
   const isIPadLayout = windowWidth <= 1100;
   const isSmallLayout = windowWidth <= 760;
+
+  // Ruolo PRODUZIONE (accesso Magazzino): interfaccia snella e mirata al loro
+  // lavoro (preparare gli ordini, caricare la produzione, foto bolle). Vede una
+  // navigazione ridotta e puo' assegnare i lotti senza il PIN admin, ma non ha
+  // le funzioni amministrative (eliminare, prodotti, anagrafica, ordini da APP).
+  const isProduzione = String(authUser?.username || "").toLowerCase() === "produzione";
+  // Chi puo' abbinare i lotti agli ordini: admin oppure la produzione.
+  const canAssign = isAdmin || isProduzione;
+
   // Con la lista ordini affiancata, la colonna dettaglio e' stretta: la riga
   // ordine a 3 colonne (min ~724px) entra solo su desktop ampio. Sotto, impila.
   const isOrderRowWide = windowWidth > 1200;
@@ -2852,6 +2899,37 @@ export default function App() {
     }
   };
 
+  // Riporta un ordine SPEDITO indietro tra i Preparati (errore, modifica).
+  // Corriere e DDT restano associati; l'ordine esce dalla sezione Spediti.
+  const reopenShippedOrder = async (order) => {
+    if (!order) return;
+    const conferma = window.confirm(
+      `Riportare tra i PREPARATI l'ordine di ${order.customer || order.id}?\n\n` +
+        "Esce dalla sezione Spediti e torna tra i preparati, così puoi modificarlo. " +
+        "Corriere e DDT restano associati."
+    );
+    if (!conferma) return;
+    const previousOrders = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(order.id) ? { ...o, status: "Preparato" } : o))
+    );
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId: order.id, status: "Preparato" }),
+      });
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+        alert("Errore nel riportare in preparati: " + ((result && result.error) || "sconosciuto"));
+      } else {
+        setPage("preparati");
+      }
+    } catch (error) {
+      setOrders(previousOrders);
+      alert("Errore di collegamento: " + String(error));
+    }
+  };
+
   // DDT: genera (o ristampa) il documento di trasporto in una finestra
   // stampabile. Numerazione progressiva per anno, salvata su ordini.ddt_numero.
   const generaDDT = async (order) => {
@@ -3726,6 +3804,52 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
   // Carico di produzione giornaliera: crea il lotto (giacenza) E registra la
   // produzione lorda in carichi_produzione (per l'app margine). Aggiunge alla
   // lista "caricati oggi" e pulisce il form per il prossimo articolo.
+  // Foto bolla: legge il file scelto/scattato e ne tiene la versione ridotta.
+  const onBollaFile = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = ""; // consente di riscattare/riscegliere lo stesso file
+    if (!file) return;
+    try {
+      setBollaPreview(await riduciImmagine(file));
+    } catch (err) {
+      alert("Non sono riuscito a leggere la foto: " + String(err));
+    }
+  };
+
+  // Invia la foto della bolla alla coda dell'app acquisti (acq_ricevimenti_foto).
+  const inviaBolla = async () => {
+    if (savingBolla) return;
+    if (!bollaPreview) {
+      alert("Scatta o scegli prima la foto della bolla.");
+      return;
+    }
+    setSavingBolla(true);
+    try {
+      const res = await callSheetsApi({
+        action: "salvaFotoBolla",
+        payload: JSON.stringify({
+          foto: bollaPreview,
+          caption: bollaCaption.trim(),
+          operatore: authUser?.etichetta || authUser?.username || "magazzino",
+        }),
+      });
+      if (res && res.success) {
+        setBolleInviate((prev) => [
+          { id: res.id, caption: bollaCaption.trim(), thumb: bollaPreview },
+          ...prev,
+        ]);
+        setBollaPreview("");
+        setBollaCaption("");
+      } else {
+        alert("Foto non inviata: " + ((res && res.error) || "errore sconosciuto"));
+      }
+    } catch (err) {
+      alert("Errore di collegamento nell'invio della foto.");
+    } finally {
+      setSavingBolla(false);
+    }
+  };
+
   const addProductionLoad = async () => {
     if (savingProdLoad) return;
     const prod = products.find((p) => String(p.id) === String(prodProductId));
@@ -4752,9 +4876,10 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 }}
                 onClick={() => setPage("ordini")}
               >
-                <ClipboardList size={18} /> Ordini
+                <ClipboardList size={18} /> {isProduzione ? "Da preparare" : "Ordini"}
               </button>
 
+              {!isProduzione && (
               <button
                 style={{
                   ...btnStyle(page === "ordini-app" ? "primary" : "soft"),
@@ -4778,7 +4903,9 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                   </span>
                 )}
               </button>
+              )}
 
+              {!isProduzione && (
               <button
                 style={{
                   ...btnStyle(page === "prodotti" ? "primary" : "soft"),
@@ -4789,7 +4916,9 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               >
                 <Package size={18} /> Prodotti
               </button>
+              )}
 
+              {!isProduzione && (
               <button
                 style={{
                   ...btnStyle(page === "fermi" ? "primary" : "soft"),
@@ -4800,6 +4929,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               >
                 <AlertTriangle size={18} /> Ordini fermi
               </button>
+              )}
 
               <button
                 style={{
@@ -4809,9 +4939,10 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 }}
                 onClick={() => setPage("preparati")}
               >
-                <CheckCircle2 size={18} /> Preparati
+                <CheckCircle2 size={18} /> {isProduzione ? "Pronti" : "Preparati"}
               </button>
 
+              {!isProduzione && (
               <button
                 style={{
                   ...btnStyle(page === "spediti" ? "primary" : "soft"),
@@ -4836,7 +4967,9 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                   </span>
                 ) : null}
               </button>
+              )}
 
+              {!isProduzione && (
               <button
                 style={{
                   ...btnStyle(page === "archivio" ? "primary" : "soft"),
@@ -4847,6 +4980,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               >
                 <Archive size={18} /> Archivio
               </button>
+              )}
 
               <button
                 style={{
@@ -4859,6 +4993,20 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 <Boxes size={18} /> Magazzino
               </button>
 
+              {isProduzione && (
+              <button
+                style={{
+                  ...btnStyle(page === "foto-bolle" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 148,
+                }}
+                onClick={() => setPage("foto-bolle")}
+              >
+                <Camera size={18} /> Foto bolle
+              </button>
+              )}
+
+              {!isProduzione && (
               <button
                 style={{
                   ...btnStyle("primary"),
@@ -4869,6 +5017,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               >
                 <Plus size={18} /> Nuovo ordine
               </button>
+              )}
 
               {isAdmin && (
                 <>
@@ -4928,7 +5077,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 <RefreshCw size={18} /> Aggiorna
               </button>
 
-              {!isAdmin ? (
+              {!isAdmin && !isProduzione ? (
                 <button
                   style={{
                     ...btnStyle("outline"),
@@ -4939,7 +5088,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 >
                   <Lock size={18} /> Admin
                 </button>
-              ) : (
+              ) : isAdmin ? (
                 <button
                   style={{
                     ...btnStyle("outline"),
@@ -4950,7 +5099,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 >
                   <Lock size={18} /> Esci admin
                 </button>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
@@ -5957,10 +6106,12 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
             >
               <div>
                 <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>
-                  Ordini preparati non archiviati
+                  {isProduzione ? "Ordini pronti" : "Ordini preparati non archiviati"}
                 </div>
                 <div style={{ marginTop: 4, color: "#66758b", fontSize: 14 }}>
-                  Qui trovi gli ordini già usciti/preparati. Puoi aprirli, controllare le righe e riaprirli per modificarli: se aggiungi una riga tornano da preparare.
+                  {isProduzione
+                    ? "Ordini pronti, in attesa che la logistica generi le etichette. Attacca le etichette, prepara le pedane e mettile pronte per la spedizione. Lo stato Spedito lo dà la logistica."
+                    : "Qui trovi gli ordini già usciti/preparati. Puoi aprirli, controllare le righe e riaprirli per modificarli: se aggiungi una riga tornano da preparare."}
                 </div>
               </div>
 
@@ -6390,6 +6541,13 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                       <button
                         style={btnStyle("outline")}
+                        onClick={() => reopenShippedOrder(order)}
+                        title="Riporta l'ordine tra i preparati per modificarlo"
+                      >
+                        <RotateCcw size={16} /> Riporta in preparati
+                      </button>
+                      <button
+                        style={btnStyle("outline")}
                         onClick={() => generaDDT(order)}
                         title={order.ddtNumero ? `Ristampa ${order.ddtNumero}` : "Genera Documento di Trasporto"}
                       >
@@ -6403,6 +6561,87 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {page === "foto-bolle" && (
+          <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20, maxWidth: 640 }}>
+            <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>
+              📸 Foto bolle ricevute
+            </div>
+            <div style={{ marginTop: 4, color: "#66758b", fontSize: 14, lineHeight: 1.4 }}>
+              Scatta la foto della bolla / DDT del fornitore appena arriva la merce. La mando all'ufficio acquisti, che la ritrova nella sua app pronta da verificare.
+            </div>
+
+            <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
+              {bollaPreview ? (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <img
+                    src={bollaPreview}
+                    alt="bolla"
+                    style={{ width: "100%", borderRadius: 12, border: "1px solid #e5edf6" }}
+                  />
+                  <button style={btnStyle("outline")} onClick={() => setBollaPreview("")}>
+                    <RotateCcw size={16} /> Rifai la foto
+                  </button>
+                </div>
+              ) : (
+                <label
+                  style={{
+                    ...btnStyle("primary"),
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    padding: 20,
+                  }}
+                >
+                  <Camera size={20} /> Scatta / scegli la foto
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={onBollaFile}
+                    style={{ display: "none" }}
+                  />
+                </label>
+              )}
+
+              <div>
+                <label style={labelStyle()}>Nota (facoltativa)</label>
+                <input
+                  style={inputStyle()}
+                  value={bollaCaption}
+                  onChange={(e) => setBollaCaption(e.target.value)}
+                  placeholder="Es. fornitore o numero bolla"
+                />
+              </div>
+
+              <button
+                style={btnStyle("success", savingBolla)}
+                disabled={savingBolla || !bollaPreview}
+                onClick={inviaBolla}
+              >
+                <Plus size={18} /> {savingBolla ? "Invio..." : "Invia all'ufficio acquisti"}
+              </button>
+
+              {bolleInviate.length > 0 ? (
+                <div style={{ ...cardStyle({ background: "#f0fdf4" }), padding: 12, border: "1px solid #bbf7d0" }}>
+                  <div style={{ fontWeight: 900, color: "#14532d", marginBottom: 8 }}>
+                    Inviate in questa sessione: {bolleInviate.length}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {bolleInviate.map((b, i) => (
+                      <img
+                        key={i}
+                        src={b.thumb}
+                        alt="inviata"
+                        title={b.caption || "bolla inviata"}
+                        style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "1px solid #86efac" }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
 
