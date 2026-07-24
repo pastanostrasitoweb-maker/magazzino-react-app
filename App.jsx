@@ -1520,6 +1520,9 @@ export default function App() {
   const [bollaCaption, setBollaCaption] = useState("");
   const [savingBolla, setSavingBolla] = useState(false);
   const [bolleInviate, setBolleInviate] = useState([]);
+  // Ordini fornitore in arrivo (da Acquisti) per abbinare la foto della bolla.
+  const [ordiniArrivo, setOrdiniArrivo] = useState([]);
+  const [fotoOrdineId, setFotoOrdineId] = useState("");
 
   // Chat interna produzione <-> amministrazione (+ ordini). Vocali + notifica.
   const [chatOpen, setChatOpen] = useState(false);
@@ -4093,6 +4096,17 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
     }
   };
 
+  // Ordini fornitore in arrivo (da Acquisti) per abbinare la foto della bolla.
+  const loadOrdiniArrivo = async () => {
+    const res = await callSheetsApi({ action: "getOrdiniAcquistiInArrivo" });
+    if (res && res.success) setOrdiniArrivo(res.ordini || []);
+  };
+
+  // Quando si apre la pagina Foto bolle, carica gli ordini fornitore in arrivo.
+  useEffect(() => {
+    if (page === "foto-bolle") loadOrdiniArrivo();
+  }, [page]);
+
   // Invia la foto della bolla alla coda dell'app acquisti (acq_ricevimenti_foto).
   const inviaBolla = async () => {
     if (savingBolla) return;
@@ -4102,21 +4116,25 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
     }
     setSavingBolla(true);
     try {
+      const ordineSel = ordiniArrivo.find((o) => String(o.id) === String(fotoOrdineId));
       const res = await callSheetsApi({
         action: "salvaFotoBolla",
         payload: JSON.stringify({
           foto: bollaPreview,
           caption: bollaCaption.trim(),
           operatore: authUser?.etichetta || authUser?.username || "magazzino",
+          ordineId: ordineSel ? ordineSel.id : "",
+          fornitoreId: ordineSel ? ordineSel.fornitoreId : "",
         }),
       });
       if (res && res.success) {
         setBolleInviate((prev) => [
-          { id: res.id, caption: bollaCaption.trim(), thumb: bollaPreview },
+          { id: res.id, caption: bollaCaption.trim(), thumb: bollaPreview, ordine: ordineSel ? ordineSel.id : "" },
           ...prev,
         ]);
         setBollaPreview("");
         setBollaCaption("");
+        setFotoOrdineId("");
       } else {
         alert("Foto non inviata: " + ((res && res.error) || "errore sconosciuto"));
       }
@@ -7034,6 +7052,55 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               Scatta la foto della bolla / DDT del fornitore appena arriva la merce. La mando all'ufficio acquisti, che la ritrova nella sua app pronta da verificare.
             </div>
 
+            <div style={{ marginTop: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <label style={labelStyle()}>Abbina all'ordine in arrivo (da Acquisti)</label>
+                <button style={compactBtnStyle("outline")} onClick={loadOrdiniArrivo} title="Aggiorna gli ordini in arrivo">
+                  <RefreshCw size={14} /> Aggiorna
+                </button>
+              </div>
+              {ordiniArrivo.length === 0 ? (
+                <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 12, color: "#66758b", fontSize: 13, border: "1px solid #e5edf6" }}>
+                  Nessun ordine fornitore in arrivo al momento. Puoi comunque inviare la foto: l'ufficio acquisti la abbina.
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 8 }}>
+                  {ordiniArrivo.map((o) => {
+                    const sel = String(fotoOrdineId) === String(o.id);
+                    return (
+                      <button
+                        key={o.id}
+                        onClick={() => setFotoOrdineId(sel ? "" : o.id)}
+                        style={{
+                          textAlign: "left",
+                          cursor: "pointer",
+                          background: sel ? "#ecfdf5" : "#fff",
+                          border: sel ? "2px solid #16a34a" : "1px solid #e2e8f0",
+                          borderRadius: 12,
+                          padding: "10px 12px",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 900, color: "#07153a" }}>
+                            {sel ? "✅ " : ""}{o.fornitore || o.fornitoreId}
+                          </div>
+                          <div style={{ color: "#66758b", fontSize: 12 }}>
+                            {o.id} · {o.nRighe} {o.nRighe === 1 ? "riga" : "righe"}
+                            {o.consegna ? " · consegna " + fmtDate(o.consegna) : ""}
+                          </div>
+                        </div>
+                        <span style={badgeStyle(o.stato === "In consegna" ? "warning" : "outline")}>{o.stato}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
               {bollaPreview ? (
                 <div style={{ display: "grid", gap: 10 }}>
@@ -7075,6 +7142,15 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                   placeholder="Es. fornitore o numero bolla"
                 />
               </div>
+
+              {fotoOrdineId ? (
+                <div style={{ color: "#166534", fontSize: 13, fontWeight: 700 }}>
+                  {(() => {
+                    const o = ordiniArrivo.find((x) => String(x.id) === String(fotoOrdineId));
+                    return o ? `Abbinata all'ordine ${o.id} · ${o.fornitore || o.fornitoreId}` : "";
+                  })()}
+                </div>
+              ) : null}
 
               <button
                 style={btnStyle("success", savingBolla)}

@@ -740,19 +740,59 @@ async function saveClienteOverride(params) {
 async function salvaFotoBolla(params) {
   const p = parsePayload(params);
   if (!p.foto) return failure("foto mancante");
+  const row = {
+    canale: "magazzino",
+    mittente: p.operatore || "magazzino",
+    caption: p.caption || "",
+    foto_locale: String(p.foto),
+    stato: "Da analizzare",
+  };
+  // Se il magazzino ha abbinato la bolla a un ordine fornitore in arrivo,
+  // lo agganciamo direttamente cosi' l'app acquisti lo trova gia' associato.
+  if (p.ordineId) row.ordine_id = String(p.ordineId);
+  if (p.fornitoreId) row.fornitore_id = String(p.fornitoreId);
   const { data, error } = await supabase
     .from("acq_ricevimenti_foto")
-    .insert({
-      canale: "magazzino",
-      mittente: p.operatore || "magazzino",
-      caption: p.caption || "",
-      foto_locale: String(p.foto),
-      stato: "Da analizzare",
-    })
+    .insert(row)
     .select("id")
     .maybeSingle();
   if (error) return failure(error);
   return { success: true, id: data?.id ?? null };
+}
+
+// Ordini fornitore IN ARRIVO (caricati dall'app acquisti): quelli aperti non
+// ancora ricevuti. Servono al magazzino per abbinare la foto della bolla
+// selezionando l'ordine giusto. Best-effort (RLS off sulle tabelle acq_).
+async function getOrdiniAcquistiInArrivo() {
+  try {
+    const { data: ordini, error } = await supabase
+      .from("acq_ordini")
+      .select("id_ordine,fornitore_id,stato,data_ordine,consegna_attesa,righe")
+      .in("stato", ["Inviato", "Confermato", "In consegna"])
+      .order("consegna_attesa", { ascending: true });
+    if (error) return { success: false, error: error.message, ordini: [] };
+    const fornIds = [...new Set((ordini || []).map((o) => o.fornitore_id).filter(Boolean))];
+    let nomi = {};
+    if (fornIds.length) {
+      const { data: forn } = await supabase
+        .from("acq_fornitori")
+        .select("id,nome")
+        .in("id", fornIds);
+      nomi = Object.fromEntries((forn || []).map((f) => [String(f.id), f.nome]));
+    }
+    const out = (ordini || []).map((o) => ({
+      id: o.id_ordine,
+      fornitoreId: o.fornitore_id,
+      fornitore: nomi[String(o.fornitore_id)] || o.fornitore_id || "",
+      stato: o.stato,
+      consegna: o.consegna_attesa || "",
+      dataOrdine: o.data_ordine || "",
+      nRighe: Array.isArray(o.righe) ? o.righe.length : 0,
+    }));
+    return { success: true, ordini: out };
+  } catch (e) {
+    return { success: false, error: String(e), ordini: [] };
+  }
 }
 
 // Canali chat consentiti. 'chat_messaggi' = chat interna; 'chat_nuovi_ordini' =
@@ -1612,6 +1652,8 @@ export async function callSheetsApi(params = {}) {
         return await saveClienteOverride(params);
       case "salvaFotoBolla":
         return await salvaFotoBolla(params);
+      case "getOrdiniAcquistiInArrivo":
+        return await getOrdiniAcquistiInArrivo();
       case "getChatMessaggi":
         return await getChatMessaggi(params);
       case "inviaChatMessaggio":
