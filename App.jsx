@@ -7068,12 +7068,9 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                   {ordiniArrivo.map((o) => {
                     const sel = String(fotoOrdineId) === String(o.id);
                     return (
-                      <button
+                      <div
                         key={o.id}
-                        onClick={() => setFotoOrdineId(sel ? "" : o.id)}
                         style={{
-                          textAlign: "left",
-                          cursor: "pointer",
                           background: sel ? "#ecfdf5" : "#fff",
                           border: sel ? "2px solid #16a34a" : "1px solid #e2e8f0",
                           borderRadius: 12,
@@ -7082,9 +7079,13 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           justifyContent: "space-between",
                           alignItems: "center",
                           gap: 10,
+                          flexWrap: "wrap",
                         }}
                       >
-                        <div style={{ minWidth: 0 }}>
+                        <div
+                          onClick={() => setFotoOrdineId(sel ? "" : o.id)}
+                          style={{ minWidth: 0, flex: "1 1 180px", cursor: "pointer" }}
+                        >
                           <div style={{ fontWeight: 900, color: "#07153a" }}>
                             {sel ? "✅ " : ""}{o.fornitore || o.fornitoreId}
                           </div>
@@ -7093,8 +7094,26 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                             {o.consegna ? " · consegna " + fmtDate(o.consegna) : ""}
                           </div>
                         </div>
-                        <span style={badgeStyle(o.stato === "In consegna" ? "warning" : "outline")}>{o.stato}</span>
-                      </button>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={badgeStyle(o.stato === "In consegna" ? "warning" : "outline")}>{o.stato}</span>
+                          <label
+                            style={{ ...compactBtnStyle("success"), cursor: "pointer" }}
+                            title="Scatta la foto della bolla di questo ordine"
+                          >
+                            <Camera size={16} /> Scatta bolla
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              style={{ display: "none" }}
+                              onChange={(e) => {
+                                setFotoOrdineId(o.id);
+                                onBollaFile(e);
+                              }}
+                            />
+                          </label>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
@@ -7151,12 +7170,15 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                     padding: 20,
                   }}
                 >
-                  <Camera size={20} /> Scatta / scegli la foto
+                  <Camera size={20} /> Scatta la foto (merce senza ordine)
                   <input
                     type="file"
                     accept="image/*"
                     capture="environment"
-                    onChange={onBollaFile}
+                    onChange={(e) => {
+                      setFotoOrdineId("");
+                      onBollaFile(e);
+                    }}
                     style={{ display: "none" }}
                   />
                 </label>
