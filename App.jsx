@@ -7099,6 +7099,35 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                   })}
                 </div>
               )}
+
+              {(() => {
+                const o = ordiniArrivo.find((x) => String(x.id) === String(fotoOrdineId));
+                if (!o) return null;
+                return (
+                  <div style={{ marginTop: 8, ...cardStyle({ background: "#f0fdf4" }), padding: 12, border: "1px solid #bbf7d0" }}>
+                    <div style={{ fontWeight: 900, color: "#14532d", marginBottom: 6 }}>
+                      Dettaglio ordine {o.id} · {o.fornitore || o.fornitoreId}
+                    </div>
+                    {o.righe && o.righe.length ? (
+                      <div style={{ display: "grid", gap: 4 }}>
+                        {o.righe.map((r, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#14532d", gap: 8 }}>
+                            <span style={{ overflowWrap: "anywhere" }}>{r.articolo}</span>
+                            <span style={{ whiteSpace: "nowrap", fontWeight: 800 }}>
+                              {r.qta} {r.um}{r.prezzo != null ? ` · ${r.prezzo}€` : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: "#4d7c5a", fontSize: 13 }}>Nessuna riga sull'ordine.</div>
+                    )}
+                    <div style={{ marginTop: 8, color: "#4d7c5a", fontSize: 12, lineHeight: 1.4 }}>
+                      Confronta con quello che è arrivato. La foto viene inviata già abbinata a questo ordine: l'ufficio acquisti rileva in automatico le non conformità (quantità o prezzi diversi tra ordine e bolla).
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div style={{ marginTop: 18, display: "grid", gap: 14 }}>

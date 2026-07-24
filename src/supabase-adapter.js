@@ -780,6 +780,25 @@ async function getOrdiniAcquistiInArrivo() {
         .in("id", fornIds);
       nomi = Object.fromEntries((forn || []).map((f) => [String(f.id), f.nome]));
     }
+    // Nomi articolo leggibili, se esiste il catalogo acq_articoli.
+    let artNomi = {};
+    try {
+      const artIds = [
+        ...new Set(
+          (ordini || []).flatMap((o) => (Array.isArray(o.righe) ? o.righe : []))
+            .map((r) => r && r.articolo_id).filter(Boolean)
+        ),
+      ];
+      if (artIds.length) {
+        const { data: arts } = await supabase
+          .from("acq_articoli")
+          .select("id,nome,descrizione")
+          .in("id", artIds);
+        artNomi = Object.fromEntries(
+          (arts || []).map((a) => [String(a.id), a.nome || a.descrizione || ""])
+        );
+      }
+    } catch (_) {}
     const out = (ordini || []).map((o) => ({
       id: o.id_ordine,
       fornitoreId: o.fornitore_id,
@@ -788,6 +807,12 @@ async function getOrdiniAcquistiInArrivo() {
       consegna: o.consegna_attesa || "",
       dataOrdine: o.data_ordine || "",
       nRighe: Array.isArray(o.righe) ? o.righe.length : 0,
+      righe: (Array.isArray(o.righe) ? o.righe : []).map((r) => ({
+        articolo: artNomi[String(r.articolo_id)] || r.articolo_id || "",
+        qta: Number(r.qta ?? 0),
+        um: r.um || "",
+        prezzo: r.prezzo === undefined || r.prezzo === null ? null : Number(r.prezzo),
+      })),
     }));
     return { success: true, ordini: out };
   } catch (e) {
