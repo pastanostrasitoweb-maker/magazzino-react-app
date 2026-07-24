@@ -1074,6 +1074,16 @@ export default function App() {
   const [newLotQty, setNewLotQty] = useState("");
   const [savingNewLot, setSavingNewLot] = useState(false);
 
+  // Carico di PRODUZIONE giornaliera: form semplice per la produzione.
+  const [prodLoadOpen, setProdLoadOpen] = useState(false);
+  const [prodProductId, setProdProductId] = useState("");
+  const [prodProductSearch, setProdProductSearch] = useState("");
+  const [prodCode, setProdCode] = useState("");
+  const [prodExpiry, setProdExpiry] = useState("");
+  const [prodQty, setProdQty] = useState("");
+  const [savingProdLoad, setSavingProdLoad] = useState(false);
+  const [prodTodayList, setProdTodayList] = useState([]);
+
   const [editingLotId, setEditingLotId] = useState("");
   const [editingLotCode, setEditingLotCode] = useState("");
   const [editingLotExpiry, setEditingLotExpiry] = useState("");
@@ -3513,6 +3523,110 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       alert("Errore di collegamento con Google Sheet: " + String(error));
     } finally {
       setSavingNewLot(false);
+    }
+  };
+
+  // Carico di produzione giornaliera: crea il lotto (giacenza) E registra la
+  // produzione lorda in carichi_produzione (per l'app margine). Aggiunge alla
+  // lista "caricati oggi" e pulisce il form per il prossimo articolo.
+  const addProductionLoad = async () => {
+    if (savingProdLoad) return;
+    const prod = products.find((p) => String(p.id) === String(prodProductId));
+    if (!prod) {
+      alert("Seleziona l'articolo prodotto.");
+      return;
+    }
+    if (!prodCode.trim()) {
+      alert("Inserisci il codice lotto.");
+      return;
+    }
+    if (!prodExpiry) {
+      alert("Inserisci la scadenza.");
+      return;
+    }
+    const qty = Number(prodQty);
+    if (!qty || qty <= 0) {
+      alert("Inserisci quante unità sono state prodotte.");
+      return;
+    }
+    const kg = Math.round(qty * Number(prod.weightKg || 0) * 100) / 100;
+
+    setSavingProdLoad(true);
+    try {
+      const result = await callSheetsApi({
+        action: "createLot",
+        payload: JSON.stringify({
+          id: `LOT-${Date.now()}`,
+          productId: String(prod.id),
+          lot: prodCode.trim(),
+          codiceLotto: prodCode.trim(),
+          expiry: prodExpiry,
+          scadenza: prodExpiry,
+          quantita: qty,
+          loadedQty: qty,
+        }),
+      });
+      if (!result || !result.success) {
+        alert("Errore nel carico: " + ((result && result.error) || "sconosciuto"));
+        return;
+      }
+
+      const returnedLotId = String(result.lotId || result.idLotto || `LOT-${Date.now()}`);
+      const returnedQty =
+        result.newQty !== undefined && result.newQty !== null && result.newQty !== ""
+          ? Number(result.newQty)
+          : qty;
+      setLots((prev) => {
+        const exists = prev.some(
+          (lot) =>
+            String(lot.id) === returnedLotId ||
+            (String(lot.productId) === String(prod.id) && String(lot.lot) === prodCode.trim())
+        );
+        if (exists) {
+          return prev.map((lot) =>
+            String(lot.id) === returnedLotId ||
+            (String(lot.productId) === String(prod.id) && String(lot.lot) === prodCode.trim())
+              ? { ...lot, id: returnedLotId, lot: prodCode.trim(), expiry: prodExpiry, loadedQty: returnedQty }
+              : lot
+          );
+        }
+        return [
+          { id: returnedLotId, productId: String(prod.id), lot: prodCode.trim(), expiry: prodExpiry, loadedQty: returnedQty, archived: false },
+          ...prev,
+        ];
+      });
+
+      // Log produzione per l'app margine (best-effort: se la tabella non c'e'
+      // ancora, il carico lotto resta comunque valido).
+      try {
+        await callSheetsApi({
+          action: "logProduzione",
+          payload: JSON.stringify({
+            productId: String(prod.id),
+            code: prod.code,
+            name: prod.name,
+            lot: prodCode.trim(),
+            expiry: prodExpiry,
+            ct: qty,
+            kg,
+            operatore: authUser?.etichetta || authUser?.username || "",
+          }),
+        });
+      } catch (_) {}
+
+      setProdTodayList((prev) => [
+        { code: prod.code, name: prod.name, lot: prodCode.trim(), expiry: prodExpiry, qty, kg, uom: prod.uom },
+        ...prev,
+      ]);
+      setProdProductId("");
+      setProdProductSearch("");
+      setProdCode("");
+      setProdExpiry("");
+      setProdQty("");
+    } catch (error) {
+      alert("Errore di collegamento: " + String(error));
+    } finally {
+      setSavingProdLoad(false);
     }
   };
 
@@ -6155,11 +6269,33 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 
         {page === "magazzino" && (
           <div style={{ ...cardStyle(), padding: 20 }}>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 22, fontWeight: 800 }}>Magazzino a prima vista</div>
-              <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
-                Tutti i prodotti a catalogo, anche a giacenza 0: totale complessivo + dettaglio per ciascun lotto. Disponibile negativa = da produrre.
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>Magazzino a prima vista</div>
+                <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
+                  Tutti i prodotti a catalogo, anche a giacenza 0: totale complessivo + dettaglio per ciascun lotto. Disponibile negativa = da produrre.
+                </div>
               </div>
+              <button
+                style={{
+                  ...btnStyle("success"),
+                  fontSize: 16,
+                  height: 56,
+                  padding: "0 22px",
+                  boxShadow: "0 10px 22px rgba(22,163,74,0.22)",
+                }}
+                onClick={() => {
+                  setProdProductId("");
+                  setProdProductSearch("");
+                  setProdCode("");
+                  setProdExpiry("");
+                  setProdQty("");
+                  setProdTodayList([]);
+                  setProdLoadOpen(true);
+                }}
+              >
+                <Package size={20} /> Carico di produzione giornaliera
+              </button>
             </div>
 
             <div style={{ position: "relative", marginBottom: 16, maxWidth: 420 }}>
@@ -7943,6 +8079,135 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               {selectedLotProduct && !productManagesLots(selectedLotProduct) ? "Salva disponibilità" : "Salva lotto"}
             </button>
           </div>
+        </Modal>
+
+        <Modal
+          open={prodLoadOpen}
+          title="📦 Carico di produzione giornaliera"
+          onClose={() => setProdLoadOpen(false)}
+          maxWidth={620}
+        >
+          {(() => {
+            const prod = products.find((p) => String(p.id) === String(prodProductId));
+            const qtyN = Number(prodQty) || 0;
+            const kg = prod ? Math.round(qtyN * Number(prod.weightKg || 0) * 100) / 100 : 0;
+            const totKgOggi = prodTodayList.reduce((s, r) => s + Number(r.kg || 0), 0);
+            return (
+              <div style={{ display: "grid", gap: 16 }}>
+                <div style={{ ...cardStyle({ background: "#f0fdf4" }), padding: 12, color: "#14532d", fontSize: 13, lineHeight: 1.4, border: "1px solid #bbf7d0" }}>
+                  A fine giornata segna cosa è stato prodotto: scegli l'articolo, metti lotto e scadenza, e quante unità sono state realizzate. Aggiorna il magazzino e alimenta il dato di produzione per l'app margini.
+                </div>
+
+                <div>
+                  <label style={labelStyle()}>Articolo prodotto</label>
+                  <ProductSearchSelect
+                    products={products}
+                    value={prodProductId}
+                    search={prodProductSearch}
+                    onSearchChange={setProdProductSearch}
+                    onChange={(id) => {
+                      setProdProductId(id);
+                      const p = products.find((x) => String(x.id) === String(id));
+                      // Suggerisci la scadenza dell'ultimo lotto dello stesso codice, se c'e'.
+                    }}
+                    placeholder="Cerca l'articolo per codice o nome"
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: isSmallLayout ? "1fr" : "1fr 1fr", gap: 12 }}>
+                  <div>
+                    <label style={labelStyle()}>Codice lotto</label>
+                    <input
+                      style={inputStyle()}
+                      value={prodCode}
+                      onChange={(e) => setProdCode(e.target.value)}
+                      placeholder="Es. 2604110"
+                    />
+                  </div>
+                  <div>
+                    <label style={labelStyle()}>Scadenza</label>
+                    <input
+                      style={inputStyle()}
+                      type="date"
+                      value={prodExpiry}
+                      onChange={(e) => setProdExpiry(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={labelStyle()}>
+                    Quantità realizzata {prod ? `(${prod.uom || "unità"})` : ""}
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <input
+                      style={{ ...inputStyle(), width: 140 }}
+                      type="number"
+                      min="1"
+                      value={prodQty}
+                      onChange={(e) => setProdQty(e.target.value)}
+                      placeholder="0"
+                    />
+                    {prod ? (
+                      <span style={{ ...badgeStyle(kg > 0 ? "success" : "outline"), fontSize: 14, padding: "8px 14px" }}>
+                        = {fmtKg(kg)} kg {Number(prod.weightKg || 0) === 0 ? "· peso non impostato" : `· ${fmtKg(prod.weightKg)} kg/${prod.uom || "unità"}`}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+
+                <button
+                  style={btnStyle("success", savingProdLoad)}
+                  disabled={savingProdLoad}
+                  onClick={addProductionLoad}
+                >
+                  <Plus size={18} /> {savingProdLoad ? "Salvo..." : "Aggiungi al carico di oggi"}
+                </button>
+
+                {prodTodayList.length > 0 ? (
+                  <div style={{ ...cardStyle(), padding: 14, border: "1px solid #e5edf6" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                      <div style={{ fontWeight: 900, color: "#07153a" }}>Caricati in questa sessione</div>
+                      <span style={{ ...badgeStyle("success"), fontSize: 14 }}>
+                        {prodTodayList.length} {prodTodayList.length === 1 ? "carico" : "carichi"} · {fmtKg(totKgOggi)} kg
+                      </span>
+                    </div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {prodTodayList.map((r, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: 10,
+                            padding: "8px 10px",
+                            background: i % 2 === 0 ? "#f8fafc" : "#fff",
+                            borderRadius: 10,
+                            fontSize: 13,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <b style={{ color: "#07153a" }}>{r.code}</b> {r.name}
+                            <div style={{ color: "#66758b", fontSize: 12 }}>
+                              lotto {r.lot} · scad. {fmtDate(r.expiry)}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: "right", fontWeight: 800, color: "#14532d", whiteSpace: "nowrap" }}>
+                            {r.qty} {r.uom || ""} · {fmtKg(r.kg)} kg
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <button style={btnStyle("outline")} onClick={() => setProdLoadOpen(false)}>
+                  Chiudi
+                </button>
+              </div>
+            );
+          })()}
         </Modal>
       </div>
     </div>

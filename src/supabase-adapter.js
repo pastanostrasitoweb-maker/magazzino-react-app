@@ -649,6 +649,28 @@ async function createOrder(params) {
   return { success: true, idOrdine: String(idOrdine), righe: righeInserted };
 }
 
+// Log del carico di PRODUZIONE giornaliera: riga append-only in
+// carichi_produzione (data, prodotto, lotto, scadenza, ct, kg). E' il dato
+// reale di produzione letto dall'app margine (kg prodotti del mese). Distinto
+// dai lotti (che scalano con l'evasione): qui la produzione lorda non cala mai.
+// Best-effort: se la tabella non esiste ancora, il carico lotto resta valido.
+async function logProduzione(params) {
+  const p = parsePayload(params);
+  const { error } = await supabase.from("carichi_produzione").insert({
+    data: p.data || new Date().toISOString().slice(0, 10),
+    id_prodotto: String(p.productId ?? ""),
+    codice_prodotto: p.code || "",
+    descrizione_prodotto: p.name || "",
+    lotto: p.lot || "",
+    scadenza: p.expiry || null,
+    ct: Number(p.ct ?? p.quantita ?? 0),
+    kg: Number(p.kg ?? 0),
+    operatore: p.operatore || "",
+  });
+  if (error) return failure(error);
+  return { success: true };
+}
+
 async function deleteOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
@@ -1452,6 +1474,8 @@ export async function callSheetsApi(params = {}) {
         return await deleteOrder(params);
       case "createLot":
         return await createLot(params);
+      case "logProduzione":
+        return await logProduzione(params);
       case "createProduct":
         return await createProduct(params);
       case "updateProduct":
