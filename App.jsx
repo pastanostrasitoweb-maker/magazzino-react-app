@@ -2372,6 +2372,11 @@ export default function App() {
           "Errore nel salvataggio assegnazione sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
+        // Riga non piu' allineata col database: ricarico cosi' l'ordine si
+        // aggiorna con gli id reali e la nuova prova va a buon fine.
+        if (result && result.code === "RIGA_INESISTENTE") {
+          await loadDataFromSheets();
+        }
       } else if (
         result.assignmentId &&
         String(result.assignmentId) !== String(newAssignment.assignmentId)
@@ -2494,6 +2499,9 @@ export default function App() {
           "Errore nel salvataggio assegnazione sul foglio: " +
             ((result && result.error) || "errore sconosciuto")
         );
+        if (result && result.code === "RIGA_INESISTENTE") {
+          await loadDataFromSheets();
+        }
       } else if (
         result.assignmentId &&
         String(result.assignmentId) !== String(newAssignment.assignmentId)

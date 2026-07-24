@@ -349,6 +349,26 @@ async function assignLot(params) {
     return { success: false, error: "Parametri mancanti per assignLot" };
   }
 
+  // Guardia FK: la riga deve esistere davvero in righe_ordine, altrimenti
+  // l'insert nell'assegnazione viola il vincolo id_riga (errore criptico).
+  // Capita con schermate rimaste aperte mentre l'ordine cambiava altrove o con
+  // una riga aggiunta al volo non salvata. Diamo un messaggio chiaro e gestibile.
+  const rigaCheck = await supabase
+    .from("righe_ordine")
+    .select("id_riga")
+    .eq("id_riga", String(idRiga))
+    .maybeSingle();
+  if (rigaCheck.error) return failure(rigaCheck.error);
+  if (!rigaCheck.data) {
+    return {
+      success: false,
+      code: "RIGA_INESISTENTE",
+      error:
+        "Questa riga d'ordine non risulta più salvata (l'ordine è stato aggiornato altrove). " +
+        "Premi Aggiorna / ricarica l'ordine e riprova l'assegnazione.",
+    };
+  }
+
   // Senza lotto reale, nessuna rpc: fuori magazzino/articolo libero, oppure
   // codice HORECA movimentato senza lotto.
   const idProdotto = p.productId || p.idProdotto || p.ID_Prodotto || "";
