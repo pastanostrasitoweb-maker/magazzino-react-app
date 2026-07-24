@@ -2966,40 +2966,78 @@ export default function App() {
     // Dati destinatario: snapshot APP / GAMMA arricchito col nostro override.
     const app = effectiveCliente(order).merged || {};
     const cli = clientsById[String(order.clientId)] || {};
+    const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
     const dest = {
       ragione: app.ragione_sociale || cli.name || order.customer || "",
       piva: app.partita_iva || cli.piva || "",
+      sedeLegale: app.sede_legale || cli.indirizzo || "",
       indirizzo: app.indirizzo_spedizione || app.sede_legale || app.indirizzo || cli.indirizzo || "",
       cap: app.cap || cli.cap || order.cap || "",
       citta: app.citta || cli.citta || "",
       provincia: app.provincia || cli.provincia || "",
+      insegna: app.insegna || "",
       telefono: app.telefono || cli.telefono || "",
+      email: app.email || cli.email || "",
+      pec: app.pec || "",
+      codiceUnivoco: app.codice_univoco || "",
+      giornoChiusura: app.giorno_chiusura || "",
+      orari: app.orari_consegna || app.orario_scarico || "",
+      pagamento: app.metodo_pagamento || "",
     };
     const corriere = order.courier || order.transport?.consigliato?.corriere || "";
     const oggi = new Date().toLocaleDateString("it-IT");
-    const lotCodeById = Object.fromEntries(lots.map((l) => [String(l.id), l.lot || ""]));
+    // Mappa lotto: codice + scadenza, per riportarli nella descrizione riga.
+    const lotById = Object.fromEntries(
+      lots.map((l) => [String(l.id), { code: l.lot || "", expiry: l.expiry || "" }])
+    );
     const righeHtml = (order.lines || [])
       .map((line) => {
-        const lotti = (assignments[line.lineId] || [])
-          .map((a) => lotCodeById[String(a.lotId)] || (String(a.lotId).startsWith("LOT-") ? "" : a.lotId))
-          .filter(Boolean)
-          .join(", ");
-        return `<tr><td>${line.productCode || line.productId || ""}</td><td>${(line.productName || "").replace(/</g, "&lt;")}</td><td>${lotti || "—"}</td><td style="text-align:right">${line.qtyOrdered}</td></tr>`;
+        // Codice interno REALE del prodotto (dal catalogo), non l'id/riga.
+        const prod = products.find((p) => String(p.id) === String(line.productId));
+        const codice =
+          prod?.code ||
+          line.productCode ||
+          (String(line.productId).startsWith("FUORI_MAGAZZINO") ? "" : line.productId) ||
+          "";
+        // Lotto + scadenza assegnati, riportati nella descrizione.
+        const lottiParts = (assignments[line.lineId] || [])
+          .map((a) => {
+            const li = lotById[String(a.lotId)];
+            if (!li || !li.code) {
+              return String(a.lotId).startsWith("LOT-") ? "" : String(a.lotId || "");
+            }
+            return li.expiry ? `${li.code} (scad. ${fmtDate(li.expiry)})` : li.code;
+          })
+          .filter(Boolean);
+        const lottoStr = lottiParts.join(" · ");
+        const descr = esc(line.productName || "") + (lottoStr ? ` — Lotto: ${esc(lottoStr)}` : "");
+        return `<tr><td>${esc(codice)}</td><td>${descr}</td><td style="text-align:right">${line.qtyOrdered}</td></tr>`;
       })
       .join("");
+    const anagRows = [
+      dest.insegna ? `<b>Insegna:</b> ${esc(dest.insegna)}` : "",
+      dest.pagamento ? `<b>Pagamento:</b> ${esc(dest.pagamento)}` : "",
+      dest.codiceUnivoco ? `<b>Codice SdI:</b> ${esc(dest.codiceUnivoco)}` : "",
+      dest.pec ? `<b>PEC:</b> ${esc(dest.pec)}` : "",
+      dest.email ? `<b>Email:</b> ${esc(dest.email)}` : "",
+      dest.orari ? `<b>Orario scarico:</b> ${esc(dest.orari)}` : "",
+      dest.giornoChiusura ? `<b>Giorno chiusura:</b> ${esc(dest.giornoChiusura)}` : "",
+    ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+    const sedeDiversa =
+      dest.sedeLegale && dest.sedeLegale.trim() && dest.sedeLegale.trim() !== dest.indirizzo.trim();
     const html = `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${numero}</title>
 <style>body{font-family:Arial,sans-serif;margin:32px;color:#111}h1{font-size:20px;margin:0}
 .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:12px;margin-bottom:16px}
-.box{border:1px solid #999;border-radius:6px;padding:10px 12px;margin-bottom:12px}
+.box{border:1px solid #999;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.5}
 table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #999;padding:6px 8px;font-size:13px;text-align:left}
 th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 .firma{display:flex;gap:40px;margin-top:40px}.firma div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px}
 @media print{.noprint{display:none}}</style></head><body>
 <div class="top"><div><h1>GLUTEN FREE EXPERIENCE SRL</h1><div style="font-size:12px">Documento di Trasporto (D.d.T.) — D.P.R. 472/96</div></div>
 <div style="text-align:right"><div style="font-size:18px;font-weight:bold">${numero}</div><div>Data: ${oggi}</div></div></div>
-<div class="box"><b>Destinatario</b><br>${dest.ragione}<br>${dest.indirizzo}<br>${dest.cap} ${dest.citta}${dest.provincia ? " (" + dest.provincia + ")" : ""}<br>${dest.piva ? "P.IVA: " + dest.piva : ""}${dest.telefono ? " · Tel: " + dest.telefono : ""}</div>
-<div class="box"><b>Trasporto a mezzo:</b> ${corriere || "vettore"} · <b>Causale:</b> Vendita · <b>Porto:</b> franco · <b>Ordine:</b> ${order.id}</div>
-<table><thead><tr><th>Codice</th><th>Descrizione</th><th>Lotto</th><th style="text-align:right">Qta</th></tr></thead><tbody>${righeHtml}</tbody></table>
+<div class="box"><b>Destinatario</b><br>${esc(dest.ragione)}<br>${esc(dest.indirizzo)}<br>${esc(dest.cap)} ${esc(dest.citta)}${dest.provincia ? " (" + esc(dest.provincia) + ")" : ""}${sedeDiversa ? "<br><span style='color:#555'>Sede legale: " + esc(dest.sedeLegale) + "</span>" : ""}<br>${dest.piva ? "P.IVA: " + esc(dest.piva) : ""}${dest.telefono ? " · Tel: " + esc(dest.telefono) : ""}${anagRows ? "<br>" + anagRows : ""}</div>
+<div class="box"><b>Trasporto a mezzo:</b> ${esc(corriere) || "vettore"} · <b>Causale:</b> Vendita · <b>Porto:</b> franco · <b>Ordine:</b> ${esc(order.id)}${dest.pagamento ? " · <b>Pagamento:</b> " + esc(dest.pagamento) : ""}</div>
+<table><thead><tr><th>Codice</th><th>Descrizione (lotto e scadenza)</th><th style="text-align:right">Qta</th></tr></thead><tbody>${righeHtml}</tbody></table>
 <div class="tot"><span>Colli: ${order.colli ?? ""}</span><span>Peso lordo: ${fmtKg(order.pesoTotale)} kg</span></div>
 <div class="firma"><div>Firma conducente</div><div>Firma destinatario</div></div>
 <button class="noprint" onclick="window.print()" style="margin-top:24px;padding:10px 18px;font-size:14px">Stampa</button>
