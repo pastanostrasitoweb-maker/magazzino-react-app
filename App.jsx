@@ -1,5 +1,5 @@
 // hotfix assegnazione prodotti senza lotto su ID disponibilità reale
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { callSheetsApi } from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
@@ -23,6 +23,9 @@ import {
   ThumbsUp,
   ThumbsDown,
   Camera,
+  MessageCircle,
+  Mic,
+  Send,
   Truck,
 } from "lucide-react";
 
@@ -1308,6 +1311,21 @@ export default function App() {
   const [bollaCaption, setBollaCaption] = useState("");
   const [savingBolla, setSavingBolla] = useState(false);
   const [bolleInviate, setBolleInviate] = useState([]);
+
+  // Chat interna produzione <-> amministrazione (+ ordini). Vocali + notifica.
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatText, setChatText] = useState("");
+  const [chatUnread, setChatUnread] = useState(0);
+  const [chatSending, setChatSending] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const chatOpenRef = useRef(false);
+  const chatSeenRef = useRef(
+    (typeof localStorage !== "undefined" && localStorage.getItem("chat_last_seen")) || ""
+  );
+  const chatNewestRef = useRef("");
+  const mediaRecorderRef = useRef(null);
+  const chatEndRef = useRef(null);
 
   const [editingLotId, setEditingLotId] = useState("");
   const [editingLotCode, setEditingLotCode] = useState("");
@@ -3900,6 +3918,160 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
     }
   };
 
+  // ---- Chat interna ----
+  // Suono di notifica (beep) via Web Audio, senza asset esterni.
+  const playChatBeep = () => {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.type = "sine";
+      o.frequency.setValueAtTime(880, ctx.currentTime);
+      o.frequency.setValueAtTime(1175, ctx.currentTime + 0.12);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+      o.start();
+      o.stop(ctx.currentTime + 0.5);
+    } catch (_) {}
+  };
+
+  // Polling dei messaggi ogni 4s finche' si e' loggati.
+  useEffect(() => {
+    if (!authUser) return;
+    let stop = false;
+    const poll = async () => {
+      const res = await callSheetsApi({ action: "getChatMessaggi" });
+      if (stop || !res || !res.success) return;
+      const msgs = res.messaggi || [];
+      setChatMessages(msgs);
+      const seen = chatSeenRef.current;
+      const nonMei = msgs.filter(
+        (m) => String(m.mittente) !== String(authUser.username)
+      );
+      const unread = nonMei.filter((m) => !seen || String(m.creato_il) > String(seen)).length;
+      const newest = msgs.length ? String(msgs[msgs.length - 1].creato_il) : "";
+      const newestFromOther = nonMei.length ? String(nonMei[nonMei.length - 1].creato_il) : "";
+      // Suono solo quando arriva un messaggio NUOVO da un altro e la chat e' chiusa.
+      if (
+        newestFromOther &&
+        chatNewestRef.current &&
+        newestFromOther > chatNewestRef.current &&
+        !chatOpenRef.current
+      ) {
+        playChatBeep();
+      }
+      chatNewestRef.current = newest > chatNewestRef.current ? newest : chatNewestRef.current;
+      if (!chatOpenRef.current) setChatUnread(unread);
+    };
+    poll();
+    const iv = setInterval(poll, 4000);
+    return () => {
+      stop = true;
+      clearInterval(iv);
+    };
+  }, [authUser]);
+
+  // Auto-scroll in fondo quando arrivano messaggi o si apre la chat.
+  useEffect(() => {
+    if (chatOpen && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ block: "end" });
+    }
+  }, [chatMessages, chatOpen]);
+
+  const openChat = () => {
+    setChatOpen(true);
+    chatOpenRef.current = true;
+    const now = new Date().toISOString();
+    chatSeenRef.current = now;
+    try {
+      localStorage.setItem("chat_last_seen", now);
+    } catch (_) {}
+    setChatUnread(0);
+  };
+
+  const closeChat = () => {
+    setChatOpen(false);
+    chatOpenRef.current = false;
+    const now = new Date().toISOString();
+    chatSeenRef.current = now;
+    try {
+      localStorage.setItem("chat_last_seen", now);
+    } catch (_) {}
+  };
+
+  const sendChat = async ({ testo = "", tipo = "testo", audio = "" }) => {
+    if (chatSending) return;
+    const t = String(testo || "").trim();
+    if (tipo === "testo" && !t) return;
+    if (tipo === "audio" && !audio) return;
+    setChatSending(true);
+    try {
+      const res = await callSheetsApi({
+        action: "inviaChatMessaggio",
+        payload: JSON.stringify({
+          mittente: authUser?.username || "",
+          etichetta: authUser?.etichetta || authUser?.username || "",
+          tipo,
+          testo: tipo === "testo" ? t : "",
+          audio,
+        }),
+      });
+      if (res && res.success) {
+        if (tipo === "testo") setChatText("");
+        if (res.messaggio) {
+          setChatMessages((prev) => [...prev, res.messaggio]);
+          chatNewestRef.current = String(res.messaggio.creato_il || chatNewestRef.current);
+        }
+      } else {
+        alert(
+          "Messaggio non inviato: " + ((res && res.error) || "errore") +
+            "\n\nControlla che la tabella chat_messaggi esista su Supabase."
+        );
+      }
+    } catch (err) {
+      alert("Errore di collegamento nell'invio del messaggio.");
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      const chunks = [];
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size) chunks.push(e.data);
+      };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+        const dataUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+        await sendChat({ tipo: "audio", audio: String(dataUrl) });
+      };
+      mediaRecorderRef.current = mr;
+      mr.start();
+      setRecording(true);
+    } catch (e) {
+      alert("Microfono non disponibile o permesso negato: " + String(e));
+    }
+  };
+
+  const stopRecording = () => {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state !== "inactive") mr.stop();
+    setRecording(false);
+  };
+
   const addProductionLoad = async () => {
     if (savingProdLoad) return;
     const prod = products.find((p) => String(p.id) === String(prodProductId));
@@ -4895,6 +5067,36 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               <span style={badgeStyle(isAdmin ? "dark" : "outline")}>
                 {isAdmin ? "ADMIN" : "OPERATORE"}
               </span>
+              <button
+                style={{
+                  ...btnStyle(chatUnread > 0 ? "warning" : "outline"),
+                  position: "relative",
+                }}
+                onClick={openChat}
+                title="Chat interna produzione / amministrazione"
+              >
+                <MessageCircle size={16} /> Chat
+                {chatUnread > 0 ? (
+                  <span
+                    style={{
+                      marginLeft: 4,
+                      background: "#dc2626",
+                      color: "#fff",
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: 900,
+                      minWidth: 20,
+                      height: 20,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "0 5px",
+                    }}
+                  >
+                    {chatUnread}
+                  </span>
+                ) : null}
+              </button>
               <button style={btnStyle("outline")} onClick={doLogout} title="Esci dall'account">
                 <Lock size={16} /> Esci
               </button>
@@ -6797,13 +6999,11 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                             </div>
                           </div>
 
-                          {isAdmin ? (
-                            <button style={btnStyle("outline")} onClick={() => unarchiveOrder(order.id)}>
-                              <RotateCcw size={16} /> Disarchivia
-                            </button>
-                          ) : (
-                            <span style={badgeStyle("success")}>Archiviato</span>
-                          )}
+                          {/* Disarchiviare e' un'azione reversibile: sempre disponibile
+                              (anche senza PIN admin). Si deve poter tornare indietro. */}
+                          <button style={btnStyle("outline")} onClick={() => unarchiveOrder(order.id)}>
+                            <RotateCcw size={16} /> Disarchivia
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -8812,6 +9012,109 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               </div>
             );
           })()}
+        </Modal>
+
+        <Modal open={chatOpen} title="💬 Chat interna" onClose={closeChat} maxWidth={560}>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ color: "#66758b", fontSize: 12 }}>
+              Chat tra produzione, amministrazione e ordini. Puoi scrivere o inviare un vocale.
+            </div>
+            <div
+              style={{
+                maxHeight: "52vh",
+                minHeight: 200,
+                overflowY: "auto",
+                display: "grid",
+                gap: 10,
+                padding: 4,
+                background: "#f8fafc",
+                borderRadius: 12,
+                border: "1px solid #e5edf6",
+              }}
+            >
+              {chatMessages.length === 0 ? (
+                <div style={{ color: "#66758b", textAlign: "center", padding: 24 }}>
+                  Nessun messaggio. Scrivi il primo.
+                </div>
+              ) : (
+                chatMessages.map((m) => {
+                  const mio = String(m.mittente) === String(authUser?.username);
+                  let ora = "";
+                  try {
+                    ora = new Date(m.creato_il).toLocaleTimeString("it-IT", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    });
+                  } catch (_) {}
+                  return (
+                    <div
+                      key={m.id}
+                      style={{ display: "flex", justifyContent: mio ? "flex-end" : "flex-start" }}
+                    >
+                      <div
+                        style={{
+                          maxWidth: "82%",
+                          background: mio ? "#0f172a" : "#ffffff",
+                          color: mio ? "#fff" : "#0f172a",
+                          border: mio ? "none" : "1px solid #e2e8f0",
+                          borderRadius: 14,
+                          padding: "8px 12px",
+                        }}
+                      >
+                        <div style={{ fontSize: 11, fontWeight: 800, opacity: 0.7, marginBottom: 3 }}>
+                          {mio ? "Tu" : m.mittente_etichetta || m.mittente}
+                          {ora ? " · " + ora : ""}
+                        </div>
+                        {m.tipo === "audio" && m.audio ? (
+                          <audio controls src={m.audio} style={{ width: 230, maxWidth: "100%" }} />
+                        ) : (
+                          <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                            {m.testo}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                style={{ ...inputStyle(), flex: 1, minWidth: 0 }}
+                value={chatText}
+                onChange={(e) => setChatText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !recording) sendChat({ testo: chatText });
+                }}
+                placeholder={recording ? "Registrazione in corso..." : "Scrivi un messaggio"}
+                disabled={recording}
+              />
+              {recording ? (
+                <button style={btnStyle("danger")} onClick={stopRecording} title="Ferma e invia il vocale">
+                  ■ Stop
+                </button>
+              ) : (
+                <button
+                  style={btnStyle("outline")}
+                  onClick={startRecording}
+                  title="Registra un messaggio vocale"
+                  disabled={chatSending}
+                >
+                  <Mic size={18} />
+                </button>
+              )}
+              <button
+                style={btnStyle("primary", chatSending)}
+                disabled={chatSending || recording || !chatText.trim()}
+                onClick={() => sendChat({ testo: chatText })}
+                title="Invia"
+              >
+                <Send size={18} />
+              </button>
+            </div>
+          </div>
         </Modal>
       </div>
     </div>

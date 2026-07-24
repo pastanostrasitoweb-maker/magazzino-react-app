@@ -755,6 +755,45 @@ async function salvaFotoBolla(params) {
   return { success: true, id: data?.id ?? null };
 }
 
+// Chat interna: legge gli ultimi messaggi (opzionalmente solo i piu' recenti
+// di un timestamp, per il polling). Degrada a lista vuota se la tabella manca.
+async function getChatMessaggi(params) {
+  const p = parsePayload(params);
+  try {
+    let q = supabase
+      .from("chat_messaggi")
+      .select("*")
+      .order("creato_il", { ascending: true })
+      .limit(300);
+    if (p.since) q = q.gt("creato_il", p.since);
+    const { data, error } = await q;
+    if (error) return { success: false, error: error.message, messaggi: [] };
+    return { success: true, messaggi: data || [] };
+  } catch (e) {
+    return { success: false, error: String(e), messaggi: [] };
+  }
+}
+
+async function inviaChatMessaggio(params) {
+  const p = parsePayload(params);
+  const testo = String(p.testo || "").trim();
+  const audio = String(p.audio || "");
+  if (!testo && !audio) return failure("messaggio vuoto");
+  const { data, error } = await supabase
+    .from("chat_messaggi")
+    .insert({
+      mittente: p.mittente || "",
+      mittente_etichetta: p.etichetta || p.mittente || "",
+      tipo: p.tipo || (audio ? "audio" : "testo"),
+      testo,
+      audio,
+    })
+    .select()
+    .maybeSingle();
+  if (error) return failure(error);
+  return { success: true, messaggio: data };
+}
+
 async function deleteOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
@@ -1564,6 +1603,10 @@ export async function callSheetsApi(params = {}) {
         return await saveClienteOverride(params);
       case "salvaFotoBolla":
         return await salvaFotoBolla(params);
+      case "getChatMessaggi":
+        return await getChatMessaggi(params);
+      case "inviaChatMessaggio":
+        return await inviaChatMessaggio(params);
       case "createProduct":
         return await createProduct(params);
       case "updateProduct":
