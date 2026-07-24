@@ -953,6 +953,215 @@ function applyStockMovementsToLots(lots, movements = []) {
   });
 }
 
+// Pannello chat riutilizzabile su un canale (tabella) qualsiasi. Gestisce da
+// solo polling, invio testo/vocale e beep all'arrivo di un messaggio altrui.
+function ChatPanel({ tabella, authUser, height = "42vh", vuotoLabel = "Nessun messaggio." }) {
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [rec, setRec] = useState(false);
+  const mrRef = useRef(null);
+  const endRef = useRef(null);
+  const newestRef = useRef("");
+
+  const beep = () => {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.type = "sine";
+      o.frequency.setValueAtTime(880, ctx.currentTime);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+      o.start();
+      o.stop(ctx.currentTime + 0.4);
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    let stop = false;
+    const poll = async () => {
+      const res = await callSheetsApi({
+        action: "getChatMessaggi",
+        payload: JSON.stringify({ tabella }),
+      });
+      if (stop || !res || !res.success) return;
+      const msgs = res.messaggi || [];
+      const altrui = msgs.filter((m) => String(m.mittente) !== String(authUser?.username));
+      const newestAltrui = altrui.length ? String(altrui[altrui.length - 1].creato_il) : "";
+      if (newestAltrui && newestRef.current && newestAltrui > newestRef.current) beep();
+      const newest = msgs.length ? String(msgs[msgs.length - 1].creato_il) : "";
+      if (newest > newestRef.current) newestRef.current = newest;
+      setMessages(msgs);
+    };
+    poll();
+    const iv = setInterval(poll, 4000);
+    return () => {
+      stop = true;
+      clearInterval(iv);
+    };
+  }, [tabella, authUser]);
+
+  useEffect(() => {
+    if (endRef.current) endRef.current.scrollIntoView({ block: "end" });
+  }, [messages]);
+
+  const send = async ({ testo = "", tipo = "testo", audio = "" }) => {
+    if (sending) return;
+    const t = String(testo || "").trim();
+    if (tipo === "testo" && !t) return;
+    if (tipo === "audio" && !audio) return;
+    setSending(true);
+    try {
+      const res = await callSheetsApi({
+        action: "inviaChatMessaggio",
+        payload: JSON.stringify({
+          tabella,
+          mittente: authUser?.username || "",
+          etichetta: authUser?.etichetta || authUser?.username || "",
+          tipo,
+          testo: tipo === "testo" ? t : "",
+          audio,
+        }),
+      });
+      if (res && res.success) {
+        if (tipo === "testo") setText("");
+        if (res.messaggio) {
+          setMessages((p) => [...p, res.messaggio]);
+          newestRef.current = String(res.messaggio.creato_il || newestRef.current);
+        }
+      } else {
+        alert(
+          "Messaggio non inviato: " + ((res && res.error) || "errore") +
+            "\n\nControlla che la tabella " + tabella + " esista su Supabase."
+        );
+      }
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const startRec = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      const chunks = [];
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size) chunks.push(e.data);
+      };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+        const dataUrl = await new Promise((resolve) => {
+          const rd = new FileReader();
+          rd.onload = () => resolve(rd.result);
+          rd.readAsDataURL(blob);
+        });
+        await send({ tipo: "audio", audio: String(dataUrl) });
+      };
+      mrRef.current = mr;
+      mr.start();
+      setRec(true);
+    } catch (e) {
+      alert("Microfono non disponibile o permesso negato: " + String(e));
+    }
+  };
+  const stopRec = () => {
+    const mr = mrRef.current;
+    if (mr && mr.state !== "inactive") mr.stop();
+    setRec(false);
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <div
+        style={{
+          maxHeight: height,
+          minHeight: 160,
+          overflowY: "auto",
+          display: "grid",
+          gap: 8,
+          padding: 4,
+          background: "#f8fafc",
+          borderRadius: 12,
+          border: "1px solid #e5edf6",
+        }}
+      >
+        {messages.length === 0 ? (
+          <div style={{ color: "#66758b", textAlign: "center", padding: 20 }}>{vuotoLabel}</div>
+        ) : (
+          messages.map((m) => {
+            const mio = String(m.mittente) === String(authUser?.username);
+            let ora = "";
+            try {
+              ora = new Date(m.creato_il).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+            } catch (_) {}
+            return (
+              <div key={m.id} style={{ display: "flex", justifyContent: mio ? "flex-end" : "flex-start" }}>
+                <div
+                  style={{
+                    maxWidth: "82%",
+                    background: mio ? "#0f172a" : "#fff",
+                    color: mio ? "#fff" : "#0f172a",
+                    border: mio ? "none" : "1px solid #e2e8f0",
+                    borderRadius: 14,
+                    padding: "8px 12px",
+                  }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 800, opacity: 0.7, marginBottom: 3 }}>
+                    {mio ? "Tu" : m.mittente_etichetta || m.mittente}
+                    {ora ? " · " + ora : ""}
+                  </div>
+                  {m.tipo === "audio" && m.audio ? (
+                    <audio controls src={m.audio} style={{ width: 220, maxWidth: "100%" }} />
+                  ) : (
+                    <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{m.testo}</div>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+        <div ref={endRef} />
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input
+          style={{ ...inputStyle(), flex: 1, minWidth: 0 }}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !rec) send({ testo: text });
+          }}
+          placeholder={rec ? "Registrazione in corso..." : "Scrivi cosa riordinare"}
+          disabled={rec}
+        />
+        {rec ? (
+          <button style={btnStyle("danger")} onClick={stopRec} title="Ferma e invia il vocale">
+            ■ Stop
+          </button>
+        ) : (
+          <button style={btnStyle("outline")} onClick={startRec} disabled={sending} title="Registra un vocale">
+            <Mic size={18} />
+          </button>
+        )}
+        <button
+          style={btnStyle("primary", sending)}
+          disabled={sending || rec || !text.trim()}
+          onClick={() => send({ testo: text })}
+          title="Invia"
+        >
+          <Send size={18} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [page, setPage] = useState("ordini");
   const [orders, setOrders] = useState([]);
@@ -6893,6 +7102,21 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                   </div>
                 </div>
               ) : null}
+            </div>
+
+            <div style={{ marginTop: 22, borderTop: "1px solid #eef2f7", paddingTop: 18 }}>
+              <div style={{ fontSize: 18, fontWeight: 900, color: "#07153a" }}>
+                📦 Nuovi ordini → Ufficio acquisti
+              </div>
+              <div style={{ marginTop: 4, marginBottom: 12, color: "#66758b", fontSize: 13, lineHeight: 1.4 }}>
+                Segnala qui la merce da riordinare: i messaggi arrivano direttamente all'ufficio acquisti, che può risponderti nello stesso filo. Puoi anche mandare un vocale.
+              </div>
+              <ChatPanel
+                tabella="chat_nuovi_ordini"
+                authUser={authUser}
+                height="38vh"
+                vuotoLabel="Nessun messaggio. Scrivi cosa serve riordinare."
+              />
             </div>
           </div>
         )}

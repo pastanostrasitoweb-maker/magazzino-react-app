@@ -755,13 +755,22 @@ async function salvaFotoBolla(params) {
   return { success: true, id: data?.id ?? null };
 }
 
-// Chat interna: legge gli ultimi messaggi (opzionalmente solo i piu' recenti
-// di un timestamp, per il polling). Degrada a lista vuota se la tabella manca.
+// Canali chat consentiti. 'chat_messaggi' = chat interna; 'chat_nuovi_ordini' =
+// canale verso l'app acquisti (richieste di nuovi ordini). Whitelist per non
+// permettere accessi arbitrari a tabelle via il parametro.
+const CHAT_TABLES = new Set(["chat_messaggi", "chat_nuovi_ordini"]);
+const chatTable = (p) => {
+  const t = String(p.tabella || p.canale || "chat_messaggi");
+  return CHAT_TABLES.has(t) ? t : "chat_messaggi";
+};
+
+// Chat: legge gli ultimi messaggi di un canale (opzionalmente solo i piu'
+// recenti di un timestamp, per il polling). Degrada a lista vuota se manca.
 async function getChatMessaggi(params) {
   const p = parsePayload(params);
   try {
     let q = supabase
-      .from("chat_messaggi")
+      .from(chatTable(p))
       .select("*")
       .order("creato_il", { ascending: true })
       .limit(300);
@@ -780,7 +789,7 @@ async function inviaChatMessaggio(params) {
   const audio = String(p.audio || "");
   if (!testo && !audio) return failure("messaggio vuoto");
   const { data, error } = await supabase
-    .from("chat_messaggi")
+    .from(chatTable(p))
     .insert({
       mittente: p.mittente || "",
       mittente_etichetta: p.etichetta || p.mittente || "",
