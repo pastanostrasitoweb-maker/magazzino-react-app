@@ -1568,7 +1568,12 @@ export default function App() {
     const openLineIds = new Set();
 
     orders.forEach((order) => {
-      if (String(order.status || "").trim().toLowerCase() === "preparato") return;
+      // Solo ordini ancora aperti: gli evasi (Preparato/Spedito) e gli
+      // archiviati hanno gia' scalato lo stock, le loro assegnazioni non sono
+      // piu' "impegno" pendente sul lotto (coerente con productCommittedMap).
+      if (order.archived) return;
+      const st = String(order.status || "").trim().toLowerCase();
+      if (st === "preparato" || st === "spedito") return;
 
       (order.lines || []).forEach((line) => {
         openLineIds.add(String(line.lineId));
@@ -1608,7 +1613,14 @@ export default function App() {
     const committedByProduct = {};
 
     orders.forEach((order) => {
-      if (String(order.status || "").trim().toLowerCase() === "preparato") return;
+      // "Impegnato" = ordinato ma NON ancora evaso. Escludi gli ordini gia'
+      // usciti dal magazzino: archiviati, Preparato e Spedito (per questi la
+      // merce e' gia' stata scalata dalla giacenza quando furono preparati,
+      // contarli come impegnati li peserebbe due volte). Contano solo gli
+      // ordini ancora aperti (Da preparare, Fermo).
+      if (order.archived) return;
+      const st = String(order.status || "").trim().toLowerCase();
+      if (st === "preparato" || st === "spedito") return;
 
       (order.lines || []).forEach((line) => {
         const productKey = String(line.productId);
