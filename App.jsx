@@ -264,6 +264,36 @@ function checkAnagraficaApp(cli) {
   return mancanti;
 }
 
+// Tipologie cliente allineabili a mano (richiesta Luca 2026-07-24).
+const TIPOLOGIE = ["HORECA", "FARMA", "GDO"];
+
+// Campi anagrafica completabili a mano (i 12 obbligatori della checklist Luca).
+const ANAG_FIELDS = [
+  { key: "ragione_sociale", label: "Ragione sociale" },
+  { key: "partita_iva", label: "Partita IVA" },
+  { key: "sede_legale", label: "Sede legale" },
+  { key: "cap", label: "CAP" },
+  { key: "indirizzo_spedizione", label: "Indirizzo di spedizione" },
+  { key: "insegna", label: "Insegna (se diversa)" },
+  { key: "orari_consegna", label: "Orario di scarico (finestra min 3 ore)" },
+  { key: "giorno_chiusura", label: "Giorno di chiusura" },
+  { key: "codice_univoco", label: "Codice univoco (SdI)" },
+  { key: "pec", label: "PEC" },
+  { key: "email", label: "Email" },
+  { key: "telefono", label: "Telefono referente" },
+  { key: "metodo_pagamento", label: "Metodo di pagamento" },
+];
+
+// Normalizza un canale/settore grezzo verso una delle tipologie standard.
+function normalizeTipologia(raw) {
+  const s = String(raw || "").toLowerCase();
+  if (!s) return "";
+  if (/horeca|ho\.?re\.?ca|ristora|hotel|\bbar\b|catering|pizzer/.test(s)) return "HORECA";
+  if (/farma|pharma|farmacia|parafarm/.test(s)) return "FARMA";
+  if (/gdo|grande distribuzione|supermerc|iper\b|discount/.test(s)) return "GDO";
+  return "";
+}
+
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
 // vuoto = "Da verificare" (grigio).
 function paymentBadgeInfo(status) {
@@ -899,6 +929,14 @@ export default function App() {
   // Anagrafiche snapshot degli ordini arrivati dall'APP agenti
   // (id ordine magazzino -> oggetto cliente). Per semaforo Anagrafica e DDT.
   const [appAnagrafiche, setAppAnagrafiche] = useState({});
+  // Layer di arricchimento nostro (chiave cliente -> override): tipologia + campi
+  // anagrafica completati a mano. Si sovrappone allo snapshot senza toccarlo.
+  const [clientiOverride, setClientiOverride] = useState({});
+  const [savingOverride, setSavingOverride] = useState("");
+  const [anagOpen, setAnagOpen] = useState(false);
+  const [anagOrderId, setAnagOrderId] = useState("");
+  const [anagForm, setAnagForm] = useState({});
+  const [savingAnag, setSavingAnag] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [selectedLineId, setSelectedLineId] = useState("");
   const [productSearch, setProductSearch] = useState("");
@@ -1001,26 +1039,164 @@ export default function App() {
   // - Cliente GAMMA: check sui campi che il gestionale espone (PIVA,
   //   indirizzo, CAP): GAMMA e' la fonte ufficiale per il resto.
   // - Cliente scritto a mano: anagrafica assente (avviso, non blocca).
-  const anagraficaFor = (order) => {
+  // Chiave cliente per il layer di arricchimento: P.IVA se disponibile, altrimenti
+  // ragione sociale normalizzata. Stessa chiave = stesso cliente su ordini diversi,
+  // cosi' tipologia e anagrafica completata valgono anche per gli ordini futuri.
+  const clientKeyFor = (order) => {
     const app = appAnagrafiche[String(order?.id || "")];
+    const gamma = clientsById[String(order?.clientId || "")];
+    const piva = String(app?.partita_iva || gamma?.piva || "").replace(/\D/g, "");
+    if (piva) return "piva:" + piva;
+    const nome = String(app?.ragione_sociale || gamma?.name || order?.customer || "")
+      .trim().toLowerCase().replace(/\s+/g, " ");
+    return nome ? "nome:" + nome : "";
+  };
+
+  // Dato cliente EFFETTIVO = base (snapshot APP o GAMMA) + il nostro override.
+  const effectiveCliente = (order) => {
+    const app = appAnagrafiche[String(order?.id || "")];
+    const gamma = clientsById[String(order?.clientId || "")];
+    let base = {};
+    let fonte = "";
     if (app) {
-      const mancanti = checkAnagraficaApp(app);
-      return mancanti.length
-        ? { stato: "ko", label: "Anagrafica incompleta", mancanti, fonte: "APP" }
-        : { stato: "ok", label: "Anagrafica OK", mancanti: [], fonte: "APP" };
+      base = { ...app };
+      fonte = "APP";
+    } else if (gamma) {
+      base = {
+        ragione_sociale: gamma.name,
+        partita_iva: gamma.piva,
+        sede_legale: gamma.indirizzo,
+        indirizzo: gamma.indirizzo,
+        cap: gamma.cap || order?.cap,
+        email: gamma.email,
+        telefono: gamma.telefono,
+      };
+      fonte = "GAMMA";
     }
-    const c = clientsById[String(order?.clientId || "")];
-    if (c) {
+    const ov = clientiOverride[clientKeyFor(order)] || null;
+    const merged = { ...base };
+    if (ov) {
+      for (const k of Object.keys(ov)) {
+        if (["chiave", "tipologia", "operatore", "aggiornato_il", "id", "note"].includes(k)) continue;
+        if (String(ov[k] ?? "").trim() !== "") merged[k] = ov[k];
+      }
+    }
+    return { base, ov, merged, fonte };
+  };
+
+  // Tipologia cliente: prima il nostro override, poi il dato dedotto dallo
+  // snapshot/GAMMA (canale/settore), altrimenti vuota (da assegnare a mano).
+  const tipologiaFor = (order) => {
+    const ov = clientiOverride[clientKeyFor(order)];
+    if (ov?.tipologia) return ov.tipologia;
+    const app = appAnagrafiche[String(order?.id || "")];
+    const gamma = clientsById[String(order?.clientId || "")];
+    return normalizeTipologia(
+      app?.settore || app?.tipologia || app?.canale || app?.categoria || gamma?.category || ""
+    );
+  };
+
+  const anagraficaFor = (order) => {
+    const { merged, ov, fonte } = effectiveCliente(order);
+    // APP (o cliente a mano con override): checklist completa sul dato unito.
+    if (fonte === "APP" || (fonte === "" && ov)) {
+      const mancanti = checkAnagraficaApp(merged);
+      const f = fonte === "APP" ? "APP" : "MANUALE";
+      return mancanti.length
+        ? { stato: "ko", label: "Anagrafica incompleta", mancanti, fonte: f }
+        : { stato: "ok", label: "Anagrafica OK", mancanti: [], fonte: f };
+    }
+    // GAMMA fonte ufficiale per il resto: check leggero (PIVA/indirizzo/CAP).
+    if (fonte === "GAMMA") {
       const has = (v) => String(v ?? "").trim() !== "";
       const mancanti = [];
-      if (!has(c.piva)) mancanti.push("Partita IVA");
-      if (!has(c.indirizzo)) mancanti.push("Indirizzo");
-      if (!has(c.cap) && !has(order?.cap)) mancanti.push("CAP");
+      if (!has(merged.partita_iva)) mancanti.push("Partita IVA");
+      if (!has(merged.indirizzo) && !has(merged.sede_legale)) mancanti.push("Indirizzo");
+      if (!has(merged.cap) && !has(order?.cap)) mancanti.push("CAP");
       return mancanti.length
         ? { stato: "ko", label: "Anagrafica incompleta", mancanti, fonte: "GAMMA" }
         : { stato: "ok", label: "Anagrafica OK", mancanti: [], fonte: "GAMMA" };
     }
     return { stato: "assente", label: "Anagrafica assente", mancanti: [], fonte: "" };
+  };
+
+  // Assegna a mano la tipologia cliente (HORECA/FARMA/GDO) e la registra.
+  const assignTipologia = async (order, tipologia) => {
+    const chiave = clientKeyFor(order);
+    if (!chiave) {
+      alert("Cliente non identificabile: manca sia P.IVA sia ragione sociale.");
+      return;
+    }
+    setSavingOverride(chiave);
+    try {
+      const res = await callSheetsApi({
+        action: "saveClienteOverride",
+        payload: JSON.stringify({ chiave, tipologia, operatore: authUser?.username || "" }),
+      });
+      if (res && res.success) {
+        setClientiOverride((prev) => ({
+          ...prev,
+          [chiave]: { ...(prev[chiave] || {}), ...(res.override || {}), chiave, tipologia },
+        }));
+      } else {
+        alert(
+          "Tipologia non salvata: " + (res?.error || "errore") +
+            "\n\nControlla che la tabella clienti_override esista su Supabase."
+        );
+      }
+    } catch (e) {
+      alert("Errore di collegamento nel salvataggio della tipologia.");
+    } finally {
+      setSavingOverride("");
+    }
+  };
+
+  // Apre il modale per completare a mano l'anagrafica del cliente dell'ordine.
+  const openCompletaAnagrafica = (order) => {
+    if (!order) return;
+    const { merged } = effectiveCliente(order);
+    const form = {};
+    for (const f of ANAG_FIELDS) form[f.key] = String(merged[f.key] ?? "");
+    if (!form.cap && order?.cap) form.cap = String(order.cap);
+    if (!form.sede_legale && merged.indirizzo) form.sede_legale = String(merged.indirizzo);
+    setAnagForm(form);
+    setAnagOrderId(String(order.id));
+    setAnagOpen(true);
+  };
+
+  const saveCompletaAnagrafica = async () => {
+    const order = orders.find((o) => String(o.id) === String(anagOrderId));
+    if (!order) return;
+    const chiave = clientKeyFor(order);
+    if (!chiave) {
+      alert("Cliente non identificabile: manca sia P.IVA sia ragione sociale.");
+      return;
+    }
+    setSavingAnag(true);
+    try {
+      const payload = { chiave, operatore: authUser?.username || "" };
+      for (const f of ANAG_FIELDS) payload[f.key] = anagForm[f.key] ?? "";
+      const res = await callSheetsApi({
+        action: "saveClienteOverride",
+        payload: JSON.stringify(payload),
+      });
+      if (res && res.success) {
+        setClientiOverride((prev) => ({
+          ...prev,
+          [chiave]: { ...(prev[chiave] || {}), ...payload, ...(res.override || {}), chiave },
+        }));
+        setAnagOpen(false);
+      } else {
+        alert(
+          "Anagrafica non salvata: " + (res?.error || "errore") +
+            "\n\nControlla che la tabella clienti_override esista su Supabase."
+        );
+      }
+    } catch (e) {
+      alert("Errore di collegamento nel salvataggio dell'anagrafica.");
+    } finally {
+      setSavingAnag(false);
+    }
   };
 
   // Blocco caricamento lotti se l'anagrafica e' in errore (richiesta Luca):
@@ -1194,6 +1370,7 @@ export default function App() {
       setOrders(mergedOrders);
       setClients(normalizedClients);
       setAppAnagrafiche(raw.anagraficheApp || {});
+      setClientiOverride(raw.overridesClienti || {});
       setAssignments(normalizedAssignments);
       setSelectedOrderId(mergedOrders[0]?.id ?? "");
       setSelectedLineId(mergedOrders[0]?.lines?.[0]?.lineId ?? "");
@@ -2688,8 +2865,8 @@ export default function App() {
       );
     }
 
-    // Dati destinatario: snapshot APP agenti oppure anagrafica GAMMA.
-    const app = appAnagrafiche[String(order.id)] || {};
+    // Dati destinatario: snapshot APP / GAMMA arricchito col nostro override.
+    const app = effectiveCliente(order).merged || {};
     const cli = clientsById[String(order.clientId)] || {};
     const dest = {
       ragione: app.ragione_sociale || cli.name || order.customer || "",
@@ -4876,6 +5053,17 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                             </span>
                           );
                         })()}
+                        {(() => {
+                          const t = tipologiaFor(order);
+                          return (
+                            <span
+                              style={badgeStyle(t ? "dark" : "outline")}
+                              title={t ? "Tipologia cliente" : "Tipologia da assegnare (apri l'ordine)"}
+                            >
+                              {t ? "🏷️ " + t : "🏷️ Tipologia?"}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -4936,16 +5124,66 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           </span>
                           {(() => {
                             const a = anagraficaFor(selectedOrder);
+                            const clickable = a.stato !== "ok";
                             return (
                               <span
-                                style={{ ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline"), cursor: a.stato === "ko" ? "pointer" : "default" }}
-                                onClick={() => {
-                                  if (a.stato === "ko")
-                                    alert("Anagrafica incompleta (" + a.fonte + ").\n\nCampi mancanti:\n- " + a.mancanti.join("\n- "));
-                                }}
-                                title={a.stato === "ko" ? "Clicca per l'elenco dei campi mancanti" : undefined}
+                                style={{ ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline"), cursor: clickable ? "pointer" : "default" }}
+                                onClick={() => { if (clickable) openCompletaAnagrafica(selectedOrder); }}
+                                title={clickable ? "Clicca per completare l'anagrafica" : undefined}
                               >
                                 {a.label}
+                              </span>
+                            );
+                          })()}
+                          {(() => {
+                            const a = anagraficaFor(selectedOrder);
+                            if (a.stato === "ok") return null;
+                            return (
+                              <button
+                                style={compactBtnStyle("primary")}
+                                onClick={() => openCompletaAnagrafica(selectedOrder)}
+                                title="Inserisci i dati mancanti dell'anagrafica"
+                              >
+                                <Plus size={16} /> Completa anagrafica
+                              </button>
+                            );
+                          })()}
+                          {(() => {
+                            const t = tipologiaFor(selectedOrder);
+                            const chiave = clientKeyFor(selectedOrder);
+                            const busy = savingOverride === chiave;
+                            if (t) {
+                              return (
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                  <span style={badgeStyle("dark")} title="Tipologia cliente">🏷️ {t}</span>
+                                  {TIPOLOGIE.filter((x) => x !== t).map((x) => (
+                                    <button
+                                      key={x}
+                                      style={compactBtnStyle("outline", busy)}
+                                      disabled={busy}
+                                      onClick={() => assignTipologia(selectedOrder, x)}
+                                      title={"Cambia in " + x}
+                                    >
+                                      {x}
+                                    </button>
+                                  ))}
+                                </span>
+                              );
+                            }
+                            return (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                <span style={{ color: "#66758b", fontSize: 13, fontWeight: 700 }}>Tipologia:</span>
+                                {TIPOLOGIE.map((x) => (
+                                  <button
+                                    key={x}
+                                    style={compactBtnStyle("dark", busy)}
+                                    disabled={busy}
+                                    onClick={() => assignTipologia(selectedOrder, x)}
+                                    title={"Assegna " + x}
+                                  >
+                                    {x}
+                                  </button>
+                                ))}
                               </span>
                             );
                           })()}
@@ -8204,6 +8442,63 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 
                 <button style={btnStyle("outline")} onClick={() => setProdLoadOpen(false)}>
                   Chiudi
+                </button>
+              </div>
+            );
+          })()}
+        </Modal>
+
+        <Modal
+          open={anagOpen}
+          title="🗂️ Completa anagrafica cliente"
+          onClose={() => setAnagOpen(false)}
+          maxWidth={640}
+        >
+          {(() => {
+            const order = orders.find((o) => String(o.id) === String(anagOrderId));
+            const a = order ? anagraficaFor(order) : null;
+            const mancantiSet = new Set(a?.mancanti || []);
+            return (
+              <div style={{ display: "grid", gap: 14 }}>
+                <div style={{ ...cardStyle({ background: "#eff6ff" }), padding: 12, color: "#1e3a8a", fontSize: 13, lineHeight: 1.4, border: "1px solid #bfdbfe" }}>
+                  Inserisci qui i dati mancanti. Restano registrati sul cliente e valgono anche per i suoi ordini futuri: a mano a mano l'anagrafica si completa da sola. In rosso i campi che oggi bloccano l'ordine.
+                </div>
+
+                {order ? (
+                  <div style={{ color: "#66758b", fontSize: 13 }}>
+                    Cliente: <b style={{ color: "#07153a" }}>{order.customer || "—"}</b>
+                    {a ? <span style={{ marginLeft: 8, ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline") }}>{a.label}</span> : null}
+                  </div>
+                ) : null}
+
+                <div style={{ display: "grid", gridTemplateColumns: isSmallLayout ? "1fr" : "1fr 1fr", gap: 12 }}>
+                  {ANAG_FIELDS.map((f) => {
+                    const missing = [...mancantiSet].some((m) => m.toLowerCase().startsWith(f.label.split(" (")[0].toLowerCase().slice(0, 10)));
+                    return (
+                      <div key={f.key}>
+                        <label style={{ ...labelStyle(), color: missing ? "#b91c1c" : undefined }}>
+                          {f.label}{missing ? " *" : ""}
+                        </label>
+                        <input
+                          style={{ ...inputStyle(), borderColor: missing ? "#fca5a5" : undefined }}
+                          value={anagForm[f.key] ?? ""}
+                          onChange={(e) => setAnagForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                          placeholder={f.label}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <button
+                  style={btnStyle("success", savingAnag)}
+                  disabled={savingAnag}
+                  onClick={saveCompletaAnagrafica}
+                >
+                  <Plus size={18} /> {savingAnag ? "Salvo..." : "Salva anagrafica"}
+                </button>
+                <button style={btnStyle("outline")} onClick={() => setAnagOpen(false)}>
+                  Annulla
                 </button>
               </div>
             );

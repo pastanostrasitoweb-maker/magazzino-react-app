@@ -228,7 +228,20 @@ async function bulkLoad() {
     // tabella non disponibile: il semaforo resta sul solo dato GAMMA
   }
 
-  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti, anagraficheApp };
+  // Layer di ARRICCHIMENTO nostro: tipologia cliente (HORECA/FARMA/GDO) e campi
+  // anagrafica completati a mano, indicizzati per chiave cliente (P.IVA o nome).
+  // Si sovrappone allo snapshot/GAMMA senza toccare la fonte. Best-effort.
+  const overridesClienti = {};
+  try {
+    const { data } = await supabase.from("clienti_override").select("*");
+    for (const r of data || []) {
+      if (r && r.chiave) overridesClienti[String(r.chiave)] = r;
+    }
+  } catch (_) {
+    // tabella non ancora creata: nessun override
+  }
+
+  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti, anagraficheApp, overridesClienti };
 }
 
 // ---------- action handlers ----------
@@ -669,6 +682,35 @@ async function logProduzione(params) {
   });
   if (error) return failure(error);
   return { success: true };
+}
+
+// Layer di arricchimento cliente: salva/aggiorna tipologia + campi anagrafica
+// completati a mano. Upsert per chiave (P.IVA o nome normalizzato). Scrive solo
+// i campi passati, cosi' un salvataggio parziale non cancella il resto.
+const OVERRIDE_CLIENTE_FIELDS = [
+  "ragione_sociale", "partita_iva", "sede_legale", "cap",
+  "indirizzo_spedizione", "insegna", "orari_consegna", "giorno_chiusura",
+  "codice_univoco", "pec", "email", "telefono", "metodo_pagamento",
+  "tipologia", "note",
+];
+
+async function saveClienteOverride(params) {
+  const p = parsePayload(params);
+  const chiave = String(p.chiave || "").trim();
+  if (!chiave) return failure("chiave cliente mancante");
+  const row = { chiave };
+  for (const f of OVERRIDE_CLIENTE_FIELDS) {
+    if (p[f] !== undefined) row[f] = p[f] === null ? null : String(p[f]);
+  }
+  row.operatore = p.operatore || "";
+  row.aggiornato_il = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("clienti_override")
+    .upsert(row, { onConflict: "chiave" })
+    .select()
+    .maybeSingle();
+  if (error) return failure(error);
+  return { success: true, override: data || row };
 }
 
 async function deleteOrder(params) {
@@ -1476,6 +1518,8 @@ export async function callSheetsApi(params = {}) {
         return await createLot(params);
       case "logProduzione":
         return await logProduzione(params);
+      case "saveClienteOverride":
+        return await saveClienteOverride(params);
       case "createProduct":
         return await createProduct(params);
       case "updateProduct":
