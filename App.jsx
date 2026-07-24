@@ -267,6 +267,11 @@ function checkAnagraficaApp(cli) {
 // Tipologie cliente allineabili a mano (richiesta Luca 2026-07-24).
 const TIPOLOGIE = ["HORECA", "FARMA", "GDO"];
 
+// Da questa data l'anagrafica completa e' OBBLIGATORIA per caricare i lotti.
+// Fino al giorno prima (deroga Luca 2026-07-24) si spedisce anche incompleta:
+// l'app avvisa ma non blocca, cosi' oggi gli ordini escono lo stesso.
+const ANAGRAFICA_OBBLIGATORIA_DA = "2026-07-28"; // lunedi
+
 // Campi anagrafica completabili a mano (i 12 obbligatori della checklist Luca).
 const ANAG_FIELDS = [
   { key: "ragione_sociale", label: "Ragione sociale" },
@@ -1204,6 +1209,12 @@ export default function App() {
   const anagraficaBloccaLotti = (order) => {
     const a = anagraficaFor(order);
     if (a.stato !== "ko") return false;
+    const oggi = new Date().toISOString().slice(0, 10);
+    if (oggi < ANAGRAFICA_OBBLIGATORIA_DA) {
+      // Deroga fino a domenica: non blocca. L'avviso resta sul badge rosso e
+      // sul bottone "Completa anagrafica"; l'ordine puo' comunque uscire.
+      return false;
+    }
     alert(
       "ANAGRAFICA INCOMPLETA (" + a.fonte + ") - ordine bloccato.\n\n" +
         "Campi mancanti:\n- " + a.mancanti.join("\n- ") +
@@ -2838,7 +2849,8 @@ export default function App() {
   const generaDDT = async (order) => {
     if (!order) return;
     const anag = anagraficaFor(order);
-    if (anag.stato === "ko") {
+    const oggiDDT = new Date().toISOString().slice(0, 10);
+    if (anag.stato === "ko" && oggiDDT >= ANAGRAFICA_OBBLIGATORIA_DA) {
       alert(
         "Anagrafica incompleta, DDT non generabile.\n\nCampi mancanti:\n- " +
           anag.mancanti.join("\n- ")
