@@ -1523,6 +1523,9 @@ export default function App() {
   // Ordini fornitore in arrivo (da Acquisti) per abbinare la foto della bolla.
   const [ordiniArrivo, setOrdiniArrivo] = useState([]);
   const [fotoOrdineId, setFotoOrdineId] = useState("");
+  // Storico ordini caricato a richiesta (la vista principale carica solo l'attivo).
+  const [archivedLoaded, setArchivedLoaded] = useState(false);
+  const [loadingArchive, setLoadingArchive] = useState(false);
 
   // Chat interna produzione <-> amministrazione (+ ordini). Vocali + notifica.
   const [chatOpen, setChatOpen] = useState(false);
@@ -1660,6 +1663,9 @@ export default function App() {
       setAppAnagrafiche(raw.anagraficheApp || {});
       setClientiOverride(raw.overridesClienti || {});
       setAssignments(normalizedAssignments);
+      // Il reload riporta lo stato agli ordini ATTIVI: l'archivio si ricaricherà
+      // a richiesta quando si riapre la pagina Archivio.
+      setArchivedLoaded(false);
       setSelectedOrderId(mergedOrders[0]?.id ?? "");
       setSelectedLineId(mergedOrders[0]?.lines?.[0]?.lineId ?? "");
     } catch (error) {
@@ -1677,6 +1683,45 @@ export default function App() {
       setLoadingData(false);
     }
   };
+
+  // Carica lo STORICO (ordini archiviati) a richiesta e lo fonde nello stato.
+  // La vista principale resta snella (solo attivo); qui aggiungiamo gli archiviati
+  // con le loro righe/assegnazioni/anagrafiche solo quando serve (pagina Archivio).
+  const loadArchivedOrders = async () => {
+    if (loadingArchive) return;
+    setLoadingArchive(true);
+    try {
+      const res = await callSheetsApi({
+        action: "getOrdiniArchiviati",
+        payload: JSON.stringify({ limit: 500 }),
+      });
+      if (!res || !res.success) {
+        alert("Non sono riuscito a caricare l'archivio: " + ((res && res.error) || "errore"));
+        return;
+      }
+      const normLines = normalizeOrderLines(res.righeOrdine || [], products);
+      const normOrders = normalizeOrders(res.ordini || []);
+      const merged = buildOrdersWithLines(normOrders, normLines);
+      const normAssign = normalizeAssignments(res.assegnazioniLotti || [], normLines, lots);
+      setOrders((prev) => {
+        const have = new Set(prev.map((o) => String(o.id)));
+        return [...prev, ...merged.filter((o) => !have.has(String(o.id)))];
+      });
+      setAssignments((prev) => ({ ...prev, ...normAssign }));
+      setAppAnagrafiche((prev) => ({ ...prev, ...(res.anagraficheApp || {}) }));
+      setArchivedLoaded(true);
+    } catch (e) {
+      alert("Errore di collegamento nel caricamento dell'archivio.");
+    } finally {
+      setLoadingArchive(false);
+    }
+  };
+
+  // All'apertura della pagina Archivio, carica lo storico una volta.
+  useEffect(() => {
+    if (page === "archivio" && !archivedLoaded && !loadingArchive) loadArchivedOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, archivedLoaded]);
 
   // Carica gli ordini in arrivo dall'app agenti (reparto "Ordini da APP").
   const loadOrdiniApp = async () => {
@@ -3189,9 +3234,20 @@ export default function App() {
     if (!numero) {
       const anno = new Date().getFullYear();
       const prefisso = `DDT-${anno}-`;
-      const seq =
-        orders.filter((o) => String(o.ddtNumero || "").startsWith(prefisso)).length + 1;
-      numero = `${prefisso}${String(seq).padStart(3, "0")}`;
+      // Il numero si calcola sul DB (non sugli ordini in memoria): col
+      // caricamento snello lo storico dei DDT non e' caricato, contarlo a video
+      // darebbe numeri duplicati.
+      const nres = await callSheetsApi({
+        action: "prossimoNumeroDDT",
+        payload: JSON.stringify({ anno }),
+      });
+      if (nres && nres.success && nres.numero) {
+        numero = nres.numero;
+      } else {
+        const seq =
+          orders.filter((o) => String(o.ddtNumero || "").startsWith(prefisso)).length + 1;
+        numero = `${prefisso}${String(seq).padStart(3, "0")}`;
+      }
       const result = await callSheetsApi({
         action: "updateOrder",
         payload: JSON.stringify({ orderId: order.id, ddt_numero: numero }),
@@ -7263,12 +7319,12 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               <div>
                 <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>Archivio ordini</div>
                 <div style={{ marginTop: 4, color: "#66758b", fontSize: 14 }}>
-                  Ordini preparati archiviati automaticamente dopo la mezzanotte.
+                  Storico ordini (ultimi 500), caricato solo qui per tenere leggera l'app. {loadingArchive ? "Carico l'archivio…" : ""}
                 </div>
               </div>
 
-              <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
-                <RefreshCw size={18} /> Aggiorna
+              <button style={btnStyle("outline", loadingArchive)} disabled={loadingArchive} onClick={loadArchivedOrders}>
+                <RefreshCw size={18} /> {loadingArchive ? "Carico…" : "Aggiorna"}
               </button>
             </div>
 
@@ -7288,7 +7344,9 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 
             <div style={{ display: "grid", gap: 16 }}>
               {Object.keys(archivedGroups).length === 0 ? (
-                <div style={{ color: "#66758b" }}>Nessun ordine archiviato.</div>
+                <div style={{ color: "#66758b" }}>
+                  {loadingArchive ? "Carico l'archivio…" : "Nessun ordine archiviato."}
+                </div>
               ) : (
                 Object.entries(archivedGroups).map(([dateLabel, dayOrders]) => (
                   <div

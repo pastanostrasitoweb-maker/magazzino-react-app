@@ -63,21 +63,90 @@ const failure = (e) => {
   return { success: false, error: msg };
 };
 
+// Fetch con .in() a blocchi (PostgREST/URL-length safe) su liste di id.
+async function selectIn(table, col, ids, cols = "*") {
+  const out = [];
+  const CHUNK = 150;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const batch = ids.slice(i, i + CHUNK);
+    if (!batch.length) continue;
+    const { data, error } = await supabase.from(table).select(cols).in(col, batch);
+    if (error) throw error;
+    out.push(...(data || []));
+  }
+  return out;
+}
+
+// Mapper riga DB -> forma usata dal frontend (condivisi tra bulkLoad e archivio).
+const mapOrdineRow = (row) => ({
+  ID_Ordine: String(row.id_ordine ?? ""),
+  Cliente: row.cliente ?? "",
+  ID_Cliente: String(row.id_cliente ?? ""),
+  Note: row.note ?? "",
+  Data_Preparato: toIsoString(row.data_preparato),
+  Archiviato: boolToSiNo(row.archiviato),
+  Stato: row.stato ?? "Da preparare",
+  Stato_Lavorazione: row.stato_lavorazione ?? "",
+  Stato_Pagamento: row.stato_pagamento ?? "",
+  Cap: row.cap ?? "",
+  Corriere: row.corriere ?? "",
+  DDT_Numero: row.ddt_numero ?? "",
+  Data_Ordine: toIsoString(row.data_ordine),
+  Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
+});
+const mapRigaRow = (row) => ({
+  ID_Riga: String(row.id_riga ?? ""),
+  ID_Ordine: String(row.id_ordine ?? ""),
+  ID_Prodotto: String(row.id_prodotto ?? ""),
+  Descrizione_Prodotto: row.descrizione_prodotto ?? "",
+  Ordine_Riga: Number(row.ordine_riga ?? 0),
+  "Quantità_Ordinata": Number(row.quantita_ordinata ?? 0),
+  Quantita_Assegnata: Number(row.quantita_assegnata ?? 0),
+});
+const mapAssegRow = (row) => ({
+  ID_Assegnazione: String(row.id_assegnazione ?? ""),
+  ID_Riga: String(row.id_riga ?? ""),
+  ID_Lotto: String(row.id_lotto ?? ""),
+  Codice_Lotto: row.codice_lotto ?? row.lotto ?? "",
+  "Quantità_Assegnata": Number(row.quantita_assegnata ?? 0),
+});
+
+// Snapshot anagrafica cliente (da ordini_agenti) per una lista di ordini.
+async function anagrafichePerOrdini(orderIds) {
+  const map = {};
+  if (!orderIds || !orderIds.length) return map;
+  try {
+    const rows = await selectIn(
+      "ordini_agenti",
+      "id_ordine_magazzino",
+      orderIds,
+      "id_ordine_magazzino,cliente"
+    );
+    for (const r of rows) {
+      if (r.id_ordine_magazzino && r.cliente && typeof r.cliente === "object") {
+        map[String(r.id_ordine_magazzino)] = r.cliente;
+      }
+    }
+  } catch (_) {}
+  return map;
+}
+
 // ---------- bulk load ----------
 
 async function bulkLoad() {
-  const [prodottiR, lottiR, ordiniR, righeR, assegR, clientiR] = await Promise.all([
+  const [prodottiR, lottiR, ordiniR, clientiR] = await Promise.all([
     supabase.from("prodotti").select("*"),
     supabase.from("lotti").select("*").order("scadenza", { ascending: true, nullsFirst: false }),
-    supabase.from("ordini").select("*"),
-    supabase.from("righe_ordine").select("*"),
-    supabase.from("assegnazioni_lotti").select("*"),
+    // Solo ordini ATTIVI (non archiviati): lo storico si carica a richiesta
+    // (getOrdiniArchiviati). Niente scarico di 227+ ordini e ~1000 righe a ogni
+    // apertura, e nessun taglio silenzioso al tetto di 1000 righe di PostgREST.
+    supabase.from("ordini").select("*").or("archiviato.is.null,archiviato.eq.false"),
     // clienti: tabella nuova (06_clienti.sql). maybe non esiste su ambienti
     // non ancora migrati -> tollerante: se errore, lista vuota, app gira lo stesso.
     supabase.from("clienti").select("*").order("ragione_sociale", { ascending: true }),
   ]);
 
-  for (const r of [prodottiR, lottiR, ordiniR, righeR, assegR]) {
+  for (const r of [prodottiR, lottiR, ordiniR]) {
     if (r.error) throw r.error;
   }
 
@@ -114,40 +183,20 @@ async function bulkLoad() {
     "Quantità_Caricata": Number(row.quantita_caricata ?? 0),
   }));
 
-  const ordini = (ordiniR.data || []).map((row) => ({
-    ID_Ordine: String(row.id_ordine ?? ""),
-    Cliente: row.cliente ?? "",
-    ID_Cliente: String(row.id_cliente ?? ""),
-    Note: row.note ?? "",
-    Data_Preparato: toIsoString(row.data_preparato),
-    Archiviato: boolToSiNo(row.archiviato),
-    Stato: row.stato ?? "Da preparare",
-    Stato_Lavorazione: row.stato_lavorazione ?? "",
-    Stato_Pagamento: row.stato_pagamento ?? "",
-    Cap: row.cap ?? "",
-    Corriere: row.corriere ?? "",
-    DDT_Numero: row.ddt_numero ?? "",
-    Data_Ordine: toIsoString(row.data_ordine),
-    Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
-  }));
+  const ordini = (ordiniR.data || []).map(mapOrdineRow);
 
-  const righeOrdine = (righeR.data || []).map((row) => ({
-    ID_Riga: String(row.id_riga ?? ""),
-    ID_Ordine: String(row.id_ordine ?? ""),
-    ID_Prodotto: String(row.id_prodotto ?? ""),
-    Descrizione_Prodotto: row.descrizione_prodotto ?? "",
-    Ordine_Riga: Number(row.ordine_riga ?? 0),
-    "Quantità_Ordinata": Number(row.quantita_ordinata ?? 0),
-    Quantita_Assegnata: Number(row.quantita_assegnata ?? 0),
-  }));
-
-  const assegnazioniLotti = (assegR.data || []).map((row) => ({
-    ID_Assegnazione: String(row.id_assegnazione ?? ""),
-    ID_Riga: String(row.id_riga ?? ""),
-    ID_Lotto: String(row.id_lotto ?? ""),
-    Codice_Lotto: row.codice_lotto ?? row.lotto ?? "",
-    "Quantità_Assegnata": Number(row.quantita_assegnata ?? 0),
-  }));
+  // Righe e assegnazioni SOLO degli ordini attivi (caricamento snello): niente
+  // storico in memoria, niente taglio a 1000 righe.
+  const activeOrderIds = (ordiniR.data || []).map((o) => String(o.id_ordine)).filter(Boolean);
+  const righeRows = activeOrderIds.length
+    ? await selectIn("righe_ordine", "id_ordine", activeOrderIds)
+    : [];
+  const activeRigheIds = righeRows.map((r) => String(r.id_riga)).filter(Boolean);
+  const assegRows = activeRigheIds.length
+    ? await selectIn("assegnazioni_lotti", "id_riga", activeRigheIds)
+    : [];
+  const righeOrdine = righeRows.map(mapRigaRow);
+  const assegnazioniLotti = assegRows.map(mapAssegRow);
 
   // clienti: tollerante alla tabella mancante (clientiR.error -> lista vuota).
   const clientiLocali = (clientiR && !clientiR.error ? clientiR.data || [] : []).map((row) => ({
@@ -213,20 +262,8 @@ async function bulkLoad() {
   // cliente (crm_clienti non e' leggibile da anon, ma lo snapshot viaggia
   // con l'ordine). Serve al semaforo "Anagrafica OK/KO" e al DDT.
   // Mappa: id_ordine_magazzino -> oggetto cliente.
-  const anagraficheApp = {};
-  try {
-    const { data } = await supabase
-      .from("ordini_agenti")
-      .select("id_ordine_magazzino,cliente")
-      .not("id_ordine_magazzino", "is", null);
-    for (const r of data || []) {
-      if (r.id_ordine_magazzino && r.cliente && typeof r.cliente === "object") {
-        anagraficheApp[String(r.id_ordine_magazzino)] = r.cliente;
-      }
-    }
-  } catch (_) {
-    // tabella non disponibile: il semaforo resta sul solo dato GAMMA
-  }
+  // Solo per gli ordini attivi (lo storico porta le sue anagrafiche a richiesta).
+  const anagraficheApp = await anagrafichePerOrdini(activeOrderIds);
 
   // Layer di ARRICCHIMENTO nostro: tipologia cliente (HORECA/FARMA/GDO) e campi
   // anagrafica completati a mano, indicizzati per chiave cliente (P.IVA o nome).
@@ -866,6 +903,63 @@ async function inviaChatMessaggio(params) {
     .maybeSingle();
   if (error) return failure(error);
   return { success: true, messaggio: data };
+}
+
+// Storico ordini (archiviati) caricato A RICHIESTA dalla pagina Archivio: gli
+// ultimi N per data, con righe/assegnazioni/anagrafiche. Cosi' il caricamento
+// iniziale resta snello e l'archivio non pesa finche' non lo si apre.
+async function getOrdiniArchiviati(params) {
+  const p = parsePayload(params);
+  const limit = Math.min(Math.max(Number(p.limit || 300), 1), 1000);
+  try {
+    const { data: ord, error } = await supabase
+      .from("ordini")
+      .select("*")
+      .eq("archiviato", true)
+      .order("data_preparato", { ascending: false, nullsFirst: false })
+      .limit(limit);
+    if (error) return failure(error);
+    const ids = (ord || []).map((o) => String(o.id_ordine)).filter(Boolean);
+    const righeRows = ids.length ? await selectIn("righe_ordine", "id_ordine", ids) : [];
+    const rigaIds = righeRows.map((r) => String(r.id_riga)).filter(Boolean);
+    const assegRows = rigaIds.length ? await selectIn("assegnazioni_lotti", "id_riga", rigaIds) : [];
+    const anagraficheApp = await anagrafichePerOrdini(ids);
+    return {
+      success: true,
+      ordini: (ord || []).map(mapOrdineRow),
+      righeOrdine: righeRows.map(mapRigaRow),
+      assegnazioniLotti: assegRows.map(mapAssegRow),
+      anagraficheApp,
+    };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+// Prossimo numero DDT dell'anno, calcolato sul DB (con il caricamento snello lo
+// storico non e' in memoria, quindi non si puo' contare sugli ordini caricati).
+async function prossimoNumeroDDT(params) {
+  const p = parsePayload(params);
+  const anno = String(p.anno || new Date().getFullYear());
+  const prefisso = `DDT-${anno}-`;
+  try {
+    const { data, error } = await supabase
+      .from("ordini")
+      .select("ddt_numero")
+      .like("ddt_numero", `${prefisso}%`)
+      .order("ddt_numero", { ascending: false })
+      .limit(1);
+    if (error) return failure(error);
+    let seq = 1;
+    const ultimo = data && data[0] && data[0].ddt_numero;
+    if (ultimo) {
+      const n = parseInt(String(ultimo).slice(prefisso.length), 10);
+      if (!Number.isNaN(n)) seq = n + 1;
+    }
+    return { success: true, numero: `${prefisso}${String(seq).padStart(3, "0")}` };
+  } catch (e) {
+    return failure(e);
+  }
 }
 
 async function deleteOrder(params) {
@@ -1679,6 +1773,10 @@ export async function callSheetsApi(params = {}) {
         return await salvaFotoBolla(params);
       case "getOrdiniAcquistiInArrivo":
         return await getOrdiniAcquistiInArrivo();
+      case "getOrdiniArchiviati":
+        return await getOrdiniArchiviati(params);
+      case "prossimoNumeroDDT":
+        return await prossimoNumeroDDT(params);
       case "getChatMessaggi":
         return await getChatMessaggi(params);
       case "inviaChatMessaggio":
