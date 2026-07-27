@@ -1862,6 +1862,23 @@ async function appLogin(params) {
   return { success: true, user: { username: row.username, etichetta: row.etichetta } };
 }
 
+// Propaga lo stato all'ordine ORIGINARIO dell'app agenti (tabella
+// ordini_agenti, collegata via id_ordine_magazzino) così l'agente vede
+// l'avanzamento in "I tuoi ordini": 'Spedito' quando si spedisce,
+// 'Importato' quando si riporta indietro. Best-effort: non blocca il flusso.
+export async function aggiornaStatoOrdineApp(idOrdineMagazzino, stato) {
+  if (!idOrdineMagazzino || !stato) return { ok: false };
+  try {
+    const { error } = await supabase
+      .from("ordini_agenti")
+      .update({ stato })
+      .eq("id_ordine_magazzino", String(idOrdineMagazzino));
+    return { ok: !error, error: error?.message };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 export async function callSheetsApi(params = {}) {
   try {
     // Bulk load: nessuna action.
