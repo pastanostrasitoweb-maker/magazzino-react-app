@@ -770,18 +770,56 @@ async function saveClienteOverride(params) {
   return { success: true, override: data || row };
 }
 
+// Carica un file (data URL) nel bucket Storage 'documenti' e ritorna l'URL
+// pubblico. Il bucket va creato una volta su Supabase (sql/storage_documenti.sql).
+// Cosi' i documenti veri (foto bolle, DDT, fatture) NON stanno dentro al DB.
+async function caricaSuStorage(path, dataUrl) {
+  const resp = await fetch(dataUrl);
+  const blob = await resp.blob();
+  const { error } = await supabase.storage
+    .from("documenti")
+    .upload(path, blob, { contentType: blob.type || "application/octet-stream", upsert: true });
+  if (error) throw error;
+  const { data } = supabase.storage.from("documenti").getPublicUrl(path);
+  return data?.publicUrl || "";
+}
+
+// Azione generica: carica un documento su Storage e ritorna l'URL (per DDT,
+// fatture, ecc.). Best-effort: se il bucket non esiste, ritorna errore gestibile.
+async function uploadDocumento(params) {
+  const p = parsePayload(params);
+  if (!p.path || !p.dataUrl) return failure("path o file mancante");
+  try {
+    const url = await caricaSuStorage(String(p.path), String(p.dataUrl));
+    return { success: true, url, path: String(p.path) };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
 // Foto di una bolla/DDT ricevuta, scattata dalla produzione. La scriviamo nella
 // coda condivisa dell'APP ACQUISTI (acq_ricevimenti_foto, stesso Supabase): con
 // stato 'Da analizzare' entra nella pipeline esistente (la routine la analizza e
 // la propone all'ufficio, come le foto del bot Telegram). RLS off su quella tabella.
+// La foto va su Storage (bucket documenti/bolle); in foto_locale finisce l'URL,
+// non piu' il base64. Se il bucket non c'e' ancora, fallback al base64 nel DB.
 async function salvaFotoBolla(params) {
   const p = parsePayload(params);
   if (!p.foto) return failure("foto mancante");
+  let fotoField = String(p.foto);
+  try {
+    const now = new Date();
+    const giorno = now.toISOString().slice(0, 10);
+    const nome = `${now.getTime()}-${Math.floor(Math.random() * 1e6)}.jpg`;
+    fotoField = await caricaSuStorage(`bolle/${giorno}/${nome}`, String(p.foto));
+  } catch (_) {
+    fotoField = String(p.foto); // bucket non pronto: resta il base64 (retrocompatibile)
+  }
   const row = {
     canale: "magazzino",
     mittente: p.operatore || "magazzino",
     caption: p.caption || "",
-    foto_locale: String(p.foto),
+    foto_locale: fotoField,
     stato: "Da analizzare",
   };
   // Se il magazzino ha abbinato la bolla a un ordine fornitore in arrivo,
@@ -1771,6 +1809,8 @@ export async function callSheetsApi(params = {}) {
         return await saveClienteOverride(params);
       case "salvaFotoBolla":
         return await salvaFotoBolla(params);
+      case "uploadDocumento":
+        return await uploadDocumento(params);
       case "getOrdiniAcquistiInArrivo":
         return await getOrdiniAcquistiInArrivo();
       case "getOrdiniArchiviati":
