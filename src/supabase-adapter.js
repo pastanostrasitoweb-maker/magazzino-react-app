@@ -491,6 +491,8 @@ async function updateOrder(params) {
     .select()
     .maybeSingle();
   if (error) return failure(error);
+  // Se e' cambiato lo stato (es. Spedito / Preparato / Fermo), avvisa l'app agenti.
+  if (patch.stato) await notificaStatoAgenti(idOrdine, patch.stato);
   return { success: true, ordine: data };
 }
 
@@ -529,6 +531,26 @@ async function archiveOrder(params) {
   return { success: true };
 }
 
+// PONTE VERSO L'APP AGENTI: quando il magazzino fa avanzare un ordine nato
+// dall'app agenti, scriviamo lo stato indietro su ordini_agenti in un campo
+// DEDICATO (stato_magazzino) per non toccare 'stato', che l'app agenti usa per
+// la sua logica (Ordinato / Da controllare / Importato / Annullato).
+// Best-effort e silenzioso: se la colonna non c'e', il flusso magazzino continua.
+async function notificaStatoAgenti(idOrdineMagazzino, statoMagazzino) {
+  if (!idOrdineMagazzino || !statoMagazzino) return;
+  try {
+    await supabase
+      .from("ordini_agenti")
+      .update({
+        stato_magazzino: String(statoMagazzino),
+        aggiornato_magazzino_il: new Date().toISOString(),
+      })
+      .eq("id_ordine_magazzino", String(idOrdineMagazzino));
+  } catch (_) {
+    // colonna non ancora creata o tabella assente: nessun impatto sul magazzino
+  }
+}
+
 // Errore Postgres "colonna inesistente" (schema non ancora migrato).
 const isMissingColumn = (err, col) =>
   !!err && /column/i.test(String(err.message || "")) && String(err.message || "").includes(col);
@@ -556,6 +578,7 @@ async function markOrderStopped(params) {
         .update(base)
         .eq("id_ordine", String(idOrdine));
       if (retry.error) return failure(retry.error);
+      await notificaStatoAgenti(idOrdine, "Fermo");
       return {
         success: true,
         warning:
@@ -564,6 +587,8 @@ async function markOrderStopped(params) {
     }
     return failure(error);
   }
+  // L'agente vede che l'ordine e' fermo E perche' (utile per avvisare il cliente).
+  await notificaStatoAgenti(idOrdine, motivo ? `Fermo: ${motivo}` : "Fermo");
   return { success: true };
 }
 
@@ -710,6 +735,8 @@ async function markOrderPrepared(params) {
     }));
   }
 
+  // Avvisa l'app agenti che l'ordine e' stato preparato.
+  await notificaStatoAgenti(idOrdine, "Preparato");
   return { success: true, ordine: row, stockMovements, stockWarnings: [] };
 }
 
@@ -1769,10 +1796,25 @@ async function spostaOrdineInOrdini(params) {
   });
   if (!created?.success) return { success: false, error: created?.error || "errore creazione ordine" };
 
-  const upd = await supabase
+  // Flag "preso in gestione dal magazzino" verso l'app agenti: stato=Importato
+  // (già letto dall'app agenti) + numero ordine magazzino + orario. Aggiungiamo
+  // stato_magazzino='Preso in gestione' se la colonna c'e' (best-effort).
+  const base = {
+    stato: "Importato",
+    id_ordine_magazzino: idOrdine,
+    importato_il: new Date().toISOString(),
+  };
+  let upd = await supabase
     .from("ordini_agenti")
-    .update({ stato: "Importato", id_ordine_magazzino: idOrdine, importato_il: new Date().toISOString() })
+    .update({
+      ...base,
+      stato_magazzino: "Preso in gestione",
+      aggiornato_magazzino_il: new Date().toISOString(),
+    })
     .eq("id_ordine", String(idApp));
+  if (upd.error) {
+    upd = await supabase.from("ordini_agenti").update(base).eq("id_ordine", String(idApp));
+  }
   if (upd.error) return { success: false, error: upd.error.message };
 
   return { success: true, idOrdine, idApp: String(idApp) };
