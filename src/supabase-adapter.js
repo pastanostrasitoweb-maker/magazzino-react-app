@@ -91,6 +91,7 @@ const mapOrdineRow = (row) => ({
   Cap: row.cap ?? "",
   Corriere: row.corriere ?? "",
   DDT_Numero: row.ddt_numero ?? "",
+  Motivo_Fermo: row.motivo_fermo ?? "",
   Data_Ordine: toIsoString(row.data_ordine),
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
 });
@@ -528,18 +529,62 @@ async function archiveOrder(params) {
   return { success: true };
 }
 
+// Errore Postgres "colonna inesistente" (schema non ancora migrato).
+const isMissingColumn = (err, col) =>
+  !!err && /column/i.test(String(err.message || "")) && String(err.message || "").includes(col);
+
 async function markOrderStopped(params) {
-  const idOrdine = params.orderId || params.idOrdine;
+  const p = parsePayload(params);
+  const idOrdine = p.orderId || p.idOrdine || params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
+  const motivo = String(p.motivo ?? p.motivoFermo ?? "").trim();
   // Lo stato "Fermo" e' derivato dalla colonna stato (il frontend guarda
   // stato === 'fermo'). Va scritto anche stato, non solo stato_lavorazione,
   // altrimenti al refresh l'ordine ricarica come "Da preparare" e ricompare
   // tra gli ordini da evadere.
+  const base = { stato: "Fermo", stato_lavorazione: "Fermato" };
   const { error } = await supabase
     .from("ordini")
-    .update({ stato: "Fermo", stato_lavorazione: "Fermato" })
+    .update(motivo ? { ...base, motivo_fermo: motivo } : base)
     .eq("id_ordine", String(idOrdine));
-  if (error) return failure(error);
+  if (error) {
+    // Colonna motivo_fermo non ancora creata: salva lo stato comunque (il
+    // motivo lo riproviamo a parte, cosi' l'ordine non resta non-fermo).
+    if (motivo && isMissingColumn(error, "motivo_fermo")) {
+      const retry = await supabase
+        .from("ordini")
+        .update(base)
+        .eq("id_ordine", String(idOrdine));
+      if (retry.error) return failure(retry.error);
+      return {
+        success: true,
+        warning:
+          "Ordine messo in fermo, ma il motivo non e' stato salvato: manca la colonna motivo_fermo (esegui sql/motivo_fermo.sql).",
+      };
+    }
+    return failure(error);
+  }
+  return { success: true };
+}
+
+// Aggiorna (o cancella) il motivo del fermo su un ordine gia' fermo.
+async function setMotivoFermo(params) {
+  const p = parsePayload(params);
+  const idOrdine = p.orderId || p.idOrdine;
+  if (!idOrdine) return failure("orderId mancante");
+  const motivo = String(p.motivo ?? "").trim();
+  const { error } = await supabase
+    .from("ordini")
+    .update({ motivo_fermo: motivo || null })
+    .eq("id_ordine", String(idOrdine));
+  if (error) {
+    if (isMissingColumn(error, "motivo_fermo")) {
+      return failure(
+        "Manca la colonna motivo_fermo sul database: esegui sql/motivo_fermo.sql nel SQL editor di Supabase."
+      );
+    }
+    return failure(error);
+  }
   return { success: true };
 }
 
@@ -601,14 +646,23 @@ async function reopenOrder(params) {
     }
   }
 
-  const { error } = await supabase
+  // L'ordine torna in lavorazione: il motivo del fermo non serve piu'.
+  const riapri = {
+    stato: "Da preparare",
+    data_preparato: null,
+    stato_lavorazione: "In lavorazione",
+  };
+  let { error } = await supabase
     .from("ordini")
-    .update({
-      stato: "Da preparare",
-      data_preparato: null,
-      stato_lavorazione: "In lavorazione",
-    })
+    .update({ ...riapri, motivo_fermo: null })
     .eq("id_ordine", String(idOrdine));
+  if (error && isMissingColumn(error, "motivo_fermo")) {
+    const retry = await supabase
+      .from("ordini")
+      .update(riapri)
+      .eq("id_ordine", String(idOrdine));
+    error = retry.error;
+  }
   if (error) return failure(error);
   return { success: true, stockMovements, orderReopened: true };
 }
@@ -1791,6 +1845,8 @@ export async function callSheetsApi(params = {}) {
         return await markOrderViewed(params);
       case "archiveOrder":
         return await archiveOrder(params);
+      case "setMotivoFermo":
+        return await setMotivoFermo(params);
       case "markOrderStopped":
         return await markOrderStopped(params);
       case "reopenOrder":

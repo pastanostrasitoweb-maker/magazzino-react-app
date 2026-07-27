@@ -271,6 +271,16 @@ function checkAnagraficaApp(cli) {
 // Tipologie cliente allineabili a mano (richiesta Luca 2026-07-24).
 const TIPOLOGIE = ["HORECA", "FARMA", "GDO"];
 
+// Motivi rapidi per cui un ordine resta FERMO (Luca 2026-07-24). Il magazziniere
+// tocca il motivo o lo scrive a mano; produzione e logistica lo vedono sul badge.
+const MOTIVI_FERMO = [
+  "Commessa: prodotto ad hoc da produrre",
+  "In attesa di produzione",
+  "Merce mancante / lotto non disponibile",
+  "In attesa di conferma dal cliente",
+  "Pagamento da verificare",
+];
+
 // Da questa data l'anagrafica completa e' OBBLIGATORIA per caricare i lotti.
 // Fino al giorno prima (deroga Luca 2026-07-24) si spedisce anche incompleta:
 // l'app avvisa ma non blocca, cosi' oggi gli ordini escono lo stesso.
@@ -594,6 +604,9 @@ function normalizeOrders(rows) {
       // Corriere scelto per la spedizione + numero DDT (se generato).
       courier: String(getField(row, ["Corriere", "corriere"]) || "").trim(),
       ddtNumero: String(getField(row, ["DDT_Numero", "ddt_numero"]) || "").trim(),
+      // Perche' l'ordine e' fermo (lo scrive il magazziniere; lo leggono
+      // produzione, logistica e amministrazione sul badge).
+      motivoFermo: String(getField(row, ["Motivo_Fermo", "motivo_fermo"]) || "").trim(),
       colliManual: (() => {
         const raw = getField(row, ["Colli", "Numero_Colli", "Colli_Ordine"]);
         if (raw === undefined || raw === null || String(raw).trim() === "") return null;
@@ -1526,6 +1539,10 @@ export default function App() {
   // Storico ordini caricato a richiesta (la vista principale carica solo l'attivo).
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [loadingArchive, setLoadingArchive] = useState(false);
+  // Modale "perche' l'ordine e' fermo": mode 'nuovo' (mette in fermo) o 'modifica'.
+  const [fermoDialog, setFermoDialog] = useState({ open: false, orderId: "", mode: "nuovo" });
+  const [fermoMotivo, setFermoMotivo] = useState("");
+  const [savingFermo, setSavingFermo] = useState(false);
 
   // Chat interna produzione <-> amministrazione (+ ordini). Vocali + notifica.
   const [chatOpen, setChatOpen] = useState(false);
@@ -2188,6 +2205,16 @@ export default function App() {
         String(order.notes).toLowerCase().includes(q)
     );
   }, [ordersWithComputed, orderSearch]);
+
+  // Contatore per il badge di menu: NON filtrato dalla ricerca (il numero deve
+  // restare quello vero anche mentre si cerca).
+  const stoppedCount = useMemo(
+    () =>
+      ordersWithComputed.filter(
+        (order) => !order.archived && String(order.computedStatus) === "Fermo"
+      ).length,
+    [ordersWithComputed]
+  );
 
   const preparedOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
@@ -3524,23 +3551,58 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
     }));
   };
 
-  const markOrderStopped = async () => {
+  // Click su "Fermo": chiede PRIMA il motivo (modale coi motivi rapidi), cosi'
+  // produzione e logistica sanno sempre perche' l'ordine e' bloccato.
+  const markOrderStopped = () => {
     if (!selectedOrder) return;
-
     if (String(selectedOrder.status || "").trim().toLowerCase() === "preparato") {
       alert("Non puoi mettere in fermo un ordine già preparato.");
       return;
     }
+    setFermoMotivo("");
+    setFermoDialog({ open: true, orderId: String(selectedOrder.id), mode: "nuovo" });
+  };
 
-    const conferma = window.confirm("Vuoi spostare questo ordine in Ordini fermi?");
-    if (!conferma) return;
+  // Apre il modale per scrivere/correggere il motivo di un ordine gia' fermo.
+  const openEditMotivoFermo = (order) => {
+    if (!order) return;
+    setFermoMotivo(String(order.motivoFermo || ""));
+    setFermoDialog({ open: true, orderId: String(order.id), mode: "modifica" });
+  };
 
+  const closeFermoDialog = () => setFermoDialog({ open: false, orderId: "", mode: "nuovo" });
+
+  // Conferma: mette in fermo col motivo, oppure aggiorna solo il motivo.
+  const confirmFermo = async () => {
+    const orderId = fermoDialog.orderId;
+    if (!orderId || savingFermo) return;
+    const motivo = String(fermoMotivo || "").trim();
+    if (!motivo) {
+      alert("Scrivi (o scegli) il motivo del fermo: serve a produzione e logistica.");
+      return;
+    }
+    setSavingFermo(true);
     try {
+      if (fermoDialog.mode === "modifica") {
+        const res = await callSheetsApi({
+          action: "setMotivoFermo",
+          payload: JSON.stringify({ orderId, motivo }),
+        });
+        if (!res || !res.success) {
+          alert("Motivo non salvato: " + ((res && res.error) || "errore sconosciuto"));
+          return;
+        }
+        setOrders((prev) =>
+          prev.map((o) => (String(o.id) === String(orderId) ? { ...o, motivoFermo: motivo } : o))
+        );
+        closeFermoDialog();
+        return;
+      }
+
       const result = await callSheetsApi({
         action: "markOrderStopped",
-        orderId: selectedOrder.id,
+        payload: JSON.stringify({ orderId, motivo }),
       });
-
       if (!result || !result.success) {
         alert(
           "Errore nello spostamento in Ordini fermi: " +
@@ -3548,22 +3610,25 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
         );
         return;
       }
+      if (result.warning) alert(result.warning);
 
       setOrders((prev) =>
         prev.map((order) =>
-          String(order.id) === String(selectedOrder.id)
-            ? { ...order, status: "Fermo", dataPrepared: "", archived: false }
+          String(order.id) === String(orderId)
+            ? { ...order, status: "Fermo", dataPrepared: "", archived: false, motivoFermo: motivo }
             : order
         )
       );
 
-      const nextOrder = activeOrders.find((order) => String(order.id) !== String(selectedOrder.id));
-
+      const nextOrder = activeOrders.find((order) => String(order.id) !== String(orderId));
       setSelectedOrderId(nextOrder?.id || "");
       setSelectedLineId(nextOrder?.lines?.[0]?.lineId || "");
+      closeFermoDialog();
       setPage("fermi");
     } catch (error) {
-      alert("Errore di collegamento con Google Sheet: " + String(error));
+      alert("Errore di collegamento: " + String(error));
+    } finally {
+      setSavingFermo(false);
     }
   };
 
@@ -5453,18 +5518,39 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               </button>
               )}
 
-              {!isProduzione && (
+              {/* Visibile anche alla PRODUZIONE: e' lei che produce le commesse
+                  ad hoc per cui l'ordine e' fermo, quindi deve leggere il motivo. */}
               <button
                 style={{
                   ...btnStyle(page === "fermi" ? "primary" : "soft"),
                   borderRadius: 999,
                   minWidth: isSmallLayout ? "calc(50% - 5px)" : 138,
+                  position: "relative",
                 }}
                 onClick={() => setPage("fermi")}
               >
                 <AlertTriangle size={18} /> Ordini fermi
+                {stoppedCount > 0 ? (
+                  <span
+                    style={{
+                      marginLeft: 6,
+                      background: "#f59e0b",
+                      color: "#fff",
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: 900,
+                      minWidth: 20,
+                      height: 20,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "0 5px",
+                    }}
+                  >
+                    {stoppedCount}
+                  </span>
+                ) : null}
               </button>
-              )}
 
               <button
                 style={{
@@ -6974,11 +7060,34 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                         <div style={{ fontSize: 19, fontWeight: 950, color: "#07153a" }}>
                           {order.customer || "Ordine senza nome"}
                         </div>
-                        <span style={badgeStyle("warning")}>Fermo</span>
+                        <span style={badgeStyle("warning")}>⛔ Fermo</span>
                       </div>
 
                       <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
                         {fmtDate(order.date)} · ID {order.id}
+                      </div>
+
+                      {/* Perche' e' fermo: in evidenza, cliccabile per correggerlo. */}
+                      <div
+                        onClick={() => openEditMotivoFermo(order)}
+                        title="Clicca per scrivere o correggere il motivo"
+                        style={{
+                          marginTop: 10,
+                          padding: "10px 12px",
+                          borderRadius: 12,
+                          cursor: "pointer",
+                          background: order.motivoFermo ? "#fffbeb" : "#fef2f2",
+                          border: "1px solid " + (order.motivoFermo ? "#fcd34d" : "#fecaca"),
+                          color: order.motivoFermo ? "#92400e" : "#b91c1c",
+                          fontSize: 14,
+                          fontWeight: 800,
+                          lineHeight: 1.4,
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {order.motivoFermo
+                          ? `Motivo: ${order.motivoFermo}`
+                          : "⚠️ Motivo non indicato — clicca per scriverlo"}
                       </div>
 
                       {order.notes ? (
@@ -6993,6 +7102,9 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                     </div>
 
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <button style={btnStyle("outline")} onClick={() => openEditMotivoFermo(order)}>
+                        <Pencil size={16} /> Motivo
+                      </button>
                       <button style={btnStyle("success")} onClick={() => restoreStoppedOrder(order.id)}>
                         <CheckCircle2 size={16} /> Riporta da preparare
                       </button>
@@ -9524,6 +9636,71 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               </button>
             </div>
           </div>
+        </Modal>
+
+        <Modal
+          open={fermoDialog.open}
+          title={fermoDialog.mode === "modifica" ? "⛔ Motivo del fermo" : "⛔ Perché fermi questo ordine?"}
+          onClose={closeFermoDialog}
+          maxWidth={560}
+        >
+          {(() => {
+            const ord = orders.find((o) => String(o.id) === String(fermoDialog.orderId));
+            return (
+              <div style={{ display: "grid", gap: 14 }}>
+                <div style={{ ...cardStyle({ background: "#fffbeb" }), padding: 12, color: "#92400e", fontSize: 13, lineHeight: 1.4, border: "1px solid #fcd34d" }}>
+                  Scrivi il motivo: lo vedono <b>produzione e logistica</b> sul badge dell'ordine, così sanno perché è bloccato (es. commessa di prodotto ad hoc da fare).
+                </div>
+
+                {ord ? (
+                  <div style={{ color: "#66758b", fontSize: 13 }}>
+                    Ordine: <b style={{ color: "#07153a" }}>{ord.customer || ord.id}</b>
+                  </div>
+                ) : null}
+
+                <div>
+                  <label style={labelStyle()}>Motivi rapidi</label>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {MOTIVI_FERMO.map((m) => (
+                      <button
+                        key={m}
+                        style={compactBtnStyle(fermoMotivo === m ? "dark" : "outline")}
+                        onClick={() => setFermoMotivo(m)}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label style={labelStyle()}>Motivo (puoi scriverlo o modificarlo)</label>
+                  <textarea
+                    style={{ ...inputStyle(), minHeight: 84, resize: "vertical", fontFamily: "inherit" }}
+                    value={fermoMotivo}
+                    onChange={(e) => setFermoMotivo(e.target.value)}
+                    placeholder="Es. commessa 250g personalizzata per il cliente: si produce giovedì"
+                  />
+                </div>
+
+                <button
+                  style={btnStyle("warning", savingFermo)}
+                  disabled={savingFermo}
+                  onClick={confirmFermo}
+                >
+                  <AlertTriangle size={18} />
+                  {savingFermo
+                    ? "Salvo..."
+                    : fermoDialog.mode === "modifica"
+                    ? "Salva motivo"
+                    : "Metti in fermo con questo motivo"}
+                </button>
+                <button style={btnStyle("outline")} onClick={closeFermoDialog}>
+                  Annulla
+                </button>
+              </div>
+            );
+          })()}
         </Modal>
       </div>
     </div>
