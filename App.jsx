@@ -281,10 +281,13 @@ const MOTIVI_FERMO = [
   "Pagamento da verificare",
 ];
 
-// Da questa data l'anagrafica completa e' OBBLIGATORIA per caricare i lotti.
-// Fino al giorno prima (deroga Luca 2026-07-24) si spedisce anche incompleta:
-// l'app avvisa ma non blocca, cosi' oggi gli ordini escono lo stesso.
-const ANAGRAFICA_OBBLIGATORIA_DA = "2026-07-28"; // lunedi
+// Anagrafica incompleta: SEGNALA ma NON BLOCCA (decisione Luca 2026-07-28:
+// "manda l'alert ma non bloccare il processo, segnalami la mancanza e vai
+// avanti"). L'operativita' non si ferma mai per un dato mancante: l'ordine
+// prosegue, il badge rosso e l'avviso al momento di segnare pronto ricordano
+// di completarla.
+// Per tornare a bloccare basta rimettere true (nessun'altra modifica serve).
+const ANAGRAFICA_BLOCCA = false;
 
 // Campi anagrafica completabili a mano (i 12 obbligatori della checklist Luca).
 const ANAG_FIELDS = [
@@ -1460,17 +1463,14 @@ export default function App() {
     }
   };
 
-  // Blocco caricamento lotti se l'anagrafica e' in errore (richiesta Luca):
-  // l'ordine non si lavora finche' l'anagrafica non viene completata.
+  // Anagrafica incompleta sul caricamento lotti: NON blocca (vedi
+  // ANAGRAFICA_BLOCCA). Qui nessun alert, altrimenti scatterebbe a ogni riga
+  // assegnata: la segnalazione vive sul badge rosso e sull'avviso in "Segna
+  // pronto", che e' il momento in cui serve davvero.
   const anagraficaBloccaLotti = (order) => {
+    if (!ANAGRAFICA_BLOCCA) return false;
     const a = anagraficaFor(order);
     if (a.stato !== "ko") return false;
-    const oggi = new Date().toISOString().slice(0, 10);
-    if (oggi < ANAGRAFICA_OBBLIGATORIA_DA) {
-      // Deroga fino a domenica: non blocca. L'avviso resta sul badge rosso e
-      // sul bottone "Completa anagrafica"; l'ordine puo' comunque uscire.
-      return false;
-    }
     alert(
       "ANAGRAFICA INCOMPLETA (" + a.fonte + ") - ordine bloccato.\n\n" +
         "Campi mancanti:\n- " + a.mancanti.join("\n- ") +
@@ -3254,13 +3254,21 @@ export default function App() {
   const generaDDT = async (order) => {
     if (!order) return;
     const anag = anagraficaFor(order);
-    const oggiDDT = new Date().toISOString().slice(0, 10);
-    if (anag.stato === "ko" && oggiDDT >= ANAGRAFICA_OBBLIGATORIA_DA) {
+    if (anag.stato === "ko") {
+      if (ANAGRAFICA_BLOCCA) {
+        alert(
+          "Anagrafica incompleta, DDT non generabile.\n\nCampi mancanti:\n- " +
+            anag.mancanti.join("\n- ")
+        );
+        return;
+      }
+      // Segnala e prosegue: il DDT esce comunque, i campi mancanti saranno
+      // vuoti sul documento e vanno completati appena possibile.
       alert(
-        "Anagrafica incompleta, DDT non generabile.\n\nCampi mancanti:\n- " +
-          anag.mancanti.join("\n- ")
+        "ATTENZIONE: anagrafica incompleta (" + anag.fonte + ").\n\n" +
+          "Mancano:\n- " + anag.mancanti.join("\n- ") +
+          "\n\nIl DDT viene generato comunque: questi dati resteranno vuoti sul documento."
       );
-      return;
     }
     let numero = order.ddtNumero;
     if (!numero) {
@@ -3727,6 +3735,17 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
     if (selectedOrder.totalToAssign > 0) {
       alert("Prima assegna tutti i lotti dell'ordine.");
       return;
+    }
+
+    // Anagrafica incompleta: SEGNALA e VA AVANTI (Luca 2026-07-28). Questo e' il
+    // momento giusto per l'avviso: l'ordine sta uscendo, ma non lo fermiamo.
+    const anagPrep = anagraficaFor(selectedOrder);
+    if (anagPrep.stato === "ko") {
+      alert(
+        "ATTENZIONE: anagrafica incompleta (" + anagPrep.fonte + ").\n\n" +
+          "Mancano:\n- " + anagPrep.mancanti.join("\n- ") +
+          "\n\nL'ordine viene segnato PRONTO comunque. Completa l'anagrafica dal tasto Anagrafica appena puoi."
+      );
     }
 
     setSavingPreparedOrderId(String(selectedOrder.id));
@@ -5919,12 +5938,14 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           </span>
                           {(() => {
                             const a = anagraficaFor(selectedOrder);
-                            const clickable = a.stato !== "ok";
+                            // Sempre cliccabile: l'anagrafica si deve poter
+                            // correggere anche quando e' completa (telefono
+                            // cambiato, orario nuovo, pagamento diverso).
                             return (
                               <span
-                                style={{ ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline"), cursor: clickable ? "pointer" : "default" }}
-                                onClick={() => { if (clickable) openCompletaAnagrafica(selectedOrder); }}
-                                title={clickable ? "Clicca per completare l'anagrafica" : undefined}
+                                style={{ ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline"), cursor: "pointer" }}
+                                onClick={() => openCompletaAnagrafica(selectedOrder)}
+                                title="Clicca per vedere e modificare l'anagrafica"
                               >
                                 {a.label}
                               </span>
@@ -5932,14 +5953,15 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           })()}
                           {(() => {
                             const a = anagraficaFor(selectedOrder);
-                            if (a.stato === "ok") return null;
+                            const completa = a.stato === "ok";
                             return (
                               <button
-                                style={compactBtnStyle("primary")}
+                                style={compactBtnStyle(completa ? "outline" : "primary")}
                                 onClick={() => openCompletaAnagrafica(selectedOrder)}
-                                title="Inserisci i dati mancanti dell'anagrafica"
+                                title={completa ? "Vedi e modifica l'anagrafica del cliente" : "Inserisci i dati mancanti dell'anagrafica"}
                               >
-                                <Plus size={16} /> Completa anagrafica
+                                {completa ? <Pencil size={16} /> : <Plus size={16} />}
+                                {completa ? " Anagrafica" : " Completa anagrafica"}
                               </button>
                             );
                           })()}
