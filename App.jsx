@@ -2050,6 +2050,41 @@ export default function App() {
     });
   }, [products, magazzinoRows, productCommittedMap]);
 
+  // ---- CARTONI BOLLATI (regola Luca 2026-07-28) ----
+  // Un lotto sotto i 30 giorni di vita residua e' "bollato": non si vende, si
+  // regala (l'app agenti lo offre come omaggio oltre i 10 cartoni ordinati).
+  // Questa e' la riga bollati dell'operatore: cosa sta scadendo, quanto ne
+  // resta e quanti cartoni interi si possono ancora dare via.
+  // Guardie sui dati sporchi: scadenza mancante o con anno < 2020 (es. il lotto
+  // "000000") NON e' attendibile e non entra; i lotti gia' scaduti si segnalano
+  // a parte perche' vanno distrutti, non regalati.
+  const GIORNI_BOLLATO = 30;
+  const bollatiRows = useMemo(() => {
+    const oggi = new Date();
+    oggi.setHours(0, 0, 0, 0);
+    const out = [];
+    for (const row of magazzinoRows) {
+      const disponibile = Number(row.available || 0);
+      if (disponibile <= 0) continue;
+      if (!row.expiry) continue;
+      const d = new Date(row.expiry);
+      if (Number.isNaN(d.getTime()) || d.getFullYear() < 2020) continue;
+      const giorni = Math.floor((d - oggi) / 86400000);
+      if (giorni >= GIORNI_BOLLATO) continue;
+      // I cartoni interi li calcola l'app agenti (ha i pezzi/collo del
+      // listino): qui si ragiona in pezzi, che e' il dato del magazzino.
+      out.push({ ...row, giorni, scaduto: giorni < 0, disponibile });
+    }
+    return out.sort((a, b) => a.giorni - b.giorni);
+  }, [magazzinoRows]);
+
+  const bollatiTotali = useMemo(() => ({
+    lotti: bollatiRows.length,
+    pezzi: bollatiRows.reduce((t, r) => t + r.disponibile, 0),
+    scaduti: bollatiRows.filter((r) => r.scaduto).length,
+    daRegalare: bollatiRows.filter((r) => !r.scaduto).reduce((t, r) => t + r.disponibile, 0),
+  }), [bollatiRows]);
+
   // Ricerca a livello di prodotto: filtra i gruppi (referenza, codice,
   // categoria) o per codice lotto tra i lotti del prodotto.
   const filteredMagazzinoGrouped = useMemo(() => {
@@ -5717,6 +5752,23 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 <Boxes size={18} /> Magazzino
               </button>
 
+              {/* Riga bollati: cosa sta scadendo (< 30 gg) e si regala. */}
+              <button
+                style={{
+                  ...btnStyle(page === "bollati" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 148,
+                }}
+                onClick={() => setPage("bollati")}
+              >
+                🏷️ Bollati
+                {bollatiTotali.lotti > 0 && (
+                  <span style={{ ...badgeStyle(bollatiTotali.scaduti > 0 ? "danger" : "warning"), marginLeft: 6 }}>
+                    {bollatiTotali.lotti}
+                  </span>
+                )}
+              </button>
+
               {isProduzione && (
               <button
                 style={{
@@ -7702,6 +7754,60 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {page === "bollati" && (
+          <div style={{ ...cardStyle(), padding: 20 }}>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>🏷️ Cartoni bollati</div>
+            <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
+              Lotti con meno di {GIORNI_BOLLATO} giorni di vita residua. Questa merce non si vende:
+              l'app agenti la offre come <b>cartone bollato in omaggio</b> oltre i 10 cartoni ordinati.
+              I lotti già scaduti sono segnati in rosso e vanno tolti, non regalati.
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "16px 0" }}>
+              <span style={badgeStyle("outline")}>{bollatiTotali.lotti} lotti</span>
+              <span style={badgeStyle("warning")}>{bollatiTotali.daRegalare} pz da regalare</span>
+              {bollatiTotali.scaduti > 0 && (
+                <span style={badgeStyle("danger")}>{bollatiTotali.scaduti} lotti scaduti</span>
+              )}
+            </div>
+
+            {bollatiRows.length === 0 ? (
+              <div style={{ padding: 24, textAlign: "center", color: "#617086" }}>
+                Nessun lotto sotto i {GIORNI_BOLLATO} giorni. Niente da bollare.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "#617086" }}>
+                      <th style={{ padding: "8px 6px" }}>Referenza</th>
+                      <th style={{ padding: "8px 6px" }}>Codice</th>
+                      <th style={{ padding: "8px 6px" }}>Lotto</th>
+                      <th style={{ padding: "8px 6px" }}>Scadenza</th>
+                      <th style={{ padding: "8px 6px", textAlign: "right" }}>Giorni</th>
+                      <th style={{ padding: "8px 6px", textAlign: "right" }}>Disponibili</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bollatiRows.map((r) => (
+                      <tr key={r.lotId} style={{ borderTop: "1px solid #eef1f6", background: r.scaduto ? "#fff1f2" : "transparent" }}>
+                        <td style={{ padding: "8px 6px", fontWeight: 700 }}>{r.productName}</td>
+                        <td style={{ padding: "8px 6px", color: "#617086" }}>{r.productCode}</td>
+                        <td style={{ padding: "8px 6px" }}>{r.lotCode}</td>
+                        <td style={{ padding: "8px 6px" }}>{fmtDate(r.expiry)}</td>
+                        <td style={{ padding: "8px 6px", textAlign: "right", fontWeight: 800, color: r.scaduto ? "#991b1b" : r.giorni <= 10 ? "#b45309" : "#243043" }}>
+                          {r.scaduto ? "scaduto" : r.giorni}
+                        </td>
+                        <td style={{ padding: "8px 6px", textAlign: "right" }}>{r.disponibile}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
