@@ -610,6 +610,8 @@ function normalizeOrders(rows) {
       // Perche' l'ordine e' fermo (lo scrive il magazziniere; lo leggono
       // produzione, logistica e amministrazione sul badge).
       motivoFermo: String(getField(row, ["Motivo_Fermo", "motivo_fermo"]) || "").trim(),
+      // Se valorizzato, questo ordine e' stato UNITO in un altro (id).
+      unitoIn: String(getField(row, ["Unito_In", "unito_in"]) || "").trim(),
       colliManual: (() => {
         const raw = getField(row, ["Colli", "Numero_Colli", "Colli_Ordine"]);
         if (raw === undefined || raw === null || String(raw).trim() === "") return null;
@@ -3564,6 +3566,83 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
     }));
   };
 
+  // Chiave con cui riconosciamo "lo stesso cliente": il codice anagrafica se
+  // c'e', altrimenti la ragione sociale normalizzata (conservativo: mai per
+  // email o telefono).
+  const chiaveCliente = (order) =>
+    String(order?.clientId || "").startsWith("CLI-")
+      ? String(order.clientId)
+      : "nome:" + String(order?.customer || "").trim().toLowerCase();
+
+  // Altri ordini APERTI dello stesso cliente in uscita lo stesso giorno: sono i
+  // candidati all'unione (due ordini = due documenti e due spedizioni).
+  const ordiniUnibiliCon = (order) => {
+    if (!order) return [];
+    const st = (o) => String(o.status || "").trim().toLowerCase();
+    const unibile = (o) => !o.archived && !o.unitoIn && ["da preparare", "parziale", "fermo", ""].includes(st(o));
+    if (!unibile(order)) return [];
+    const k = chiaveCliente(order);
+    const giorno = String(order.date || "").slice(0, 10);
+    return orders.filter(
+      (o) =>
+        String(o.id) !== String(order.id) &&
+        unibile(o) &&
+        chiaveCliente(o) === k &&
+        String(o.date || "").slice(0, 10) === giorno
+    );
+  };
+
+  // Unisce l'ordine `src` dentro `dst`: le righe passano a dst, src viene
+  // archiviato e marcato "unito". Reversibile con separaOrdine.
+  const unisciOrdine = async (src, dst) => {
+    if (!src || !dst) return;
+    const conferma = window.confirm(
+      `Unire l'ordine di ${src.customer || src.id} in un unico ordine?\n\n` +
+        `Le righe di ${src.id} passano a ${dst.id}: un solo documento e una sola spedizione.\n` +
+        `Si può separare in qualsiasi momento.`
+    );
+    if (!conferma) return;
+    try {
+      const res = await callSheetsApi({
+        action: "unisciOrdini",
+        payload: JSON.stringify({ sorgente: src.id, destinazione: dst.id }),
+      });
+      if (!res || !res.success) {
+        alert("Unione non eseguita: " + ((res && res.error) || "errore sconosciuto"));
+        return;
+      }
+      await loadDataFromSheets();
+      setSelectedOrderId(String(dst.id));
+      alert(`Ordini uniti: ${res.righeSpostate} righe spostate in ${dst.id}.`);
+    } catch (e) {
+      alert("Errore di collegamento nell'unione: " + String(e));
+    }
+  };
+
+  // Annulla l'unione: le righe tornano all'ordine di origine.
+  const separaOrdine = async (order) => {
+    if (!order?.unitoIn) return;
+    const conferma = window.confirm(
+      `Separare di nuovo l'ordine ${order.id} da ${order.unitoIn}?\n\n` +
+        "Le sue righe tornano su questo ordine, che torna tra quelli da preparare."
+    );
+    if (!conferma) return;
+    try {
+      const res = await callSheetsApi({
+        action: "separaOrdine",
+        payload: JSON.stringify({ sorgente: order.id }),
+      });
+      if (!res || !res.success) {
+        alert("Separazione non eseguita: " + ((res && res.error) || "errore sconosciuto"));
+        return;
+      }
+      await loadDataFromSheets();
+      setSelectedOrderId(String(order.id));
+    } catch (e) {
+      alert("Errore di collegamento nella separazione: " + String(e));
+    }
+  };
+
   // Click su "Fermo": chiede PRIMA il motivo (modale coi motivi rapidi), cosi'
   // produzione e logistica sanno sempre perche' l'ordine e' bloccato.
   const markOrderStopped = () => {
@@ -6032,6 +6111,54 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           ) : null}
                         </div>
 
+                        {/* Stesso cliente con un altro ordine in uscita oggi:
+                            due documenti e due spedizioni. Si uniscono. */}
+                        {(() => {
+                          const gemelli = ordiniUnibiliCon(selectedOrder);
+                          if (!gemelli.length) return null;
+                          return (
+                            <div
+                              style={{
+                                marginTop: 12,
+                                padding: "12px 14px",
+                                borderRadius: 14,
+                                background: "#fff7ed",
+                                border: "1px solid #fdba74",
+                                display: "flex",
+                                gap: 12,
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <div style={{ minWidth: 0, color: "#9a3412", fontSize: 13, lineHeight: 1.45 }}>
+                                <b>
+                                  Questo cliente ha {gemelli.length === 1 ? "un altro ordine" : gemelli.length + " altri ordini"} in
+                                  uscita {fmtDate(selectedOrder.date)}
+                                </b>
+                                <div style={{ marginTop: 2 }}>
+                                  {gemelli
+                                    .map((g) => `${g.id} (${g.lines?.length || 0} righe)`)
+                                    .join(" · ")}
+                                  . Unendoli fai <b>un solo documento e una sola spedizione</b>.
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                {gemelli.map((g) => (
+                                  <button
+                                    key={g.id}
+                                    style={compactBtnStyle("warning")}
+                                    onClick={() => unisciOrdine(g, selectedOrder)}
+                                    title={`Sposta le righe di ${g.id} in questo ordine`}
+                                  >
+                                    ⇢ Unisci {gemelli.length > 1 ? g.id : "ordine"}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                           <button
                             onClick={() => setTransportModalOrderId(String(selectedOrder.id))}
@@ -7547,11 +7674,24 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                             </div>
                           </div>
 
-                          {/* Disarchiviare e' un'azione reversibile: sempre disponibile
-                              (anche senza PIN admin). Si deve poter tornare indietro. */}
-                          <button style={btnStyle("outline")} onClick={() => unarchiveOrder(order.id)}>
-                            <RotateCcw size={16} /> Disarchivia
-                          </button>
+                          {/* Ordine UNITO in un altro: si separa, non si disarchivia
+                              (le sue righe stanno sull'altro ordine). */}
+                          {order.unitoIn ? (
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                              <span style={badgeStyle("warning")} title={"Le righe sono nell'ordine " + order.unitoIn}>
+                                ⇢ unito in {order.unitoIn}
+                              </span>
+                              <button style={btnStyle("outline")} onClick={() => separaOrdine(order)}>
+                                <RotateCcw size={16} /> Separa
+                              </button>
+                            </div>
+                          ) : (
+                            /* Disarchiviare e' un'azione reversibile: sempre disponibile
+                               (anche senza PIN admin). Si deve poter tornare indietro. */
+                            <button style={btnStyle("outline")} onClick={() => unarchiveOrder(order.id)}>
+                              <RotateCcw size={16} /> Disarchivia
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>

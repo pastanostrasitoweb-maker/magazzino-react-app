@@ -92,6 +92,7 @@ const mapOrdineRow = (row) => ({
   Corriere: row.corriere ?? "",
   DDT_Numero: row.ddt_numero ?? "",
   Motivo_Fermo: row.motivo_fermo ?? "",
+  Unito_In: row.unito_in ?? "",
   Data_Ordine: toIsoString(row.data_ordine),
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
 });
@@ -1081,6 +1082,115 @@ async function prossimoNumeroDDT(params) {
   }
 }
 
+// UNISCI due ordini dello stesso cliente (stesso giorno di uscita): le righe
+// dell'ordine SORGENTE passano al DESTINAZIONE, la sorgente viene archiviata e
+// marcata `unito_in`. Le assegnazioni lotto seguono le righe da sole (puntano a
+// id_riga), quindi nessuna giacenza si muove.
+// Consentito SOLO su ordini ancora aperti: se uno e' Preparato/Spedito lo stock
+// e' gia' stato scalato e spostare righe falserebbe i conti.
+const STATI_UNIBILI = new Set(["da preparare", "parziale", "fermo", ""]);
+
+async function unisciOrdini(params) {
+  const p = parsePayload(params);
+  const src = String(p.sorgente || p.from || "").trim();
+  const dst = String(p.destinazione || p.to || "").trim();
+  if (!src || !dst) return failure("serve ordine sorgente e destinazione");
+  if (src === dst) return failure("sorgente e destinazione coincidono");
+
+  const { data: ordini, error } = await supabase
+    .from("ordini")
+    .select("id_ordine,cliente,stato,archiviato,note,unito_in")
+    .in("id_ordine", [src, dst]);
+  if (error) return failure(error);
+  const o = Object.fromEntries((ordini || []).map((x) => [x.id_ordine, x]));
+  if (!o[src] || !o[dst]) return failure("ordine non trovato");
+  for (const id of [src, dst]) {
+    const st = String(o[id].stato || "").trim().toLowerCase();
+    if (!STATI_UNIBILI.has(st)) {
+      return failure(
+        `L'ordine ${id} e' in stato "${o[id].stato}": si possono unire solo ordini non ancora preparati.`
+      );
+    }
+    if (o[id].unito_in) return failure(`L'ordine ${id} risulta gia' unito in ${o[id].unito_in}.`);
+  }
+
+  // 1) righe della sorgente -> destinazione, ricordando la provenienza
+  const { data: righe, error: eR } = await supabase
+    .from("righe_ordine")
+    .select("id_riga")
+    .eq("id_ordine", src);
+  if (eR) return failure(eR);
+  const ids = (righe || []).map((r) => r.id_riga);
+  if (ids.length) {
+    const up = await supabase
+      .from("righe_ordine")
+      .update({ id_ordine: dst, id_ordine_originale: src })
+      .in("id_riga", ids);
+    if (up.error) return failure(up.error);
+  }
+
+  // 2) sorgente: archiviata e marcata come unita
+  const notaSrc = [o[src].note, `UNITO nell'ordine ${dst}`].filter(Boolean).join(" · ");
+  const upSrc = await supabase
+    .from("ordini")
+    .update({ unito_in: dst, archiviato: true, note: notaSrc })
+    .eq("id_ordine", src);
+  if (upSrc.error) return failure(upSrc.error);
+
+  // 3) destinazione: nota + colli azzerati (il suggerito si ricalcola sul peso
+  //    nuovo; un valore manuale vecchio sarebbe sbagliato)
+  const notaDst = [o[dst].note, `include l'ordine ${src}`].filter(Boolean).join(" · ");
+  const upDst = await supabase
+    .from("ordini")
+    .update({ note: notaDst, colli: null })
+    .eq("id_ordine", dst);
+  if (upDst.error) return failure(upDst.error);
+
+  return { success: true, righeSpostate: ids.length, sorgente: src, destinazione: dst };
+}
+
+// SEPARA: annulla l'unione. Le righe che venivano dalla sorgente tornano alla
+// sorgente, che viene disarchiviata. Esatto, perche' la provenienza e' salvata.
+async function separaOrdine(params) {
+  const p = parsePayload(params);
+  const src = String(p.sorgente || p.orderId || "").trim();
+  if (!src) return failure("serve l'ordine da separare");
+
+  const { data: ord, error } = await supabase
+    .from("ordini")
+    .select("id_ordine,note,unito_in")
+    .eq("id_ordine", src)
+    .maybeSingle();
+  if (error) return failure(error);
+  if (!ord) return failure("ordine non trovato");
+  if (!ord.unito_in) return failure("questo ordine non risulta unito a nessun altro");
+  const dst = ord.unito_in;
+
+  const back = await supabase
+    .from("righe_ordine")
+    .update({ id_ordine: src, id_ordine_originale: null })
+    .eq("id_ordine_originale", src);
+  if (back.error) return failure(back.error);
+
+  const notaSrc = String(ord.note || "").replace(new RegExp(`\\s*·?\\s*UNITO nell'ordine ${dst}`), "").trim();
+  const upSrc = await supabase
+    .from("ordini")
+    .update({ unito_in: null, archiviato: false, note: notaSrc })
+    .eq("id_ordine", src);
+  if (upSrc.error) return failure(upSrc.error);
+
+  // destinazione: togli la nota e ricalcola i colli
+  const { data: d } = await supabase
+    .from("ordini")
+    .select("note")
+    .eq("id_ordine", dst)
+    .maybeSingle();
+  const notaDst = String(d?.note || "").replace(new RegExp(`\\s*·?\\s*include l'ordine ${src}`), "").trim();
+  await supabase.from("ordini").update({ note: notaDst, colli: null }).eq("id_ordine", dst);
+
+  return { success: true, sorgente: src, destinazione: dst };
+}
+
 async function deleteOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
@@ -1906,6 +2016,10 @@ export async function callSheetsApi(params = {}) {
         return await archiveOrder(params);
       case "setMotivoFermo":
         return await setMotivoFermo(params);
+      case "unisciOrdini":
+        return await unisciOrdini(params);
+      case "separaOrdine":
+        return await separaOrdine(params);
       case "markOrderStopped":
         return await markOrderStopped(params);
       case "reopenOrder":
