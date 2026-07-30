@@ -6138,7 +6138,10 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                                 </b>
                                 <div style={{ marginTop: 2 }}>
                                   {gemelli
-                                    .map((g) => `${g.id} (${g.lines?.length || 0} righe)`)
+                                    .map((g) => {
+                                      const n = g.lines?.length || 0;
+                                      return `${g.id} (${n} ${n === 1 ? "riga" : "righe"})`;
+                                    })
                                     .join(" · ")}
                                   . Unendoli fai <b>un solo documento e una sola spedizione</b>.
                                 </div>
