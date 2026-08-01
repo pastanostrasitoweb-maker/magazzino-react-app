@@ -7066,6 +7066,11 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                               <span style={badgeStyle("success")}>Preparato</span>
                             )}
                             {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
+                            {order.daBollinare ? (
+                              <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
+                                🏷️ DA BOLLINARE
+                              </span>
+                            ) : null}
                             {order.transport && !order.transport.errore ? (
                               <button
                                 style={{ ...badgeStyle(order.courier ? "dark" : "outline"), border: "1px solid #cfd8e6", cursor: "pointer" }}
@@ -7330,6 +7335,11 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           {order.customer || "Ordine senza nome"}
                         </div>
                         <span style={badgeStyle("warning")}>⛔ Fermo</span>
+                        {order.daBollinare ? (
+                          <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
+                            🏷️ DA BOLLINARE
+                          </span>
+                        ) : null}
                       </div>
 
                       <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
@@ -7437,6 +7447,11 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                         </div>
                         <span style={badgeStyle("dark")}>🚚 {order.courier || "spedito"}</span>
                         {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
+                        {order.daBollinare ? (
+                          <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
+                            🏷️ DA BOLLINARE
+                          </span>
+                        ) : null}
                       </div>
                       <div style={{ marginTop: 4, color: "#66758b", fontSize: 12 }}>
                         {fmtDate(order.dataPrepared || order.date)} · ID {order.id}
