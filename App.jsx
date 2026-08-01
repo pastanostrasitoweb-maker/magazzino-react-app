@@ -346,6 +346,44 @@ function riduciImmagine(file, maxLato = 1400, qualita = 0.7) {
   });
 }
 
+// ---- BOLLINO SCADENZA SUI LOTTI (Luca 2026-07-31) ----
+// Serve a vedere a colpo d'occhio, nella vista magazzino, cosa resta davvero
+// vendibile a PREZZO PIENO e cosa invece e' ormai da bollinare.
+// Regola cartoni bollati: sotto i 30 giorni di vita residua il lotto non si
+// vende, si regala. Fra 30 e 45 giorni e' in avvicinamento: si segnala prima,
+// cosi' ci si organizza (e' il "ormai da bollinare").
+// Guardia sui dati sporchi: scadenza assente o con anno < 2020 (es. il lotto
+// "000000") NON e' attendibile -> nessun bollino, non si declassa niente.
+const GIORNI_BOLLATO = 30;
+const GIORNI_PREAVVISO_BOLLATO = 45;
+
+function bollinoScadenza(expiry, oggiMs) {
+  if (!expiry) return null;
+  const d = new Date(expiry);
+  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2020) return null;
+  const giorni = Math.floor((d.getTime() - oggiMs) / 86400000);
+  if (giorni < 0) {
+    return { tipo: "scaduto", giorni, kind: "danger", label: "⛔ SCADUTO" };
+  }
+  if (giorni < GIORNI_BOLLATO) {
+    return {
+      tipo: "bollato",
+      giorni,
+      kind: "danger",
+      label: `🏷️ DA BOLLINARE · ${giorni} gg`,
+    };
+  }
+  if (giorni < GIORNI_PREAVVISO_BOLLATO) {
+    return {
+      tipo: "in-avvicinamento",
+      giorni,
+      kind: "warning",
+      label: `⏳ ${giorni} gg`,
+    };
+  }
+  return null; // vendibile a prezzo pieno: nessun bollino, la riga resta pulita
+}
+
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
 // vuoto = "Da verificare" (grigio).
 function paymentBadgeInfo(status) {
@@ -2058,7 +2096,14 @@ export default function App() {
   // Guardie sui dati sporchi: scadenza mancante o con anno < 2020 (es. il lotto
   // "000000") NON e' attendibile e non entra; i lotti gia' scaduti si segnalano
   // a parte perche' vanno distrutti, non regalati.
-  const GIORNI_BOLLATO = 30;
+  // Mezzanotte di oggi: base per i giorni residui dei bollini (stabile durante
+  // il render, cosi' tutte le righe usano lo stesso "oggi").
+  const oggiMagazzinoMs = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }, []);
+
   const bollatiRows = useMemo(() => {
     const oggi = new Date();
     oggi.setHours(0, 0, 0, 0);
@@ -2128,6 +2173,11 @@ export default function App() {
 
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
       const totalOrdered = lines.reduce((sum, line) => sum + line.qtyOrdered, 0);
+      // C'e' merce DA BOLLINARE in questo ordine? Il marker viaggia nel nome
+      // riga scritto dall'import (l'app agenti manda bollato:true). Serve a
+      // far vedere il cartone bollato anche a ordine gia' spostato in
+      // preparazione, senza dover riaprire l'ordine app. (Luca 2026-07-30.)
+      const righeDaBollinare = lines.filter((l) => /DA BOLLINARE/i.test(String(l.productName || "")));
       // Peso totale ordine = somma di (quantita' ordinata × peso unitario) per
       // ogni riga di magazzino con peso noto.
       const pesoTotale = lines.reduce(
@@ -2188,6 +2238,8 @@ export default function App() {
         temperatura,
         capDest,
         transport,
+        righeDaBollinare,
+        daBollinare: righeDaBollinare.length > 0,
         colliIsManual: order.colliManual !== null && order.colliManual !== undefined,
       };
     });
@@ -5980,6 +6032,14 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                         {String(order.workStatus || "").trim().toLowerCase() === "nuovo" ? (
                           <span style={badgeStyle("warning")}>NUOVO</span>
                         ) : null}
+                        {order.daBollinare ? (
+                          <span
+                            style={badgeStyle("warning")}
+                            title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}
+                          >
+                            🏷️ DA BOLLINARE
+                          </span>
+                        ) : null}
                         <span style={badgeStyle(order.totalToAssign > 0 ? "warning" : "success")}>{order.computedStatus}</span>
                         <span
                           style={badgeStyle(paymentBadgeFor(order, gestionale).kind)}
@@ -7934,6 +7994,37 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           {` · ${group.lots.length} ${group.lots.length === 1 ? "lotto" : "lotti"}`}
                           {isSmallLayout ? ` · Giac. ${group.totalLoaded} · Imp. ${group.totalCommitted}` : ""}
                         </div>
+                        {/* Quanto di questo prodotto e' ancora vendibile a prezzo
+                            pieno e quanto invece e' ormai da bollinare. */}
+                        {(() => {
+                          let pieno = 0, daBollinare = 0, scaduto = 0;
+                          for (const l of group.lots) {
+                            const b = bollinoScadenza(l.expiry, oggiMagazzinoMs);
+                            const q = Number(l.available || 0);
+                            if (q <= 0) continue;
+                            if (b && b.tipo === "scaduto") scaduto += q;
+                            else if (b && b.tipo === "bollato") daBollinare += q;
+                            else pieno += q;
+                          }
+                          if (daBollinare === 0 && scaduto === 0) return null;
+                          return (
+                            <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              <span style={{ ...badgeStyle("success"), fontSize: 11, padding: "2px 8px" }}>
+                                {pieno} a prezzo pieno
+                              </span>
+                              {daBollinare > 0 ? (
+                                <span style={{ ...badgeStyle("danger"), fontSize: 11, padding: "2px 8px" }}>
+                                  🏷️ {daBollinare} da bollinare
+                                </span>
+                              ) : null}
+                              {scaduto > 0 ? (
+                                <span style={{ ...badgeStyle("outline"), fontSize: 11, padding: "2px 8px" }}>
+                                  ⛔ {scaduto} scaduti
+                                </span>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {!isSmallLayout && <div />}
@@ -7960,7 +8051,9 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                     </div>
 
                     {/* Righe lotto sotto al prodotto */}
-                    {group.lots.map((row, index) => (
+                    {group.lots.map((row, index) => {
+                      const bol = bollinoScadenza(row.expiry, oggiMagazzinoMs);
+                      return (
                       <div
                         key={row.lotId}
                         style={{
@@ -7971,15 +8064,34 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           gap: 10,
                           padding: isSmallLayout ? "10px 14px 10px 26px" : "10px 16px 10px 32px",
                           alignItems: "center",
-                          background: index % 2 === 0 ? "#fff" : "#f7f9fc",
+                          // Sfondo ambra sui lotti da bollinare: si vedono al volo.
+                          background: bol && bol.tipo !== "in-avvicinamento"
+                            ? "#fff7ed"
+                            : index % 2 === 0 ? "#fff" : "#f7f9fc",
                           borderTop: "1px solid #eef2f7",
                         }}
                       >
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ color: "#3a4658", fontSize: 13 }}>
-                            ↳ Lotto {row.lotCode || "—"}
-                            {row.expiry ? ` · Scad. ${row.expiry}` : ""}
-                            {isSmallLayout ? ` · Giac. ${row.loaded} · Imp. ${row.committed}` : ""}
+                          <div style={{ color: "#3a4658", fontSize: 13, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            <span>
+                              ↳ Lotto {row.lotCode || "—"}
+                              {row.expiry ? ` · Scad. ${row.expiry}` : ""}
+                              {isSmallLayout ? ` · Giac. ${row.loaded} · Imp. ${row.committed}` : ""}
+                            </span>
+                            {bol ? (
+                              <span
+                                style={{ ...badgeStyle(bol.kind), fontSize: 11, padding: "2px 8px" }}
+                                title={
+                                  bol.tipo === "scaduto"
+                                    ? "Lotto scaduto: va distrutto, non si regala"
+                                    : bol.tipo === "bollato"
+                                    ? "Sotto i 30 giorni: non si vende a prezzo pieno, si regala come omaggio"
+                                    : "In avvicinamento ai 30 giorni: presto sarà da bollinare"
+                                }
+                              >
+                                {bol.label}
+                              </span>
+                            ) : null}
                           </div>
                         </div>
 
@@ -8005,18 +8117,45 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           {row.available}
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </React.Fragment>
                   );
                 })}
               </div>
             )}
 
-            <div style={{ marginTop: 14, color: "#617086", fontSize: 13 }}>
-              {filteredMagazzinoGrouped.length} {filteredMagazzinoGrouped.length === 1 ? "prodotto" : "prodotti"} ·{" "}
-              {filteredMagazzinoGrouped.reduce((sum, g) => sum + g.lots.length, 0)} lotti · Disponibili totali{" "}
-              {filteredMagazzinoGrouped.reduce((sum, g) => sum + g.totalAvailable, 0)}
-            </div>
+            {(() => {
+              // Totale di fondo pagina: quanto del disponibile e' ancora
+              // vendibile a prezzo pieno e quanto e' ormai da bollinare.
+              let pieno = 0, daBollinare = 0, scaduto = 0;
+              for (const g of filteredMagazzinoGrouped) {
+                for (const l of g.lots) {
+                  const q = Number(l.available || 0);
+                  if (q <= 0) continue;
+                  const b = bollinoScadenza(l.expiry, oggiMagazzinoMs);
+                  if (b && b.tipo === "scaduto") scaduto += q;
+                  else if (b && b.tipo === "bollato") daBollinare += q;
+                  else pieno += q;
+                }
+              }
+              return (
+                <div style={{ marginTop: 14, color: "#617086", fontSize: 13, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <span>
+                    {filteredMagazzinoGrouped.length} {filteredMagazzinoGrouped.length === 1 ? "prodotto" : "prodotti"} ·{" "}
+                    {filteredMagazzinoGrouped.reduce((sum, g) => sum + g.lots.length, 0)} lotti · Disponibili totali{" "}
+                    {filteredMagazzinoGrouped.reduce((sum, g) => sum + g.totalAvailable, 0)}
+                  </span>
+                  <span style={{ ...badgeStyle("success"), fontSize: 12 }}>{pieno} vendibili a prezzo pieno</span>
+                  {daBollinare > 0 ? (
+                    <span style={{ ...badgeStyle("danger"), fontSize: 12 }}>🏷️ {daBollinare} da bollinare</span>
+                  ) : null}
+                  {scaduto > 0 ? (
+                    <span style={{ ...badgeStyle("outline"), fontSize: 12 }}>⛔ {scaduto} scaduti</span>
+                  ) : null}
+                </div>
+              );
+            })()}
           </div>
         )}
 

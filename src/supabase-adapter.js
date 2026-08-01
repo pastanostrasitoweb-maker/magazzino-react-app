@@ -1870,7 +1870,21 @@ async function spostaOrdineInOrdini(params) {
   const lines = (src.righe || []).map((r, i) => {
     const magId = r.id_prodotto_magazzino;
     const productId = magId != null && magId !== "" ? String(magId) : `FUORI_MAGAZZINO-${r.codice || i}`;
-    const marker = r.promo ? (r.sconto_pct === 100 ? " (OMAGGIO)" : " (PROMO)") : "";
+    // CARTONE BOLLATO (Luca 2026-07-30): la merce sotto i 30 giorni si regala
+    // e va BOLLINATA prima di partire. Il marker deve dirlo esplicitamente,
+    // con lotto e giorni residui: spostato l'ordine in preparazione, questa
+    // riga e' l'unica cosa che l'operatore vede.
+    // Il flag arriva dall'app agenti. Rete di sicurezza per gli ordini gia' in
+    // coda prima che il flag esistesse: una riga promo a prezzo 0 con un
+    // prodotto vero E' un cartone bollato (l'omaggio generico "a scelta della
+    // sede" non ha prodotto, la referenza al 70% non e' a prezzo 0).
+    const bollato =
+      r.bollato === true ||
+      r.bollato === "true" ||
+      (r.promo === true && Number(r.prezzo_unitario || 0) === 0 && magId != null && magId !== "");
+    const marker = bollato
+      ? ` 🏷️ DA BOLLINARE${r.bollato_giorni != null ? ` (scad. ${r.bollato_giorni} gg)` : ""}${r.lotto_richiesto ? ` · lotto ${r.lotto_richiesto}` : ""}`
+      : r.promo ? (r.sconto_pct === 100 ? " (OMAGGIO)" : " (PROMO)") : "";
     const sr = r.su_richiesta ? " [SU RICHIESTA]" : "";
     return {
       lineId: `RIGA-${Date.now()}-${i}`,
