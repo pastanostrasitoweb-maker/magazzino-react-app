@@ -1,5 +1,5 @@
 // hotfix assegnazione prodotti senza lotto su ID disponibilità reale
-import React, { useEffect, useMemo, useState, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { callSheetsApi, aggiornaStatoOrdineApp } from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
@@ -940,6 +940,195 @@ function ProductSearchSelect({
   );
 }
 
+// Pannello "Gia' ordinato da questo cliente": elenca gli articoli che quel
+// cliente ha davvero comprato, dalle fatture 2025-2026, con l'ultimo prezzo e
+// l'ultimo sconto praticati. Serve soprattutto per i clienti che hanno articoli
+// fatti apposta per loro, che in magazzino non esistono. Il prezzo che propone
+// e' un suggerimento: chi carica lo puo' sempre cambiare prima di salvare.
+function StoricoClientePanel({ cliente, onScegli }) {
+  const [stato, setStato] = useState({ caricando: true });
+  const [filtro, setFiltro] = useState("");
+  const [ricerca, setRicerca] = useState("");
+  const [candidati, setCandidati] = useState([]);
+  const [cercando, setCercando] = useState(false);
+
+  const carica = useCallback(async () => {
+    if (!cliente) {
+      setStato({ caricando: false, articoli: [] });
+      return;
+    }
+    setStato({ caricando: true });
+    try {
+      const r = await callSheetsApi({
+        action: "getStoricoCliente",
+        payload: JSON.stringify({ cliente }),
+      });
+      setStato({ caricando: false, ...(r || {}) });
+      setCandidati((r && r.candidati) || []);
+    } catch (e) {
+      setStato({ caricando: false, error: String(e) });
+    }
+  }, [cliente]);
+
+  useEffect(() => {
+    carica();
+  }, [carica]);
+
+  const collega = async (piva, clienteFattura) => {
+    await callSheetsApi({
+      action: "collegaClienteStorico",
+      payload: JSON.stringify({ cliente, piva, clienteFattura }),
+    });
+    setRicerca("");
+    carica();
+  };
+
+  const cerca = async (q) => {
+    setRicerca(q);
+    if (q.trim().length < 2) return;
+    setCercando(true);
+    try {
+      const r = await callSheetsApi({
+        action: "cercaClienteStorico",
+        payload: JSON.stringify({ q }),
+      });
+      setCandidati((r && r.clienti) || []);
+    } finally {
+      setCercando(false);
+    }
+  };
+
+  if (stato.caricando) {
+    return (
+      <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 14, color: "#66758b" }}>
+        Cerco cosa ha gia' ordinato...
+      </div>
+    );
+  }
+
+  // Cliente non ancora agganciato allo storico: si sceglie a mano, una volta sola.
+  if (!stato.collegato) {
+    return (
+      <details style={{ ...cardStyle({ background: "#fffbeb" }), padding: 14 }}>
+        <summary style={{ fontWeight: 800, cursor: "pointer", color: "#92400e" }}>
+          Storico non collegato — collega questo cliente
+        </summary>
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <div style={{ color: "#78716c", fontSize: 13 }}>
+            In magazzino il cliente si chiama <b>{cliente}</b>. In fattura puo' avere la
+            ragione sociale, non l'insegna. Scegli quale e', lo ricordo per sempre.
+          </div>
+          <input
+            style={inputStyle()}
+            value={ricerca}
+            onChange={(e) => cerca(e.target.value)}
+            placeholder="Cerca il cliente nelle fatture..."
+          />
+          <div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 6 }}>
+            {cercando ? (
+              <div style={{ color: "#78716c" }}>Cerco...</div>
+            ) : candidati.length === 0 ? (
+              <div style={{ color: "#78716c" }}>
+                {ricerca.trim().length >= 2 ? "Nessun cliente trovato." : "Scrivi almeno 2 lettere."}
+              </div>
+            ) : (
+              candidati.map((c) => (
+                <button
+                  key={c.piva}
+                  style={{ ...btnStyle("ghost"), textAlign: "left", justifyContent: "flex-start" }}
+                  onClick={() => collega(c.piva, c.cliente)}
+                >
+                  {c.cliente}
+                  <span style={{ marginLeft: 8, color: "#7a8699", fontWeight: 600 }}>{c.piva}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      </details>
+    );
+  }
+
+  const articoli = (stato.articoli || []).filter((a) => {
+    const q = filtro.trim().toLowerCase();
+    if (!q) return true;
+    return `${a.codice} ${a.descrizione}`.toLowerCase().includes(q);
+  });
+
+  return (
+    <details open style={{ ...cardStyle({ background: "#f0fdf4" }), padding: 14 }}>
+      <summary style={{ fontWeight: 800, cursor: "pointer", color: "#166534" }}>
+        Gia' ordinato da questo cliente ({(stato.articoli || []).length})
+      </summary>
+
+      <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <input
+            style={{ ...inputStyle(), flex: 1, minWidth: 180 }}
+            value={filtro}
+            onChange={(e) => setFiltro(e.target.value)}
+            placeholder="Filtra per codice o nome..."
+          />
+          <button
+            style={{ ...btnStyle("ghost"), fontSize: 12 }}
+            onClick={() => collega("", "")}
+            title="Se il cliente collegato e' sbagliato, puoi sempre rifarlo"
+          >
+            Cambia cliente
+          </button>
+        </div>
+
+        {stato.clienteFattura ? (
+          <div style={{ color: "#4b5563", fontSize: 12 }}>
+            In fattura: <b>{stato.clienteFattura}</b> · P.IVA {stato.piva}
+          </div>
+        ) : null}
+
+        <div style={{ maxHeight: 300, overflowY: "auto", display: "grid", gap: 6 }}>
+          {articoli.length === 0 ? (
+            <div style={{ color: "#4b5563" }}>Nessun articolo trovato.</div>
+          ) : (
+            articoli.map((a, i) => (
+              <button
+                key={`${a.codice}-${i}`}
+                onClick={() => onScegli(a)}
+                style={{
+                  textAlign: "left",
+                  border: "1px solid #bbf7d0",
+                  background: "#fff",
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  cursor: "pointer",
+                  display: "grid",
+                  gap: 3,
+                }}
+              >
+                <div style={{ fontWeight: 800, fontSize: 13 }}>
+                  {a.codice ? <span style={{ color: "#16a34a" }}>{a.codice} </span> : null}
+                  {a.descrizione}
+                </div>
+                <div style={{ fontSize: 12, color: "#4b5563", fontWeight: 700 }}>
+                  {a.ultimoPrezzo != null ? `${a.ultimoPrezzo.toFixed(2)} €` : "—"}
+                  {a.ultimoSconto ? ` · sconto ${a.ultimoSconto}%` : ""}
+                  {a.unitaMisura ? ` · ${a.unitaMisura}` : ""}
+                  {" · "}
+                  {a.ultimoOrdine}
+                  {a.volte > 1 ? ` · ${a.volte} volte` : ""}
+                  {a.prezzoVariato ? (
+                    <span style={{ color: "#b45309" }}>
+                      {` · prezzo variato ${a.prezzoMin?.toFixed(2)}-${a.prezzoMax?.toFixed(2)}`}
+                    </span>
+                  ) : null}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function Modal({ open, title, children, onClose, maxWidth = 720 }) {
   if (!open) return null;
 
@@ -1538,6 +1727,9 @@ export default function App() {
   const [newLineIsOutsideStock, setNewLineIsOutsideStock] = useState(false);
   const [newLineCustomName, setNewLineCustomName] = useState("");
   const [newLineQty, setNewLineQty] = useState("");
+  // Prezzo e sconto proposti dallo storico del cliente, sempre correggibili.
+  const [newLinePrezzo, setNewLinePrezzo] = useState("");
+  const [newLineSconto, setNewLineSconto] = useState("");
   const [savingNewLine, setSavingNewLine] = useState(false);
 
   const [editingLineId, setEditingLineId] = useState("");
@@ -4927,6 +5119,8 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 
     setNewLineProductId("");
     setNewLineQty("");
+    setNewLinePrezzo("");
+    setNewLineSconto("");
     setAddLineDialogOpen(true);
   };
 
@@ -5006,12 +5200,17 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       )
     );
 
+    const prezzoRiga = String(newLinePrezzo).trim();
+    const scontoRiga = String(newLineSconto).trim();
+
     setAddLineDialogOpen(false);
     setNewLineProductId("");
     setNewLineProductSearch("");
     setNewLineIsOutsideStock(false);
     setNewLineCustomName("");
     setNewLineQty("");
+    setNewLinePrezzo("");
+    setNewLineSconto("");
 
     try {
       const result = await callSheetsApi({
@@ -5025,6 +5224,13 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
           isOutsideStock: newLine.isOutsideStock,
           rowOrder: newLine.rowOrder,
           qtyOrdered,
+          ...(prezzoRiga !== ""
+            ? {
+                prezzoUnitario: Number(prezzoRiga),
+                scontoPct: scontoRiga === "" ? 0 : Number(scontoRiga),
+                prezzoOrigine: "storico-cliente",
+              }
+            : {}),
         }),
       });
 
@@ -9342,6 +9548,41 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               </div>
             </div>
 
+            {addLineDialogOpen && selectedOrder?.customer ? (
+              <StoricoClientePanel
+                cliente={selectedOrder.customer}
+                onScegli={(a) => {
+                  // Se l'articolo esiste in magazzino lo selezioniamo, altrimenti
+                  // diventa una riga fuori magazzino con la descrizione della fattura.
+                  // In magazzino lo stesso codice si scrive "HORECA 122" o
+                  // "HORECA122": confrontiamo senza spazi ne' punteggiatura.
+                  const normCod = (v) =>
+                    String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+                  const cod = normCod(a.codice);
+                  const inMagazzino = cod
+                    ? products.find(
+                        (p) => normCod(p.code) === cod || normCod(p.id) === cod
+                      )
+                    : null;
+                  if (inMagazzino) {
+                    setNewLineIsOutsideStock(false);
+                    setNewLineProductId(String(inMagazzino.id));
+                    setNewLineProductSearch(inMagazzino.name || "");
+                    setNewLineCustomName("");
+                  } else {
+                    setNewLineIsOutsideStock(true);
+                    setNewLineProductId("");
+                    setNewLineProductSearch("");
+                    setNewLineCustomName(
+                      [a.codice, a.descrizione].filter(Boolean).join(" ")
+                    );
+                  }
+                  setNewLinePrezzo(a.ultimoPrezzo != null ? String(a.ultimoPrezzo) : "");
+                  setNewLineSconto(a.ultimoSconto ? String(a.ultimoSconto) : "");
+                }}
+              />
+            ) : null}
+
             <label
               style={{
                 display: "flex",
@@ -9390,16 +9631,43 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               </div>
             )}
 
-            <div>
-              <label style={labelStyle()}>Quantità ordinata</label>
-              <input
-                style={inputStyle()}
-                type="number"
-                min="1"
-                value={newLineQty}
-                onChange={(event) => setNewLineQty(event.target.value)}
-                placeholder="0"
-              />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              <div>
+                <label style={labelStyle()}>Quantità ordinata</label>
+                <input
+                  style={inputStyle()}
+                  type="number"
+                  min="1"
+                  value={newLineQty}
+                  onChange={(event) => setNewLineQty(event.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <label style={labelStyle()}>Prezzo €</label>
+                <input
+                  style={inputStyle()}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={newLinePrezzo}
+                  onChange={(event) => setNewLinePrezzo(event.target.value)}
+                  placeholder="—"
+                />
+              </div>
+              <div>
+                <label style={labelStyle()}>Sconto %</label>
+                <input
+                  style={inputStyle()}
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  value={newLineSconto}
+                  onChange={(event) => setNewLineSconto(event.target.value)}
+                  placeholder="0"
+                />
+              </div>
             </div>
 
             <button

@@ -1561,17 +1561,27 @@ async function addOrderLine(params) {
 
   if (!idOrdine || !idProdotto) return { success: false, error: "orderId/productId mancante" };
 
+  const riga = {
+    id_riga: String(idRiga),
+    id_ordine: String(idOrdine),
+    id_prodotto: String(idProdotto),
+    descrizione_prodotto: descrizione,
+    quantita_ordinata: qty,
+    quantita_assegnata: 0,
+    ordine_riga: rowOrder,
+  };
+  // Prezzo suggerito dallo storico del cliente: nasce gia' valorizzata, e resta
+  // modificabile a mano come qualsiasi altra riga.
+  const prezzo = p.prezzoUnitario ?? p.prezzo_unitario;
+  if (prezzo !== undefined && prezzo !== null && prezzo !== "") {
+    riga.prezzo_unitario = Number(prezzo);
+    riga.sconto_pct = Number(p.scontoPct ?? p.sconto_pct ?? 0);
+    riga.prezzo_origine = String(p.prezzoOrigine ?? p.prezzo_origine ?? "storico");
+  }
+
   const { data, error } = await supabase
     .from("righe_ordine")
-    .insert({
-      id_riga: String(idRiga),
-      id_ordine: String(idOrdine),
-      id_prodotto: String(idProdotto),
-      descrizione_prodotto: descrizione,
-      quantita_ordinata: qty,
-      quantita_assegnata: 0,
-      ordine_riga: rowOrder,
-    })
+    .insert(riga)
     .select()
     .maybeSingle();
   if (error) return failure(error);
@@ -1590,6 +1600,14 @@ async function updateOrderLine(params) {
   if (p.productName !== undefined) patch.descrizione_prodotto = p.productName;
   if (p.descrizione !== undefined) patch.descrizione_prodotto = p.descrizione;
   if (p.rowOrder !== undefined) patch.ordine_riga = Number(p.rowOrder);
+  // Prezzo e sconto sempre correggibili a mano: se li tocchi, l'origine diventa manuale.
+  const prezzoUp = p.prezzoUnitario ?? p.prezzo_unitario;
+  if (prezzoUp !== undefined) {
+    patch.prezzo_unitario = prezzoUp === null || prezzoUp === "" ? null : Number(prezzoUp);
+    patch.prezzo_origine = String(p.prezzoOrigine ?? p.prezzo_origine ?? "manuale");
+  }
+  const scontoUp = p.scontoPct ?? p.sconto_pct;
+  if (scontoUp !== undefined) patch.sconto_pct = Number(scontoUp || 0);
 
   const { error } = await supabase
     .from("righe_ordine")
@@ -2130,6 +2148,161 @@ export async function aggiornaStatoOrdineApp(idOrdineMagazzino, stato) {
   }
 }
 
+// --- Storico articoli/prezzi per cliente (dalle fatture elettroniche) ---------
+// Serve a chi carica l'ordine: vedere a colpo d'occhio cosa quel cliente ha gia'
+// preso e a che prezzo, articoli fatti ad hoc per lui compresi. Il prezzo che
+// esce di qui e' un SUGGERIMENTO: chi carica lo puo' sempre cambiare.
+
+// "LAGABI s.r.l. · ROMA" e "LAGABI SRL" devono collassare sulla stessa chiave.
+function normNome(t) {
+  return String(t || "").split("·")[0].toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+async function risolviPivaCliente(cliente) {
+  const nome = String(cliente || "").trim();
+  if (!nome) return { piva: "", clienteFattura: "", origine: "" };
+
+  const link = await supabase
+    .from("clienti_storico_link")
+    .select("piva, cliente_fattura, origine")
+    .eq("cliente_magazzino", nome)
+    .maybeSingle();
+  if (link.data?.piva) {
+    return {
+      piva: link.data.piva,
+      clienteFattura: link.data.cliente_fattura || "",
+      origine: link.data.origine || "auto",
+    };
+  }
+  return { piva: "", clienteFattura: "", origine: "" };
+}
+
+async function getStoricoCliente(params) {
+  const p = parsePayload(params);
+  let cliente = p.cliente || "";
+  const idOrdine = p.orderId || p.idOrdine;
+
+  try {
+    if (!cliente && idOrdine) {
+      const ord = await supabase
+        .from("ordini")
+        .select("cliente")
+        .eq("id_ordine", String(idOrdine))
+        .maybeSingle();
+      cliente = ord.data?.cliente || "";
+    }
+    if (!cliente) return { ok: true, cliente: "", collegato: false, articoli: [] };
+
+    const { piva, clienteFattura, origine } = await risolviPivaCliente(cliente);
+    if (!piva) {
+      // Nessun aggancio: proponiamo i candidati piu' vicini per nome, poi
+      // l'operatore sceglie e la scelta resta salvata.
+      const k = normNome(cliente);
+      const primaParola = String(cliente || "").split(/[\s·]+/)[0] || "";
+      const cand = primaParola.length >= 3
+        ? await supabase
+            .from("storico_cliente_articolo")
+            .select("piva, cliente")
+            .ilike("cliente", `%${primaParola}%`)
+            .limit(200)
+        : { data: [] };
+      const visti = new Set();
+      const candidati = [];
+      for (const r of cand.data || []) {
+        if (visti.has(r.piva)) continue;
+        visti.add(r.piva);
+        candidati.push({ piva: r.piva, cliente: r.cliente, esatto: normNome(r.cliente) === k });
+      }
+      candidati.sort((a, b) => (b.esatto ? 1 : 0) - (a.esatto ? 1 : 0));
+      return { ok: true, cliente, collegato: false, articoli: [], candidati: candidati.slice(0, 20) };
+    }
+
+    const { data, error } = await supabase
+      .from("storico_cliente_articolo")
+      .select(
+        "codice, descrizione, unita_misura, ultimo_prezzo, ultimo_sconto, ultimo_ordine, volte, qta_totale, prezzo_min, prezzo_max"
+      )
+      .eq("piva", piva)
+      .order("ultimo_ordine", { ascending: false })
+      .limit(500);
+    if (error) return failure(error);
+
+    const articoli = (data || []).map((r) => ({
+      codice: r.codice || "",
+      descrizione: r.descrizione || "",
+      unitaMisura: r.unita_misura || "",
+      ultimoPrezzo: r.ultimo_prezzo === null ? null : Number(r.ultimo_prezzo),
+      ultimoSconto: Number(r.ultimo_sconto || 0),
+      ultimoOrdine: r.ultimo_ordine || "",
+      volte: Number(r.volte || 0),
+      qtaTotale: Number(r.qta_totale || 0),
+      // Se il prezzo e' cambiato nel tempo lo segnaliamo: non e' un listino fisso.
+      prezzoVariato: Number(r.prezzo_min) !== Number(r.prezzo_max),
+      prezzoMin: r.prezzo_min === null ? null : Number(r.prezzo_min),
+      prezzoMax: r.prezzo_max === null ? null : Number(r.prezzo_max),
+    }));
+    return { ok: true, cliente, piva, clienteFattura, origine, collegato: true, articoli };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+async function cercaClienteStorico(params) {
+  const p = parsePayload(params);
+  const q = String(p.q || p.query || "").trim();
+  if (q.length < 2) return { ok: true, clienti: [] };
+  try {
+    const { data, error } = await supabase
+      .from("storico_cliente_articolo")
+      .select("piva, cliente")
+      .ilike("cliente", `%${q}%`)
+      .limit(300);
+    if (error) return failure(error);
+    const visti = new Set();
+    const clienti = [];
+    for (const r of data || []) {
+      if (visti.has(r.piva)) continue;
+      visti.add(r.piva);
+      clienti.push({ piva: r.piva, cliente: r.cliente });
+    }
+    clienti.sort((a, b) => a.cliente.localeCompare(b.cliente));
+    return { ok: true, clienti: clienti.slice(0, 50) };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+async function collegaClienteStorico(params) {
+  const p = parsePayload(params);
+  const cliente = String(p.cliente || "").trim();
+  const piva = String(p.piva || "").trim();
+  if (!cliente) return { ok: false, error: "cliente mancante" };
+  try {
+    if (!piva) {
+      // Scollega: si torna alla scelta, non si resta incastrati in un aggancio sbagliato.
+      const { error } = await supabase
+        .from("clienti_storico_link")
+        .delete()
+        .eq("cliente_magazzino", cliente);
+      if (error) return failure(error);
+      return { ok: true, scollegato: true };
+    }
+    const { error } = await supabase.from("clienti_storico_link").upsert(
+      {
+        cliente_magazzino: cliente,
+        piva,
+        cliente_fattura: String(p.clienteFattura || p.cliente_fattura || ""),
+        origine: "manuale",
+      },
+      { onConflict: "cliente_magazzino" }
+    );
+    if (error) return failure(error);
+    return { ok: true };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
 export async function callSheetsApi(params = {}) {
   try {
     // Bulk load: nessuna action.
@@ -2185,6 +2358,12 @@ export async function callSheetsApi(params = {}) {
         return await getOrdiniAcquistiInArrivo();
       case "getOrdiniArchiviati":
         return await getOrdiniArchiviati(params);
+      case "getStoricoCliente":
+        return await getStoricoCliente(params);
+      case "cercaClienteStorico":
+        return await cercaClienteStorico(params);
+      case "collegaClienteStorico":
+        return await collegaClienteStorico(params);
       case "prossimoNumeroDDT":
         return await prossimoNumeroDDT(params);
       case "getChatMessaggi":
