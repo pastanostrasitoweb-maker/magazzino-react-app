@@ -92,6 +92,13 @@ const mapOrdineRow = (row) => ({
   Corriere: row.corriere ?? "",
   DDT_Numero: row.ddt_numero ?? "",
   Motivo_Fermo: row.motivo_fermo ?? "",
+  Listino: row.listino ?? "",
+  Sconto_Cliente_Pct: row.sconto_cliente_pct === null || row.sconto_cliente_pct === undefined
+    ? null
+    : Number(row.sconto_cliente_pct),
+  Totale_Imponibile: row.totale_imponibile === null || row.totale_imponibile === undefined
+    ? null
+    : Number(row.totale_imponibile),
   Unito_In: row.unito_in ?? "",
   Data_Ordine: toIsoString(row.data_ordine),
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
@@ -104,6 +111,12 @@ const mapRigaRow = (row) => ({
   Ordine_Riga: Number(row.ordine_riga ?? 0),
   "Quantità_Ordinata": Number(row.quantita_ordinata ?? 0),
   Quantita_Assegnata: Number(row.quantita_assegnata ?? 0),
+  // Valorizzazione: null = riga non valorizzata (diverso da prezzo 0).
+  Prezzo_Unitario: row.prezzo_unitario === null || row.prezzo_unitario === undefined
+    ? null
+    : Number(row.prezzo_unitario),
+  Sconto_Pct: Number(row.sconto_pct ?? 0),
+  Prezzo_Origine: row.prezzo_origine ?? "",
 });
 const mapAssegRow = (row) => ({
   ID_Assegnazione: String(row.id_assegnazione ?? ""),
@@ -112,6 +125,74 @@ const mapAssegRow = (row) => ({
   Codice_Lotto: row.codice_lotto ?? row.lotto ?? "",
   "Quantità_Assegnata": Number(row.quantita_assegnata ?? 0),
 });
+
+// ---- VALORIZZAZIONE RIGHE DALL'APP AGENTI ----
+// TRAPPOLA DELLE UNITA' (il bug "1 crt -> 8 crt" del 2026-07-17 nasceva qui):
+//   l'app agenti manda  prezzo_unitario = prezzo al PEZZO
+//                       quantita_ordinata = PEZZI
+//                       colli = CARTONI  ·  pezzi_collo = pezzi in un cartone
+//   il magazzino conta in CARTONI (qtyOrdered = colli).
+// Quindi il prezzo va riportato all'unita' del magazzino:
+//   prezzo_cartone = prezzo_pezzo x pezzi_collo
+// I pezzi sciolti (polybox frozen) hanno colli null: restano a pezzi e il
+// prezzo al pezzo va bene com'e'.
+// Regola verificata su TUTTI i 31 ordini reali del ponte: la somma
+// qty x prezzo x (1 - sconto) coincide al centesimo con ordini_agenti.totale.
+function valorizzaRigaApp(r) {
+  const pezzi = Number(r.quantita_ordinata || 0);
+  const colli = r.colli === null || r.colli === undefined ? null : Number(r.colli);
+  const aCartoni = colli !== null && colli > 0;
+  // pezzi_collo dichiarato dall'app; se manca lo si deduce dai pezzi.
+  const pezziCollo = aCartoni
+    ? Number(r.pezzi_collo) || (pezzi > 0 ? pezzi / colli : 1)
+    : 1;
+  const prezzoPezzo = Number(r.prezzo_unitario || 0);
+  const prezzo = Math.round(prezzoPezzo * pezziCollo * 10000) / 10000;
+  return {
+    qty: aCartoni ? colli : pezzi,
+    prezzo,
+    sconto: Number(r.sconto_pct || 0),
+  };
+}
+
+// Ricalcola l'imponibile di un ordine dalle SUE righe (non dal ponte agenti):
+// le quantita' in magazzino si correggono a mano, quindi la testata deve
+// sempre rispecchiare le righe che partono davvero. Best-effort.
+async function ricalcolaImponibile(idOrdine) {
+  if (!idOrdine) return;
+  try {
+    const { data, error } = await supabase
+      .from("righe_ordine")
+      .select("quantita_ordinata,prezzo_unitario,sconto_pct")
+      .eq("id_ordine", String(idOrdine));
+    if (error) return;
+    const righe = data || [];
+    if (!righe.some((r) => r.prezzo_unitario != null)) return; // ordine non valorizzato
+    const tot = righe.reduce(
+      (s, r) =>
+        s +
+        Number(r.quantita_ordinata || 0) *
+          Number(r.prezzo_unitario || 0) *
+          (1 - Number(r.sconto_pct || 0) / 100),
+      0
+    );
+    await supabase
+      .from("ordini")
+      .update({ totale_imponibile: Math.round(tot * 100) / 100 })
+      .eq("id_ordine", String(idOrdine));
+  } catch (_) {}
+}
+
+// Imponibile di un ordine dalle sue righe valorizzate.
+function imponibileDaRighe(righe) {
+  const tot = (righe || []).reduce((s, r) => {
+    const q = Number(r.quantita_ordinata ?? r.qtyOrdered ?? 0);
+    const p = Number(r.prezzo_unitario ?? r.prezzoUnitario ?? 0);
+    const sc = Number(r.sconto_pct ?? r.scontoPct ?? 0);
+    return s + q * p * (1 - sc / 100);
+  }, 0);
+  return Math.round(tot * 100) / 100;
+}
 
 // Snapshot anagrafica cliente (da ordini_agenti) per una lista di ordini.
 async function anagrafichePerOrdini(orderIds) {
@@ -764,6 +845,10 @@ async function createOrder(params) {
       stato_lavorazione: statoLav,
       cap,
       archiviato: false,
+      ...(p.listino ? { listino: String(p.listino) } : {}),
+      ...(p.scontoClientePct === undefined || p.scontoClientePct === null
+        ? {}
+        : { sconto_cliente_pct: Number(p.scontoClientePct) }),
     })
     .select()
     .maybeSingle();
@@ -776,6 +861,12 @@ async function createOrder(params) {
     const descrizione = line.productName || line.descrizione || line.Descrizione_Prodotto || "";
     const qtaOrdinata = Number(line.qtyOrdered ?? line.quantita ?? line.Quantita_Ordinata ?? 0);
     const ordineRiga = Number(line.rowOrder ?? line.ordineRiga ?? line.Ordine_Riga ?? i + 1);
+    // Valorizzazione (facoltativa): se la riga porta un prezzo lo salviamo,
+    // con lo sconto e l'indicazione di DOVE viene il numero (app, listino1,
+    // listino8, dedicato, storico, manuale). Senza prezzo la riga resta com'e'.
+    const prezzo = line.prezzoUnitario ?? line.prezzo_unitario;
+    const sconto = line.scontoPct ?? line.sconto_pct;
+    const origine = line.prezzoOrigine ?? line.prezzo_origine;
     return {
       id_riga: String(lineId),
       id_ordine: String(idOrdine),
@@ -784,6 +875,13 @@ async function createOrder(params) {
       quantita_ordinata: qtaOrdinata,
       quantita_assegnata: 0,
       ordine_riga: ordineRiga,
+      ...(prezzo === undefined || prezzo === null
+        ? {}
+        : {
+            prezzo_unitario: Number(prezzo),
+            sconto_pct: Number(sconto || 0),
+            prezzo_origine: origine || "manuale",
+          }),
     };
   });
 
@@ -796,6 +894,16 @@ async function createOrder(params) {
       return failure(insR.error);
     }
     righeInserted = insR.data || [];
+  }
+
+  // Imponibile dell'ordine dalle righe valorizzate (0 righe con prezzo -> resta
+  // null: meglio "non valorizzato" che un falso zero).
+  const conPrezzo = righe.filter((r) => r.prezzo_unitario != null);
+  if (conPrezzo.length > 0) {
+    await supabase
+      .from("ordini")
+      .update({ totale_imponibile: imponibileDaRighe(righe) })
+      .eq("id_ordine", String(idOrdine));
   }
 
   return { success: true, idOrdine: String(idOrdine), righe: righeInserted };
@@ -1467,6 +1575,7 @@ async function addOrderLine(params) {
     .select()
     .maybeSingle();
   if (error) return failure(error);
+  await ricalcolaImponibile(idOrdine);
   return { success: true, lineId: String(idRiga), riga: data };
 }
 
@@ -1487,6 +1596,13 @@ async function updateOrderLine(params) {
     .update(patch)
     .eq("id_riga", String(idRiga));
   if (error) return failure(error);
+  // La quantita' (o il prezzo) e' cambiata: la testata deve seguire.
+  const rigaAgg = await supabase
+    .from("righe_ordine")
+    .select("id_ordine")
+    .eq("id_riga", String(idRiga))
+    .maybeSingle();
+  await ricalcolaImponibile(rigaAgg.data?.id_ordine);
   return { success: true };
 }
 
@@ -1572,6 +1688,7 @@ async function deleteLine(params) {
     .eq("id_riga", String(idRiga));
   if (error) return failure(error);
 
+  await ricalcolaImponibile(idOrdine);
   return {
     success: true,
     stockMovements: restored.stockMovements,
@@ -1886,6 +2003,7 @@ async function spostaOrdineInOrdini(params) {
       ? ` 🏷️ DA BOLLINARE${r.bollato_giorni != null ? ` (scad. ${r.bollato_giorni} gg)` : ""}${r.lotto_richiesto ? ` · lotto ${r.lotto_richiesto}` : ""}`
       : r.promo ? (r.sconto_pct === 100 ? " (OMAGGIO)" : " (PROMO)") : "";
     const sr = r.su_richiesta ? " [SU RICHIESTA]" : "";
+    const val = valorizzaRigaApp(r);
     return {
       lineId: `RIGA-${Date.now()}-${i}`,
       productId,
@@ -1893,8 +2011,13 @@ async function spostaOrdineInOrdini(params) {
       // Il magazzino conta in CARTONI: l'app manda r.colli (cartoni) e
       // r.quantita_ordinata (pezzi). I pezzi sciolti dei polybox frozen
       // hanno colli null e restano a pezzi. (Bug 1 crt -> 8 crt, 2026-07-17.)
-      qtyOrdered: Number(r.colli ?? r.quantita_ordinata ?? 0),
+      qtyOrdered: val.qty,
       rowOrder: i + 1,
+      // Valorizzazione: prezzo riportato all'UNITA' DEL MAGAZZINO (vedi
+      // valorizzaRigaApp). Sconto e origine viaggiano con la riga.
+      prezzoUnitario: val.prezzo,
+      scontoPct: val.sconto,
+      prezzoOrigine: "app",
     };
   });
 
@@ -1915,6 +2038,10 @@ async function spostaOrdineInOrdini(params) {
       // CAP per il costo trasporto: appena l'app agenti includera' cli.cap
       // nel JSON cliente, l'ordine agente lo salva. (Oggi manda solo citta.)
       cap: cli.cap || cli.CAP || cli.cap_destinazione || "",
+      // Il "listino" di un ordine agente e' il canale con cui l'app ha fatto
+      // i prezzi (farmaceutico / horeca / gdo): serve a sapere su che base
+      // e' stato valorizzato, senza confonderlo coi listini 1/8 del gestionale.
+      listino: src.canale ? `app:${src.canale}` : "app",
       lines,
     }),
   });
