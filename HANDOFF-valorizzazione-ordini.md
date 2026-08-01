@@ -85,6 +85,31 @@ Sondati anche 1002-1030: 1002 = giacenze, 1009 = condizioni di acquisto fornitor
 
 ---
 
+## 3-bis. PRESO IN CARICO dalla sessione magazzino (2026-08-01)
+
+### ✅ FATTA la parte A — ordini agenti valorizzati (in produzione)
+
+Commit `feat(valorizzazione): ordini dagli agenti valorizzati in automatico`.
+
+**Decisione sull'unità (la trappola)**: si tiene la quantità del magazzino in **CARTONI** e si riporta il prezzo alla stessa unità → `prezzo_cartone = prezzo_pezzo × pezzi_collo`. I pezzi sciolti (`colli` null, polybox frozen) restano a pezzi con prezzo al pezzo.
+**Verificata** su **tutti i 31 ordini** del ponte: `Σ qty × prezzo × (1 − sconto)` = `ordini_agenti.totale` **al centesimo**, 0 scostamenti.
+
+- `valorizzaRigaApp()` + `ricalcolaImponibile()` in `src/supabase-adapter.js`.
+- `createOrder` persiste `prezzo_unitario` / `sconto_pct` / `prezzo_origine='app'`, e sull'ordine `listino='app:<canale>'` + `totale_imponibile`.
+- **La testata segue sempre le righe del magazzino**, non il totale dell'agente: trovati 2 ordini reali in cui le quantità erano state corrette a mano dopo l'import (Ravioli 2→1, Pasta sfoglia 1→2) e il totale dell'app non era più veritiero. Il ricalcolo è agganciato ad aggiunta/modifica/eliminazione riga.
+- `bulkLoad` espone i nuovi campi al frontend (`Prezzo_Unitario`, `Sconto_Pct`, `Prezzo_Origine`, `Listino`, `Totale_Imponibile`).
+
+**Backfill applicato**: **134 righe** valorizzate, **16 ordini** con imponibile, coerenza testata/righe **16 su 16**. Criterio: abbinamento posizionale quando i conteggi coincidono (validato), altrimenti per prodotto se non ambiguo; se restano righe non abbinate il totale **non** viene scritto (meglio nessun totale che uno falso).
+
+### ⚠️ Qualità dei dati importati — da sapere prima di usare il listino 1
+
+- `listini_gestionale` listino 1: **84 articoli su 521 (16%) hanno prezzo 0**; le UM sono miste (`CT` 266, vuota 197, `PZ` 28, `KG` 18, `CA`, `NR`, `SA`, `MC`). Molti articoli valorizzati sono **materie prime d'acquisto** (sale, pecorino, brodo), non il catalogo di vendita.
+- **Ma sul nostro catalogo va bene**: dei **78 prodotti** del magazzino, **77 trovano corrispondenza** nel listino 1 e **69 hanno prezzo > 0**. Restano da sistemare a mano: **8 prodotti a prezzo 0** + **TRUFFLE** (nessuna corrispondenza) = 9.
+- Listino 8: 56 articoli, tutti `CT` e tutti valorizzati, ma `fonte='catalogo-app'` → **da confermare con Luca**.
+
+### ❌ Storico prezzi Bottega: confermato bloccato
+Verificato `log_fatture`: contiene solo fatture **fornitori/corrieri** (Stef, ecc.), senza righe e senza vendite. Non è una fonte alternativa al WS mancante.
+
 ## 4. Cosa resta da costruire (tuo)
 
 ### A. Ordini dalle app agenti → valorizzati automaticamente (sbloccato, alto valore)
