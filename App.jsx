@@ -468,7 +468,11 @@ function paymentBadgeFor(order, gest) {
   const sc = gest.scaduti[codice];
   if (sc) {
     const importo = sc.importo.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return { kind: "danger", label: `Scaduto a gestionale · ${importo} €`, auto: true };
+    // La fonte NON e' il gestionale: clienti_scaduto viene riscritta ogni ora da
+    // cf_pubblica_esposizione() a partire dalle partite del Cashflow, cioe' da
+    // Sibill piu' le chiusure fatte a mano. L'etichetta diceva "a gestionale" ed
+    // era fuorviante: fa credere che ignori le riconciliazioni, mentre le usa.
+    return { kind: "danger", label: `Scaduto a Cashflow · ${importo} €`, auto: true };
   }
   return { kind: "success", label: "Pagamento OK · auto", auto: true };
 }
