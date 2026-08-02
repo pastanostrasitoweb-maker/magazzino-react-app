@@ -1052,15 +1052,15 @@ function StoricoFuoriMagazzinoSelect({ articoli, caricando, testo, onTesto, onSc
 // Carica una volta sola gli articoli fuori magazzino di un cliente e li tiene
 // pronti per tutte le righe dell'ordine che si sta scrivendo.
 function useStoricoFuoriMagazzino({ cliente, codiceCliente, prodotti, attivo }) {
-  const [stato, setStato] = useState({ caricando: false, articoli: [] });
+  const [stato, setStato] = useState({ caricando: false, articoli: [], tutti: [] });
 
   useEffect(() => {
     let vivo = true;
     if (!attivo || (!cliente && !codiceCliente)) {
-      setStato({ caricando: false, articoli: [] });
+      setStato({ caricando: false, articoli: [], tutti: [] });
       return () => { vivo = false; };
     }
-    setStato({ caricando: true, articoli: [] });
+    setStato({ caricando: true, articoli: [], tutti: [] });
     (async () => {
       try {
         const r = await callSheetsApi({
@@ -1074,12 +1074,14 @@ function useStoricoFuoriMagazzino({ cliente, codiceCliente, prodotti, attivo }) 
           if (!c) return false; // senza codice e' per definizione fuori magazzino
           return (prodotti || []).some((p) => norm(p.code) === c || norm(p.id) === c);
         };
+        const tutti = (r && r.articoli) || [];
         setStato({
           caricando: false,
-          articoli: ((r && r.articoli) || []).filter((a) => !inMagazzino(a)),
+          articoli: tutti.filter((a) => !inMagazzino(a)), // solo fuori catalogo
+          tutti,                                          // tutto lo storico
         });
       } catch (_) {
-        if (vivo) setStato({ caricando: false, articoli: [] });
+        if (vivo) setStato({ caricando: false, articoli: [], tutti: [] });
       }
     })();
     return () => { vivo = false; };
@@ -1093,7 +1095,7 @@ function useStoricoFuoriMagazzino({ cliente, codiceCliente, prodotti, attivo }) 
 // casa arrivavano in archivio a zero). Per ogni riga si mette prezzo e sconto,
 // e il bottone "Proponi dallo storico" li riempie tutti insieme con quello che
 // quel cliente ha pagato l'ultima volta. Tutto resta correggibile a mano.
-function ValorizzazioneOrdine({ order, onSalvato }) {
+function ValorizzazioneOrdine({ order, onSalvato, listini }) {
   const [bozza, setBozza] = useState({});
   const [storico, setStorico] = useState({ caricando: true, articoli: [] });
   const [salvando, setSalvando] = useState(false);
@@ -1311,6 +1313,22 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
                       {` · ultimo ${a.ultimoPrezzo.toFixed(2)} €${a.ultimoSconto ? ` -${a.ultimoSconto}%` : ""}`}
                     </span>
                   ) : null}
+                  <PrezziDisponibili
+                    compatto
+                    codice={a?.codice || String(l.productName || "").split(" ").slice(0, 2).join(" ")}
+                    storico={a}
+                    listini={listini}
+                    onScegli={(prezzo, sconto) =>
+                      setBozza((prev) => ({
+                        ...prev,
+                        [l.lineId]: {
+                          ...(prev[l.lineId] || {}),
+                          prezzo: String(prezzo),
+                          sconto: sconto ? String(sconto) : "",
+                        },
+                      }))
+                    }
+                  />
                 </div>
                 <input
                   style={{ ...inputStyle(), padding: "6px 8px" }}
@@ -1375,6 +1393,85 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// Carica una volta sola i prezzi dei listini 1 e 8 per tutti gli articoli.
+function useListiniPrezzi(attivo) {
+  const [listini, setListini] = useState({});
+
+  useEffect(() => {
+    let vivo = true;
+    if (!attivo) return () => { vivo = false; };
+    (async () => {
+      try {
+        const r = await callSheetsApi({ action: "getListiniPrezzi" });
+        if (vivo) setListini((r && r.listini) || {});
+      } catch (_) {
+        if (vivo) setListini({});
+      }
+    })();
+    return () => { vivo = false; };
+  }, [attivo]);
+
+  return listini;
+}
+
+// Le tre fonti di prezzo per un articolo, una accanto all'altra: quello che il
+// cliente ha davvero pagato l'ultima volta, il listino 1 e il listino 8. Si
+// tocca quella che si vuole e il prezzo entra nella riga. Serve sugli ordini
+// caricati a mano, dove nessuno ti dice quanto vale quell'articolo per quel
+// cliente (Luca 02/08/2026).
+function PrezziDisponibili({ codice, storico, listini, onScegli, compatto }) {
+  const k = String(codice || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const l = (listini || {})[k] || {};
+  const voci = [];
+
+  if (storico && storico.ultimoPrezzo != null) {
+    voci.push({
+      etichetta: "ultimo a questo cliente",
+      prezzo: storico.ultimoPrezzo,
+      sconto: storico.ultimoSconto || 0,
+      nota: storico.ultimoOrdine,
+      colore: "#166534",
+      sfondo: "#f0fdf4",
+      bordo: "#bbf7d0",
+    });
+  }
+  if (l.l1) {
+    voci.push({ etichetta: "listino 1", prezzo: l.l1.prezzo, sconto: l.l1.sconto, colore: "#3730a3", sfondo: "#eef2ff", bordo: "#c7d2fe" });
+  }
+  if (l.l8) {
+    voci.push({ etichetta: "listino 8 Ho.Re.Ca.", prezzo: l.l8.prezzo, sconto: l.l8.sconto, colore: "#9a3412", sfondo: "#fff7ed", bordo: "#fed7aa" });
+  }
+
+  if (voci.length === 0) return null;
+
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: compatto ? 4 : 8 }}>
+      {voci.map((v) => (
+        <button
+          key={v.etichetta}
+          type="button"
+          onClick={() => onScegli(v.prezzo, v.sconto)}
+          title={`Usa ${v.etichetta}`}
+          style={{
+            border: `1px solid ${v.bordo}`,
+            background: v.sfondo,
+            color: v.colore,
+            borderRadius: 999,
+            padding: "4px 10px",
+            fontSize: 12,
+            fontWeight: 800,
+            cursor: "pointer",
+          }}
+        >
+          {v.etichetta} {Number(v.prezzo).toFixed(2)} €
+          {v.sconto ? ` −${v.sconto}%` : ""}
+          {v.nota ? ` · ${v.nota}` : ""}
+        </button>
+      ))}
     </div>
   );
 }
@@ -2099,6 +2196,9 @@ export default function App() {
   const { esegui: azioneUnica, attive: azioniInCorso } = useUnaAzioneAllaVolta();
   // Cosa abbiamo gia' venduto a questo cliente FUORI dal nostro catalogo, negli
   // ultimi 12 mesi. Caricato una volta per tutto l'ordine che si sta scrivendo.
+  // Prezzi dei listini 1 e 8, per affiancarli allo storico sulle righe.
+  const listiniPrezzi = useListiniPrezzi(orderDialogOpen || page === "preparati");
+
   const storicoFuoriMag = useStoricoFuoriMagazzino({
     cliente: newOrderCustomer.trim(),
     codiceCliente: newOrderClientId,
@@ -7958,7 +8058,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                               archivio e il documento parte a zero. */}
                           {!isProduzione ? (
                             <div style={{ marginTop: 10 }}>
-                              <ValorizzazioneOrdine order={order} onSalvato={loadDataFromSheets} />
+                              <ValorizzazioneOrdine order={order} onSalvato={loadDataFromSheets} listini={listiniPrezzi} />
                             </div>
                           ) : null}
 
@@ -9943,6 +10043,30 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                       </div>
                     </div>
                   ) : null}
+
+                  {/* Le tre fonti di prezzo per questo articolo: cosa ha pagato
+                      il cliente l'ultima volta, listino 1 e listino 8. Un tocco
+                      e il prezzo entra nella riga. */}
+                  {(line.productId || String(line.customName || "").trim()) &&
+                  (newOrderClientId || newOrderCustomer.trim()) ? (() => {
+                    const prod = products.find((x) => String(x.id) === String(line.productId));
+                    const codice = prod?.code || String(line.customName || "").split(" ").slice(0, 2).join(" ");
+                    const stor = (storicoFuoriMag.tutti || []).find((a) => {
+                      const nz = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+                      return a.codice && nz(a.codice) === nz(codice);
+                    });
+                    return (
+                      <PrezziDisponibili
+                        codice={codice}
+                        storico={stor}
+                        listini={listiniPrezzi}
+                        onScegli={(prezzo, sconto) => {
+                          updateNewOrderLine(index, "prezzoUnitario", String(prezzo));
+                          updateNewOrderLine(index, "scontoPct", sconto ? String(sconto) : "");
+                        }}
+                      />
+                    );
+                  })() : null}
 
                   {/* Selettore lotto: visibile solo per righe di magazzino con prodotto scelto. */}
                   {!line.isOutsideStock && line.productId && (() => {

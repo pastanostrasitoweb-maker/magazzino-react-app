@@ -2375,6 +2375,36 @@ async function getStoricoCliente(params) {
   }
 }
 
+// I prezzi dei listini per articolo, per metterli accanto allo storico quando
+// si carica un ordine a mano. Servono i due che abbiamo davvero: il 1 (base) e
+// l'8 (Ho.Re.Ca.). I listini 2, 3 e 4 esistono in anagrafica ma i loro prezzi
+// da GAMMA non ci sono ancora, vedi richiesta CONFWS.
+async function getListiniPrezzi() {
+  try {
+    const { data, error } = await supabase
+      .from("listini_gestionale")
+      .select("codice_articolo, listino, prezzo, sconto_pct")
+      .in("listino", ["1", "8"])
+      .gt("prezzo", 0)
+      .limit(2000);
+    if (error) return failure(error);
+    // Chiave senza spazi: "HORECA 122" e "HORECA122" sono lo stesso articolo.
+    const perCodice = {};
+    for (const r of data || []) {
+      const k = String(r.codice_articolo || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (!k) continue;
+      perCodice[k] = perCodice[k] || {};
+      perCodice[k][`l${r.listino}`] = {
+        prezzo: Number(r.prezzo),
+        sconto: Number(r.sconto_pct || 0),
+      };
+    }
+    return { ok: true, listini: perCodice, articoli: Object.keys(perCodice).length };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
 async function cercaClienteStorico(params) {
   const p = parsePayload(params);
   const q = String(p.q || p.query || "").trim();
@@ -2490,6 +2520,8 @@ export async function callSheetsApi(params = {}) {
         return await registraClienteRegistro(params);
       case "getStoricoCliente":
         return await getStoricoCliente(params);
+      case "getListiniPrezzi":
+        return await getListiniPrezzi();
       case "cercaClienteStorico":
         return await cercaClienteStorico(params);
       case "collegaClienteStorico":
