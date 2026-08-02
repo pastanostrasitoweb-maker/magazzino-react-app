@@ -269,7 +269,31 @@ function checkAnagraficaApp(cli) {
 }
 
 // Tipologie cliente allineabili a mano (richiesta Luca 2026-07-24).
-const TIPOLOGIE = ["HORECA", "FARMA", "GDO"];
+const TIPOLOGIE = ["HORECA", "FARMA", "GDO", "EXPORT", "BIOLOGICO"];
+
+// Metodi di pagamento: lista CHIUSA, niente campo libero (regola di Luca
+// 02/08/2026). A campo libero la stessa cosa era scritta in quattro modi:
+// "Bonifico Fine Mese", "bonifico 30gg", "Bonifico 30FM", "Bonifico bancario a
+// 30gg FM". Cosi' non si capiva niente e il Cashflow non poteva calcolare le
+// scadenze. La lista ricalca gli strumenti che usiamo davvero in fattura
+// (MP05 bonifico, MP12 Ri.Ba., MP02 assegno, MP01 contanti, MP08 carta)
+// incrociati con i termini che pratichiamo.
+const METODI_PAGAMENTO = [
+  "Contrassegno contanti",
+  "Contrassegno assegno",
+  "Bonifico anticipato",
+  "Bonifico alla consegna",
+  "Bonifico 30 gg",
+  "Bonifico 30 gg fine mese",
+  "Bonifico 60 gg fine mese",
+  "Bonifico 90 gg fine mese",
+  "Ri.Ba. 30 gg fine mese",
+  "Ri.Ba. 60 gg fine mese",
+  "Ri.Ba. 90 gg fine mese",
+  "Assegno",
+  "Carta / POS",
+  "Da concordare",
+];
 
 // Motivi rapidi per cui un ordine resta FERMO (Luca 2026-07-24). Il magazziniere
 // tocca il motivo o lo scrive a mano; produzione e logistica lo vedono sul badge.
@@ -313,6 +337,8 @@ function normalizeTipologia(raw) {
   if (/horeca|ho\.?re\.?ca|ristora|hotel|\bbar\b|catering|pizzer/.test(s)) return "HORECA";
   if (/farma|pharma|farmacia|parafarm/.test(s)) return "FARMA";
   if (/gdo|grande distribuzione|supermerc|iper\b|discount/.test(s)) return "GDO";
+  if (/export|estero|foreign|sagl|gmbh|s\.?a\.?r\.?l|ltd/.test(s)) return "EXPORT";
+  if (/biolog|\bbio\b|naturasi|erboris/.test(s)) return "BIOLOGICO";
   return "";
 }
 
@@ -10459,12 +10485,37 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                         <label style={{ ...labelStyle(), color: missing ? "#b91c1c" : undefined }}>
                           {f.label}{missing ? " *" : ""}
                         </label>
-                        <input
-                          style={{ ...inputStyle(), borderColor: missing ? "#fca5a5" : undefined }}
-                          value={anagForm[f.key] ?? ""}
-                          onChange={(e) => setAnagForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                          placeholder={f.label}
-                        />
+                        {f.key === "metodo_pagamento" ? (() => {
+                          // Lista chiusa. Se il cliente ha gia' un valore scritto a
+                          // mano che non e' in lista lo teniamo visibile, marcato:
+                          // non si perde il dato e si vede che va sistemato.
+                          const attuale = String(anagForm[f.key] ?? "");
+                          const fuoriLista = attuale && !METODI_PAGAMENTO.includes(attuale);
+                          return (
+                            <select
+                              style={{ ...inputStyle(), borderColor: missing ? "#fca5a5" : undefined }}
+                              value={attuale}
+                              onChange={(e) =>
+                                setAnagForm((prev) => ({ ...prev, [f.key]: e.target.value }))
+                              }
+                            >
+                              <option value="">— Scegli il metodo —</option>
+                              {METODI_PAGAMENTO.map((m) => (
+                                <option key={m} value={m}>{m}</option>
+                              ))}
+                              {fuoriLista ? (
+                                <option value={attuale}>{attuale} (vecchio, da sistemare)</option>
+                              ) : null}
+                            </select>
+                          );
+                        })() : (
+                          <input
+                            style={{ ...inputStyle(), borderColor: missing ? "#fca5a5" : undefined }}
+                            value={anagForm[f.key] ?? ""}
+                            onChange={(e) => setAnagForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                            placeholder={f.label}
+                          />
+                        )}
                       </div>
                     );
                   })}
