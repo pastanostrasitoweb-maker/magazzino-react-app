@@ -768,6 +768,14 @@ function normalizeOrderLines(rows, products) {
             "Quantità assegnata",
           ]) || 0
         ),
+        // Valorizzazione della riga: serve nei Preparati, prima che l'ordine
+        // vada in archivio. Senza, il documento parte a zero.
+        prezzoUnitario: (() => {
+          const v = getField(row, ["Prezzo_Unitario", "prezzo_unitario"]);
+          return v === "" || v === null || v === undefined ? null : Number(v);
+        })(),
+        scontoPct: Number(getField(row, ["Sconto_Pct", "sconto_pct"]) || 0),
+        prezzoOrigine: String(getField(row, ["Prezzo_Origine", "prezzo_origine"]) || ""),
       };
     })
     .filter((line) => line.lineId && line.orderId && line.productId);
@@ -994,6 +1002,225 @@ function useStoricoFuoriMagazzino({ cliente, codiceCliente, prodotti, attivo }) 
   }, [cliente, codiceCliente, prodotti, attivo]);
 
   return stato;
+}
+
+// Valorizzazione dell'ordine nei PREPARATI, cioe' l'ultimo momento utile prima
+// che finisca in archivio (regola di Luca 02/08/2026: gli ordini caricati in
+// casa arrivavano in archivio a zero). Per ogni riga si mette prezzo e sconto,
+// e il bottone "Proponi dallo storico" li riempie tutti insieme con quello che
+// quel cliente ha pagato l'ultima volta. Tutto resta correggibile a mano.
+function ValorizzazioneOrdine({ order, onSalvato }) {
+  const [bozza, setBozza] = useState({});
+  const [storico, setStorico] = useState({ caricando: true, articoli: [] });
+  const [salvando, setSalvando] = useState(false);
+  const [aperto, setAperto] = useState(false);
+
+  const righe = order.lines || [];
+
+  useEffect(() => {
+    const iniziale = {};
+    for (const l of righe) {
+      iniziale[l.lineId] = {
+        prezzo: l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario),
+        sconto: l.scontoPct ? String(l.scontoPct) : "",
+      };
+    }
+    setBozza(iniziale);
+  }, [order.id, righe.length]);
+
+  useEffect(() => {
+    let vivo = true;
+    if (!aperto) return () => { vivo = false; };
+    (async () => {
+      try {
+        const r = await callSheetsApi({
+          action: "getStoricoCliente",
+          payload: JSON.stringify({ cliente: order.customer, codiceCliente: order.clientId || "" }),
+        });
+        if (vivo) setStorico({ caricando: false, articoli: (r && r.articoli) || [] });
+      } catch (_) {
+        if (vivo) setStorico({ caricando: false, articoli: [] });
+      }
+    })();
+    return () => { vivo = false; };
+  }, [aperto, order.id, order.customer, order.clientId]);
+
+  const norm = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+  // Cerca nello storico l'articolo della riga: prima per codice, poi per nome.
+  const suggerimentoPer = (l) => {
+    const nome = String(l.productName || "");
+    const perCodice = storico.articoli.find(
+      (a) => a.codice && norm(nome).startsWith(norm(a.codice))
+    );
+    if (perCodice) return perCodice;
+    return storico.articoli.find(
+      (a) => norm(a.descrizione) && norm(nome).includes(norm(a.descrizione).slice(0, 14))
+    );
+  };
+
+  const proponiTutti = () => {
+    setBozza((prev) => {
+      const next = { ...prev };
+      let riempite = 0;
+      for (const l of righe) {
+        const a = suggerimentoPer(l);
+        if (!a || a.ultimoPrezzo == null) continue;
+        // Non sovrascrivo un prezzo gia' messo a mano.
+        if (String(next[l.lineId]?.prezzo || "") !== "") continue;
+        next[l.lineId] = {
+          prezzo: String(a.ultimoPrezzo),
+          sconto: a.ultimoSconto ? String(a.ultimoSconto) : "",
+        };
+        riempite++;
+      }
+      if (riempite === 0) {
+        alert(
+          "Nessun prezzo da proporre: di questi articoli non risultano vendite a questo cliente negli ultimi 12 mesi."
+        );
+      }
+      return next;
+    });
+  };
+
+  const totale = righe.reduce((s, l) => {
+    const p = Number(bozza[l.lineId]?.prezzo || 0);
+    const sc = Number(bozza[l.lineId]?.sconto || 0);
+    return s + Number(l.qtyOrdered || 0) * p * (1 - sc / 100);
+  }, 0);
+
+  const salva = async () => {
+    setSalvando(true);
+    try {
+      for (const l of righe) {
+        const p = String(bozza[l.lineId]?.prezzo ?? "").trim();
+        const sc = String(bozza[l.lineId]?.sconto ?? "").trim();
+        const prima = l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario);
+        if (p === prima && sc === (l.scontoPct ? String(l.scontoPct) : "")) continue;
+        await callSheetsApi({
+          action: "updateOrderLine",
+          payload: JSON.stringify({
+            lineId: l.lineId,
+            prezzoUnitario: p === "" ? null : Number(p),
+            scontoPct: sc === "" ? 0 : Number(sc),
+            prezzoOrigine: "valorizzazione-preparati",
+          }),
+        });
+      }
+      if (onSalvato) await onSalvato();
+    } catch (e) {
+      alert("Errore nel salvataggio dei prezzi: " + String(e));
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const valorizzato = righe.some((l) => l.prezzoUnitario != null);
+
+  return (
+    <div
+      style={{
+        border: `1px solid ${valorizzato ? "#bbf7d0" : "#fecaca"}`,
+        background: valorizzato ? "#f0fdf4" : "#fef2f2",
+        borderRadius: 14,
+        padding: 12,
+        display: "grid",
+        gap: 10,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 900, color: valorizzato ? "#166534" : "#b91c1c" }}>
+          {valorizzato ? `Valorizzato · ${fmtEur(totale)} €` : "⚠️ Ordine non valorizzato: andrebbe in archivio a zero"}
+        </span>
+        <button
+          style={{ ...btnStyle("outline"), padding: "6px 12px", fontSize: 13 }}
+          onClick={() => setAperto((v) => !v)}
+        >
+          {aperto ? "Chiudi prezzi" : valorizzato ? "Rivedi prezzi" : "Metti i prezzi"}
+        </button>
+      </div>
+
+      {aperto ? (
+        <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              style={{ ...btnStyle("primary"), padding: "6px 12px", fontSize: 13 }}
+              disabled={storico.caricando}
+              onClick={proponiTutti}
+            >
+              {storico.caricando
+                ? "Cerco lo storico..."
+                : `Proponi dallo storico (${storico.articoli.length} articoli)`}
+            </button>
+            <span style={{ fontSize: 12, color: "#6b7280" }}>
+              Prezzi dell'ultima volta a questo cliente. Sempre correggibili.
+            </span>
+          </div>
+
+          {righe.map((l) => {
+            const a = suggerimentoPer(l);
+            return (
+              <div
+                key={l.lineId}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 110px 90px",
+                  gap: 8,
+                  alignItems: "center",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+                  {l.productName}
+                  <span style={{ color: "#6b7280", fontWeight: 600 }}> · {l.qtyOrdered}</span>
+                  {a && a.ultimoPrezzo != null ? (
+                    <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 12 }}>
+                      {` · ultimo ${a.ultimoPrezzo.toFixed(2)} €${a.ultimoSconto ? ` -${a.ultimoSconto}%` : ""}`}
+                    </span>
+                  ) : null}
+                </div>
+                <input
+                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="Prezzo €"
+                  value={bozza[l.lineId]?.prezzo ?? ""}
+                  onChange={(e) =>
+                    setBozza((prev) => ({
+                      ...prev,
+                      [l.lineId]: { ...(prev[l.lineId] || {}), prezzo: e.target.value },
+                    }))
+                  }
+                />
+                <input
+                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  placeholder="Sc %"
+                  value={bozza[l.lineId]?.sconto ?? ""}
+                  onChange={(e) =>
+                    setBozza((prev) => ({
+                      ...prev,
+                      [l.lineId]: { ...(prev[l.lineId] || {}), sconto: e.target.value },
+                    }))
+                  }
+                />
+              </div>
+            );
+          })}
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <span style={{ fontWeight: 900, color: "#07153a" }}>Totale {fmtEur(totale)} €</span>
+            <button style={btnStyle("success", salvando)} disabled={salvando} onClick={salva}>
+              {salvando ? "Salvo..." : "Salva prezzi"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ProductSearchSelect({
@@ -7540,6 +7767,14 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           <div style={{ marginTop: 8, color: "#66758b", fontSize: 13 }}>
                             {order.lines?.length || 0} righe
                           </div>
+
+                          {/* Ultimo momento utile per mettere i prezzi: dopo va in
+                              archivio e il documento parte a zero. */}
+                          {!isProduzione ? (
+                            <div style={{ marginTop: 10 }}>
+                              <ValorizzazioneOrdine order={order} onSalvato={loadDataFromSheets} />
+                            </div>
+                          ) : null}
 
                           <div
                             style={{
