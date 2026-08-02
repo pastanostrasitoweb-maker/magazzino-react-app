@@ -949,7 +949,7 @@ function ProductSearchSelect({
 // l'ultimo sconto praticati. Serve soprattutto per i clienti che hanno articoli
 // fatti apposta per loro, che in magazzino non esistono. Il prezzo che propone
 // e' un suggerimento: chi carica lo puo' sempre cambiare prima di salvare.
-function StoricoClientePanel({ cliente, onScegli }) {
+function StoricoClientePanel({ cliente, codiceCliente, onScegli, soloFuoriMagazzino, prodotti, titolo }) {
   const [stato, setStato] = useState({ caricando: true });
   const [filtro, setFiltro] = useState("");
   const [ricerca, setRicerca] = useState("");
@@ -957,7 +957,7 @@ function StoricoClientePanel({ cliente, onScegli }) {
   const [cercando, setCercando] = useState(false);
 
   const carica = useCallback(async () => {
-    if (!cliente) {
+    if (!cliente && !codiceCliente) {
       setStato({ caricando: false, articoli: [] });
       return;
     }
@@ -965,14 +965,14 @@ function StoricoClientePanel({ cliente, onScegli }) {
     try {
       const r = await callSheetsApi({
         action: "getStoricoCliente",
-        payload: JSON.stringify({ cliente }),
+        payload: JSON.stringify({ cliente, codiceCliente }),
       });
       setStato({ caricando: false, ...(r || {}) });
       setCandidati((r && r.candidati) || []);
     } catch (e) {
       setStato({ caricando: false, error: String(e) });
     }
-  }, [cliente]);
+  }, [cliente, codiceCliente]);
 
   useEffect(() => {
     carica();
@@ -1053,7 +1053,23 @@ function StoricoClientePanel({ cliente, onScegli }) {
     );
   }
 
-  const articoli = (stato.articoli || []).filter((a) => {
+  // Con soloFuoriMagazzino restano solo gli articoli che nel nostro catalogo NON
+  // esistono: quelli fatti apposta per quel cliente. Sono esattamente i casi in
+  // cui chi carica non sa cosa scrivere ne' a che prezzo.
+  const normCodice = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const inMagazzino = (a) => {
+    const c = normCodice(a.codice);
+    if (!c || !Array.isArray(prodotti)) return false;
+    return prodotti.some(
+      (p) => normCodice(p.code) === c || normCodice(p.id) === c
+    );
+  };
+
+  const base = soloFuoriMagazzino
+    ? (stato.articoli || []).filter((a) => !inMagazzino(a))
+    : stato.articoli || [];
+
+  const articoli = base.filter((a) => {
     const q = filtro.trim().toLowerCase();
     if (!q) return true;
     return `${a.codice} ${a.descrizione}`.toLowerCase().includes(q);
@@ -1062,7 +1078,7 @@ function StoricoClientePanel({ cliente, onScegli }) {
   return (
     <details open style={{ ...cardStyle({ background: "#f0fdf4" }), padding: 14 }}>
       <summary style={{ fontWeight: 800, cursor: "pointer", color: "#166534" }}>
-        Già ordinato da questo cliente ({(stato.articoli || []).length}){" "}
+        {titolo || "Già ordinato da questo cliente"} ({base.length}){" "}
         <span style={{ fontWeight: 600, color: "#4b5563", fontSize: 12 }}>
           · ultimi 12 mesi
         </span>
@@ -1096,7 +1112,9 @@ function StoricoClientePanel({ cliente, onScegli }) {
             <div style={{ color: "#4b5563" }}>
               {filtro.trim()
                 ? "Nessun articolo trovato con questo filtro."
-                : "Questo cliente non ha comprato niente negli ultimi 12 mesi."}
+                : soloFuoriMagazzino
+                  ? "Questo cliente non ha comprato articoli fuori catalogo negli ultimi 12 mesi."
+                  : "Questo cliente non ha comprato niente negli ultimi 12 mesi."}
             </div>
           ) : (
             articoli.map((a, i) => (
@@ -1498,7 +1516,7 @@ export default function App() {
   const [newOrderCap, setNewOrderCap] = useState("");
   const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
-  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
+  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "" }]);
 
   const [editOrderDialogOpen, setEditOrderDialogOpen] = useState(false);
   const [editOrderCustomer, setEditOrderCustomer] = useState("");
@@ -4269,7 +4287,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
   };
 
   const addEmptyOrderLine = () => {
-    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
+    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "" }]);
   };
 
   const updateNewOrderLine = (index, field, value) => {
@@ -4302,6 +4320,18 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
         return hasQty && hasProduct;
       })
       .map((line, index) => {
+        // Prezzo e sconto suggeriti dallo storico del cliente: viaggiano con la
+        // riga cosi' l'ordine nasce gia' valorizzato. Restano modificabili.
+        const prezzo = String(line.prezzoUnitario ?? "").trim();
+        const valorizzazione =
+          prezzo === ""
+            ? {}
+            : {
+                prezzoUnitario: Number(prezzo),
+                scontoPct: Number(String(line.scontoPct ?? "").trim() || 0),
+                prezzoOrigine: "storico-cliente",
+              };
+
         if (line.isOutsideStock) {
           return {
             lineId: `RIGA-${Date.now()}-${index}`,
@@ -4311,6 +4341,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
             isOutsideStock: true,
             rowOrder: index + 1,
             qtyOrdered: Number(line.qtyOrdered),
+            ...valorizzazione,
           };
         }
 
@@ -4325,6 +4356,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
           rowOrder: index + 1,
           qtyOrdered: Number(line.qtyOrdered),
           preassignedLotId: line.lotId ? String(line.lotId) : "",
+          ...valorizzazione,
         };
       });
 
@@ -4380,7 +4412,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       setNewOrderCap("");
       setNewOrderCategory("");
       setNewOrderNotes("");
-      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "" }]);
+      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "" }]);
       setOrderDialogOpen(false);
       setPage("ordini");
 
@@ -9149,7 +9181,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                         onChange={(event) =>
                           updateNewOrderLine(index, "customName", event.target.value)
                         }
-                        placeholder="Nome articolo fuori magazzino"
+                        placeholder="Nome articolo fuori magazzino, o scegli qui sotto"
                       />
                     ) : (
                       <ProductSearchSelect
@@ -9182,6 +9214,37 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                       Rimuovi
                     </button>
                   </div>
+
+                  {/* Riga fuori magazzino: sotto compaiono gli articoli fatti apposta
+                      per questo cliente, presi dalle sue fatture degli ultimi 12 mesi.
+                      Chi carica non deve ricordarsi come si chiamavano ne' quanto
+                      costavano: tocca e la riga si compila. */}
+                  {line.isOutsideStock && (newOrderClientId || newOrderCustomer.trim()) ? (
+                    <StoricoClientePanel
+                      cliente={newOrderCustomer.trim()}
+                      codiceCliente={newOrderClientId}
+                      prodotti={products}
+                      soloFuoriMagazzino
+                      titolo="Articoli fuori magazzino già fatti a questo cliente"
+                      onScegli={(a) => {
+                        updateNewOrderLine(
+                          index,
+                          "customName",
+                          [a.codice, a.descrizione].filter(Boolean).join(" ")
+                        );
+                        updateNewOrderLine(
+                          index,
+                          "prezzoUnitario",
+                          a.ultimoPrezzo != null ? String(a.ultimoPrezzo) : ""
+                        );
+                        updateNewOrderLine(
+                          index,
+                          "scontoPct",
+                          a.ultimoSconto ? String(a.ultimoSconto) : ""
+                        );
+                      }}
+                    />
+                  ) : null}
 
                   {/* Selettore lotto: visibile solo per righe di magazzino con prodotto scelto. */}
                   {!line.isOutsideStock && line.productId && (() => {

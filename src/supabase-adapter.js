@@ -2248,12 +2248,76 @@ async function risolviPivaCliente(cliente) {
   return { piva: "", clienteFattura: "", origine: "" };
 }
 
+// Gli articoli comprati da una P.IVA, il piu' recente per primo. La finestra
+// dei 12 mesi e' gia' applicata a monte, quando si costruisce la tabella.
+async function articoliPerPiva(piva) {
+  const { data, error } = await supabase
+    .from("storico_cliente_articolo")
+    .select(
+      "codice, descrizione, unita_misura, ultimo_prezzo, ultimo_sconto, ultimo_ordine, volte, qta_totale, prezzo_min, prezzo_max"
+    )
+    .eq("piva", piva)
+    .order("ultimo_ordine", { ascending: false })
+    .limit(500);
+  if (error) return [];
+  return (data || []).map((r) => ({
+    codice: r.codice || "",
+    descrizione: r.descrizione || "",
+    unitaMisura: r.unita_misura || "",
+    ultimoPrezzo: r.ultimo_prezzo === null ? null : Number(r.ultimo_prezzo),
+    ultimoSconto: Number(r.ultimo_sconto || 0),
+    ultimoOrdine: r.ultimo_ordine || "",
+    volte: Number(r.volte || 0),
+    qtaTotale: Number(r.qta_totale || 0),
+    // Se il prezzo e' cambiato nel tempo lo segnaliamo: non e' un listino fisso.
+    prezzoVariato: Number(r.prezzo_min) !== Number(r.prezzo_max),
+    prezzoMin: r.prezzo_min === null ? null : Number(r.prezzo_min),
+    prezzoMax: r.prezzo_max === null ? null : Number(r.prezzo_max),
+  }));
+}
+
 async function getStoricoCliente(params) {
   const p = parsePayload(params);
   let cliente = p.cliente || "";
   const idOrdine = p.orderId || p.idOrdine;
+  // In creazione ordine il cliente si sceglie dal registro, quindi abbiamo il
+  // CODICE: e' un aggancio esatto, molto meglio del nome. Si passa dal registro
+  // per prendere la P.IVA, che e' la chiave dello storico fatture.
+  const codiceCliente = String(p.codiceCliente || p.clientId || p.idCliente || "").trim();
 
   try {
+    if (codiceCliente) {
+      const reg = await supabase
+        .from("clienti_master")
+        .select("piva, ragione_sociale")
+        .eq("codice", codiceCliente)
+        .maybeSingle();
+      const pivaReg = String(reg.data?.piva || "").replace(/\D/g, "");
+      // "00000000000" e simili sono segnaposto, non partite IVA.
+      const pivaVera = pivaReg.replace(/^0+/, "") ? pivaReg : "";
+      if (pivaVera) {
+        // Il gestionale imbottisce di zeri le P.IVA corte (una svizzera di 9
+        // cifre diventa 00262930096), la fattura no. Provo tutte le forme.
+        const nudo = pivaVera.replace(/^0+/, "");
+        const varianti = [...new Set([pivaVera, nudo, nudo.padStart(11, "0")])];
+        const articoli = (
+          await Promise.all(varianti.map((v) => articoliPerPiva(v)))
+        ).find((lista) => lista.length) || [];
+        if (articoli.length) {
+          return {
+            ok: true,
+            cliente: cliente || reg.data?.ragione_sociale || "",
+            piva: pivaVera,
+            clienteFattura: reg.data?.ragione_sociale || "",
+            origine: "codice",
+            collegato: true,
+            articoli,
+          };
+        }
+      }
+      // Codice senza risultati: si prova col nome prima di arrendersi.
+    }
+
     if (!cliente && idOrdine) {
       const ord = await supabase
         .from("ordini")
@@ -2288,30 +2352,7 @@ async function getStoricoCliente(params) {
       return { ok: true, cliente, collegato: false, articoli: [], candidati: candidati.slice(0, 20) };
     }
 
-    const { data, error } = await supabase
-      .from("storico_cliente_articolo")
-      .select(
-        "codice, descrizione, unita_misura, ultimo_prezzo, ultimo_sconto, ultimo_ordine, volte, qta_totale, prezzo_min, prezzo_max"
-      )
-      .eq("piva", piva)
-      .order("ultimo_ordine", { ascending: false })
-      .limit(500);
-    if (error) return failure(error);
-
-    const articoli = (data || []).map((r) => ({
-      codice: r.codice || "",
-      descrizione: r.descrizione || "",
-      unitaMisura: r.unita_misura || "",
-      ultimoPrezzo: r.ultimo_prezzo === null ? null : Number(r.ultimo_prezzo),
-      ultimoSconto: Number(r.ultimo_sconto || 0),
-      ultimoOrdine: r.ultimo_ordine || "",
-      volte: Number(r.volte || 0),
-      qtaTotale: Number(r.qta_totale || 0),
-      // Se il prezzo e' cambiato nel tempo lo segnaliamo: non e' un listino fisso.
-      prezzoVariato: Number(r.prezzo_min) !== Number(r.prezzo_max),
-      prezzoMin: r.prezzo_min === null ? null : Number(r.prezzo_min),
-      prezzoMax: r.prezzo_max === null ? null : Number(r.prezzo_max),
-    }));
+    const articoli = await articoliPerPiva(piva);
     return { ok: true, cliente, piva, clienteFattura, origine, collegato: true, articoli };
   } catch (e) {
     return failure(e);
