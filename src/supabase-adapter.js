@@ -100,6 +100,8 @@ const mapOrdineRow = (row) => ({
     ? null
     : Number(row.totale_imponibile),
   Regime_Iva: row.regime_iva ?? "",
+  Agente_Id: row.agente_id ?? "",
+  Agente_Nome: row.agente_nome ?? "",
   Unito_In: row.unito_in ?? "",
   Data_Ordine: toIsoString(row.data_ordine),
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
@@ -347,6 +349,19 @@ async function bulkLoad() {
     // registro non disponibile: il selettore resta coi clienti locali
   }
 
+  // Anagrafica agenti: serve al selettore sugli ordini caricati in casa.
+  let agenti = [];
+  try {
+    const r = await supabase
+      .from("agenti")
+      .select("agente_id, nome")
+      .eq("attivo", true)
+      .order("nome");
+    agenti = (r.data || []).map((a) => ({ Agente_Id: a.agente_id, Nome: a.nome }));
+  } catch (_) {
+    // senza anagrafica agenti il selettore resta vuoto, l'ordine si salva lo stesso
+  }
+
   // Anagrafiche degli ordini arrivati dall'APP agenti: lo snapshot JSON del
   // cliente (crm_clienti non e' leggibile da anon, ma lo snapshot viaggia
   // con l'ordine). Serve al semaforo "Anagrafica OK/KO" e al DDT.
@@ -367,7 +382,7 @@ async function bulkLoad() {
     // tabella non ancora creata: nessun override
   }
 
-  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti, anagraficheApp, overridesClienti };
+  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti, agenti, anagraficheApp, overridesClienti };
 }
 
 // ---------- action handlers ----------
@@ -573,6 +588,9 @@ async function updateOrder(params) {
   // il documento e azzerano l'imposta.
   const regime = p.regimeIva ?? p.regime_iva;
   if (regime !== undefined) patch.regime_iva = regime || null;
+  // L'agente si puo' assegnare o correggere anche dopo aver creato l'ordine.
+  if (p.agenteId !== undefined) patch.agente_id = p.agenteId || null;
+  if (p.agenteNome !== undefined) patch.agente_nome = p.agenteNome || null;
 
   if (Object.keys(patch).length === 0) return { success: true };
 
@@ -917,6 +935,8 @@ async function createOrder(params) {
       stato_lavorazione: statoLav,
       cap,
       archiviato: false,
+      ...(p.agenteId ? { agente_id: String(p.agenteId) } : {}),
+      ...(p.agenteNome ? { agente_nome: String(p.agenteNome) } : {}),
       ...(p.listino ? { listino: String(p.listino) } : {}),
       ...(p.scontoClientePct === undefined || p.scontoClientePct === null
         ? {}

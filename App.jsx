@@ -197,6 +197,7 @@ function badgeStyle(kind = "outline") {
     warning: { border: "1px solid #fed7aa", background: "#fff7ed", color: "#b45309" },
     dark: { border: "1px solid #07153a", background: "#07153a", color: "#fff" },
     danger: { border: "1px solid #fecaca", background: "#fff1f2", color: "#991b1b" },
+    info: { border: "1px solid #c7d2fe", background: "#eef2ff", color: "#3730a3" },
   };
 
   return {
@@ -754,6 +755,8 @@ function normalizeOrders(rows) {
       courier: String(getField(row, ["Corriere", "corriere"]) || "").trim(),
       ddtNumero: String(getField(row, ["DDT_Numero", "ddt_numero"]) || "").trim(),
       regimeIva: String(getField(row, ["Regime_Iva", "regime_iva"]) || "").trim(),
+      agenteId: String(getField(row, ["Agente_Id", "agente_id"]) || "").trim(),
+      agenteNome: String(getField(row, ["Agente_Nome", "agente_nome"]) || "").trim(),
       // Perche' l'ordine e' fermo (lo scrive il magazziniere; lo leggono
       // produzione, logistica e amministrazione sul badge).
       motivoFermo: String(getField(row, ["Motivo_Fermo", "motivo_fermo"]) || "").trim(),
@@ -2106,6 +2109,10 @@ export default function App() {
   const [lots, setLots] = useState([]);
   const [products, setProducts] = useState([]);
   const [clients, setClients] = useState([]);
+  // Anagrafica agenti: serve ad assegnare l'agente sugli ordini caricati in
+  // casa, quando la app agenti non funziona e l'ordine arriva in azienda.
+  const [agenti, setAgenti] = useState([]);
+  const [newOrderAgenteId, setNewOrderAgenteId] = useState("");
   // Anagrafiche snapshot degli ordini arrivati dall'APP agenti
   // (id ordine magazzino -> oggetto cliente). Per semaforo Anagrafica e DDT.
   const [appAnagrafiche, setAppAnagrafiche] = useState({});
@@ -2626,6 +2633,7 @@ export default function App() {
       setLots(safeLots);
       setOrders(mergedOrders);
       setClients(normalizedClients);
+      setAgenti(raw.agenti || []);
       setAppAnagrafiche(raw.anagraficheApp || {});
       setClientiOverride(raw.overridesClienti || {});
       setAssignments(normalizedAssignments);
@@ -2642,6 +2650,7 @@ export default function App() {
       setLots(fallbackLots);
       setOrders([]);
       setClients([]);
+      setAgenti([]);
       setAssignments({});
       setSelectedOrderId("");
       setSelectedLineId("");
@@ -5059,6 +5068,8 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       id: `ORD-${Date.now()}`,
       customer: newOrderCustomer.trim(),
       clientId: newOrderClientId || "",
+      agenteId: newOrderAgenteId || "",
+      agenteNome: (agenti.find((a) => a.Agente_Id === newOrderAgenteId) || {}).Nome || "",
       notes: newOrderNotes.trim(),
       status: "Da preparare",
       workStatus: "Nuovo",
@@ -5082,6 +5093,8 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
           workStatus: newOrder.workStatus,
           date: newOrder.date,
           cap: newOrder.cap,
+          agenteId: newOrder.agenteId,
+          agenteNome: newOrder.agenteNome,
           lines: newOrder.lines,
         }),
       });
@@ -5103,6 +5116,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       setNewOrderCategory("");
       setNewOrderNotes("");
       setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
+      setNewOrderAgenteId("");
       setOrderDialogOpen(false);
       setPage("ordini");
 
@@ -7060,6 +7074,11 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                         </div>
 
                         <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          {selectedOrder.agenteNome ? (
+                            <span style={badgeStyle("info")} title="Agente che ha portato l'ordine">
+                              👤 {selectedOrder.agenteNome}
+                            </span>
+                          ) : null}
                           <span
                             style={badgeStyle(paymentBadgeFor(selectedOrder, gestionale).kind)}
                             title={paymentBadgeFor(selectedOrder, gestionale).auto ? "Calcolato in automatico dallo scaduto TeamSystem. I bottoni OK/KO lo sovrascrivono; ri-cliccando il bottone attivo si torna all'automatico." : undefined}
@@ -8014,6 +8033,11 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                               <span style={badgeStyle("success")}>Preparato</span>
                             )}
                             {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
+                            {order.agenteNome ? (
+                              <span style={badgeStyle("info")} title="Agente che ha portato l'ordine">
+                                👤 {order.agenteNome}
+                              </span>
+                            ) : null}
                             {order.daBollinare ? (
                               <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
                                 🏷️ DA BOLLINARE
@@ -9826,6 +9850,26 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                   ⚠ Cliente scritto a mano, NON collegato all'anagrafica: niente aggancio pagamenti/ultima vendita.
                 </div>
               ) : null}
+            </div>
+
+            <div>
+              <label style={labelStyle()}>
+                Agente (se l'ordine arriva da un agente ma lo carichiamo noi)
+              </label>
+              <select
+                style={inputStyle()}
+                value={newOrderAgenteId}
+                onChange={(e) => setNewOrderAgenteId(e.target.value)}
+              >
+                <option value="">— Nessun agente, ordine diretto —</option>
+                {agenti.map((a) => (
+                  <option key={a.Agente_Id} value={a.Agente_Id}>{a.Nome}</option>
+                ))}
+              </select>
+              <div style={{ marginTop: 4, fontSize: 12, color: "#6b7280" }}>
+                Serve quando la app agenti non funziona e l'ordine ce lo mandano
+                in azienda: la provvigione e il rapporto col cliente restano suoi.
+              </div>
             </div>
 
             <div>
