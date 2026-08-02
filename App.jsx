@@ -1062,7 +1062,10 @@ function StoricoClientePanel({ cliente, onScegli }) {
   return (
     <details open style={{ ...cardStyle({ background: "#f0fdf4" }), padding: 14 }}>
       <summary style={{ fontWeight: 800, cursor: "pointer", color: "#166534" }}>
-        Gia' ordinato da questo cliente ({(stato.articoli || []).length})
+        Già ordinato da questo cliente ({(stato.articoli || []).length}){" "}
+        <span style={{ fontWeight: 600, color: "#4b5563", fontSize: 12 }}>
+          · ultimi 12 mesi
+        </span>
       </summary>
 
       <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
@@ -1090,7 +1093,11 @@ function StoricoClientePanel({ cliente, onScegli }) {
 
         <div style={{ maxHeight: 300, overflowY: "auto", display: "grid", gap: 6 }}>
           {articoli.length === 0 ? (
-            <div style={{ color: "#4b5563" }}>Nessun articolo trovato.</div>
+            <div style={{ color: "#4b5563" }}>
+              {filtro.trim()
+                ? "Nessun articolo trovato con questo filtro."
+                : "Questo cliente non ha comprato niente negli ultimi 12 mesi."}
+            </div>
           ) : (
             articoli.map((a, i) => (
               <button
