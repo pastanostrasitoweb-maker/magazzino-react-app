@@ -699,18 +699,18 @@ async function reopenOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
 
-  // Se l'ordine era PREPARATO, ripristino lo stock dei lotti (somma delle
-  // assegnazioni per lotto, rincrementata su lotti.quantita_caricata).
-  // Comportamento simmetrico a deleteOrder: l'ordine torna "Da preparare"
-  // e il magazzino vede lo stock come prima della preparazione.
+  // Se l'ordine aveva lo stock gia' scalato (preparato, o spedito che e' lo
+  // stato successivo), lo ripristino: somma delle assegnazioni per lotto,
+  // rincrementata su lotti.quantita_caricata. Comportamento simmetrico a
+  // deleteOrder: l'ordine torna "Da preparare" e il magazzino vede lo stock
+  // come prima della preparazione.
   const ordR = await supabase
     .from("ordini")
     .select("stato")
     .eq("id_ordine", String(idOrdine))
     .maybeSingle();
   if (ordR.error) return failure(ordR.error);
-  const wasPreparato =
-    String(ordR.data?.stato || "").trim().toLowerCase() === "preparato";
+  const wasPreparato = stockScalato(ordR.data?.stato);
 
   const stockMovements = [];
 
@@ -1303,23 +1303,22 @@ async function deleteOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
 
-  // Se l'ordine era gia' PREPARATO, lo stock dei lotti era stato scalato
-  // da prepara_ordine. Eliminando l'ordine ripristiniamo lo stock (somma
+  // Se l'ordine era passato per la preparazione, lo stock dei lotti era stato
+  // scalato da prepara_ordine. Eliminando l'ordine lo ripristiniamo (somma
   // delle assegnazioni per lotto, rincrementata su lotti.quantita_caricata).
-  // Se l'ordine non era preparato, nessuna ripristino (lo stock fisico non
-  // era stato toccato).
+  // Se l'ordine non era mai stato preparato non c'e' niente da ripristinare:
+  // lo stock fisico non era stato toccato.
   const ordR = await supabase
     .from("ordini")
     .select("stato")
     .eq("id_ordine", String(idOrdine))
     .maybeSingle();
   if (ordR.error) return failure(ordR.error);
-  const isPreparato =
-    String(ordR.data?.stato || "").trim().toLowerCase() === "preparato";
+  const stockGiaScalato = stockScalato(ordR.data?.stato);
 
   const stockMovements = [];
 
-  if (isPreparato) {
+  if (stockGiaScalato) {
     const righeR = await supabase
       .from("righe_ordine")
       .select("id_riga")
@@ -1365,7 +1364,7 @@ async function deleteOrder(params) {
     .eq("id_ordine", String(idOrdine));
   if (error) return failure(error);
 
-  return { success: true, stockMovements, orderWasPrepared: isPreparato };
+  return { success: true, stockMovements, orderWasPrepared: stockGiaScalato };
 }
 
 async function createLot(params) {
@@ -1624,7 +1623,16 @@ async function updateOrderLine(params) {
   return { success: true };
 }
 
-// Helper: se l'ordine collegato a una riga era PREPARATO, ripristina lo stock
+// Un ordine ha lo stock gia' scalato dal momento in cui viene PREPARATO, e
+// resta scalato anche dopo, quando passa a SPEDITO. Guardare solo "preparato"
+// lasciava fuori i 49 ordini spediti: cancellarne uno faceva sparire la merce
+// dal magazzino senza ripristinarla e senza dirlo a nessuno.
+function stockScalato(stato) {
+  const s = String(stato || "").trim().toLowerCase();
+  return s === "preparato" || s === "spedito";
+}
+
+// Helper: se l'ordine collegato a una riga aveva lo stock gia' scalato, lo ripristina
 // dei lotti per le quantita indicate e riapre l'ordine ('Da preparare'). Ritorna
 // { stockMovements, orderReopened, idOrdine }. Logica unificata: ogni azione che
 // "spreparara" un ordine ripristina automaticamente lo stock.
@@ -1636,9 +1644,7 @@ async function maybeRestoreStockAndReopen({ idOrdine, sumByLot }) {
     .eq("id_ordine", String(idOrdine))
     .maybeSingle();
   if (ordR.error) return { error: ordR.error };
-  const wasPreparato =
-    String(ordR.data?.stato || "").trim().toLowerCase() === "preparato";
-  if (!wasPreparato) return { stockMovements: [], orderReopened: false };
+  if (!stockScalato(ordR.data?.stato)) return { stockMovements: [], orderReopened: false };
 
   const stockMovements = [];
   for (const [lotId, qty] of Object.entries(sumByLot)) {
