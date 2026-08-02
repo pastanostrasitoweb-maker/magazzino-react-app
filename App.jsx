@@ -271,6 +271,43 @@ function checkAnagraficaApp(cli) {
 // Tipologie cliente allineabili a mano (richiesta Luca 2026-07-24).
 const TIPOLOGIE = ["HORECA", "FARMA", "GDO", "EXPORT", "BIOLOGICO"];
 
+// IVA. Le prime tre sono aliquote vere, le altre sono REGIMI che valgono per
+// tutto il documento e azzerano l'imposta (regola di Luca 02/08/2026).
+const ALIQUOTE_IVA = [4, 10, 22];
+const REGIMI_IVA = [
+  { key: "normale", label: "IVA normale", aliquotaZero: false },
+  { key: "split", label: "Split payment (IVA a carico del cliente)", aliquotaZero: true },
+  { key: "estero_extra_ue", label: "Estero extra UE · non imponibile art. 8", aliquotaZero: true },
+  { key: "estero_ue", label: "Estero UE · non imponibile art. 41", aliquotaZero: true },
+];
+
+// UN CLICK, UNA AZIONE (regola di Luca 02/08/2026). Fra il click e la risposta
+// del server passano un paio di secondi: se l'operatore clicca tre volte non
+// devono nascere tre ordini. Questo hook tiene una chiave "in corso" e scarta
+// i click successivi finche' il primo non ha finito.
+function useUnaAzioneAllaVolta() {
+  const inCorso = useRef(new Set());
+  const [attive, setAttive] = useState({});
+
+  const esegui = useCallback(async (chiave, fn) => {
+    if (inCorso.current.has(chiave)) return undefined; // click ripetuto: si ignora
+    inCorso.current.add(chiave);
+    setAttive((p) => ({ ...p, [chiave]: true }));
+    try {
+      return await fn();
+    } finally {
+      inCorso.current.delete(chiave);
+      setAttive((p) => {
+        const n = { ...p };
+        delete n[chiave];
+        return n;
+      });
+    }
+  }, []);
+
+  return { esegui, attive };
+}
+
 // Metodi di pagamento: lista CHIUSA, niente campo libero (regola di Luca
 // 02/08/2026). A campo libero la stessa cosa era scritta in quattro modi:
 // "Bonifico Fine Mese", "bonifico 30gg", "Bonifico 30FM", "Bonifico bancario a
@@ -675,6 +712,7 @@ function normalizeOrders(rows) {
       // Corriere scelto per la spedizione + numero DDT (se generato).
       courier: String(getField(row, ["Corriere", "corriere"]) || "").trim(),
       ddtNumero: String(getField(row, ["DDT_Numero", "ddt_numero"]) || "").trim(),
+      regimeIva: String(getField(row, ["Regime_Iva", "regime_iva"]) || "").trim(),
       // Perche' l'ordine e' fermo (lo scrive il magazziniere; lo leggono
       // produzione, logistica e amministrazione sul badge).
       motivoFermo: String(getField(row, ["Motivo_Fermo", "motivo_fermo"]) || "").trim(),
@@ -776,6 +814,10 @@ function normalizeOrderLines(rows, products) {
         })(),
         scontoPct: Number(getField(row, ["Sconto_Pct", "sconto_pct"]) || 0),
         prezzoOrigine: String(getField(row, ["Prezzo_Origine", "prezzo_origine"]) || ""),
+        ivaPct: (() => {
+          const v = getField(row, ["Iva_Pct", "iva_pct"]);
+          return v === "" || v === null || v === undefined ? null : Number(v);
+        })(),
       };
     })
     .filter((line) => line.lineId && line.orderId && line.productId);
@@ -1014,6 +1056,7 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
   const [storico, setStorico] = useState({ caricando: true, articoli: [] });
   const [salvando, setSalvando] = useState(false);
   const [aperto, setAperto] = useState(false);
+  const [regime, setRegime] = useState(order.regimeIva || "normale");
 
   const righe = order.lines || [];
 
@@ -1023,6 +1066,8 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
       iniziale[l.lineId] = {
         prezzo: l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario),
         sconto: l.scontoPct ? String(l.scontoPct) : "",
+        // Il nostro prodotto sta al 4%: e' il caso normale, si cambia dove serve.
+        iva: l.ivaPct === null || l.ivaPct === undefined ? "4" : String(l.ivaPct),
       };
     }
     setBozza(iniziale);
@@ -1069,6 +1114,7 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
         // Non sovrascrivo un prezzo gia' messo a mano.
         if (String(next[l.lineId]?.prezzo || "") !== "") continue;
         next[l.lineId] = {
+          ...(next[l.lineId] || {}),
           prezzo: String(a.ultimoPrezzo),
           sconto: a.ultimoSconto ? String(a.ultimoSconto) : "",
         };
@@ -1083,11 +1129,25 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
     });
   };
 
-  const totale = righe.reduce((s, l) => {
+  const regimeCorrente = REGIMI_IVA.find((r) => r.key === regime) || REGIMI_IVA[0];
+
+  const imponibile = righe.reduce((s, l) => {
     const p = Number(bozza[l.lineId]?.prezzo || 0);
     const sc = Number(bozza[l.lineId]?.sconto || 0);
     return s + Number(l.qtyOrdered || 0) * p * (1 - sc / 100);
   }, 0);
+
+  // Con split payment o estero l'imposta non si somma al totale del cliente.
+  const iva = regimeCorrente.aliquotaZero
+    ? 0
+    : righe.reduce((s, l) => {
+        const p = Number(bozza[l.lineId]?.prezzo || 0);
+        const sc = Number(bozza[l.lineId]?.sconto || 0);
+        const al = Number(bozza[l.lineId]?.iva || 0);
+        return s + Number(l.qtyOrdered || 0) * p * (1 - sc / 100) * (al / 100);
+      }, 0);
+
+  const totale = imponibile + iva;
 
   const salva = async () => {
     setSalvando(true);
@@ -1103,8 +1163,15 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
             lineId: l.lineId,
             prezzoUnitario: p === "" ? null : Number(p),
             scontoPct: sc === "" ? 0 : Number(sc),
+            ivaPct: Number(bozza[l.lineId]?.iva ?? 4),
             prezzoOrigine: "valorizzazione-preparati",
           }),
+        });
+      }
+      if (regime !== (order.regimeIva || "normale")) {
+        await callSheetsApi({
+          action: "updateOrder",
+          payload: JSON.stringify({ orderId: order.id, regimeIva: regime }),
         });
       }
       if (onSalvato) await onSalvato();
@@ -1130,7 +1197,9 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontWeight: 900, color: valorizzato ? "#166534" : "#b91c1c" }}>
-          {valorizzato ? `Valorizzato · ${fmtEur(totale)} €` : "⚠️ Ordine non valorizzato: andrebbe in archivio a zero"}
+          {valorizzato
+            ? `Valorizzato · ${fmtEur(imponibile)} € + IVA ${fmtEur(iva)} € = ${fmtEur(totale)} €`
+            : "⚠️ Ordine non valorizzato: andrebbe in archivio a zero"}
         </span>
         <button
           style={{ ...btnStyle("outline"), padding: "6px 12px", fontSize: 13 }}
@@ -1157,6 +1226,24 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
             </span>
           </div>
 
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: "#40516a" }}>Regime IVA</span>
+            <select
+              style={{ ...inputStyle(), padding: "6px 8px", maxWidth: 340 }}
+              value={regime}
+              onChange={(e) => setRegime(e.target.value)}
+            >
+              {REGIMI_IVA.map((r) => (
+                <option key={r.key} value={r.key}>{r.label}</option>
+              ))}
+            </select>
+            {regimeCorrente.aliquotaZero ? (
+              <span style={{ fontSize: 12, color: "#b45309", fontWeight: 700 }}>
+                Imposta non addebitata al cliente
+              </span>
+            ) : null}
+          </div>
+
           {righe.map((l) => {
             const a = suggerimentoPer(l);
             return (
@@ -1164,7 +1251,7 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
                 key={l.lineId}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 110px 90px",
+                  gridTemplateColumns: "1fr 110px 80px 90px",
                   gap: 8,
                   alignItems: "center",
                 }}
@@ -1207,12 +1294,30 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
                     }))
                   }
                 />
+                <select
+                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  value={bozza[l.lineId]?.iva ?? "4"}
+                  disabled={regimeCorrente.aliquotaZero}
+                  title={regimeCorrente.aliquotaZero ? "Con questo regime l'imposta non si addebita" : "Aliquota IVA della riga"}
+                  onChange={(e) =>
+                    setBozza((prev) => ({
+                      ...prev,
+                      [l.lineId]: { ...(prev[l.lineId] || {}), iva: e.target.value },
+                    }))
+                  }
+                >
+                  {ALIQUOTE_IVA.map((a) => (
+                    <option key={a} value={String(a)}>{a}%</option>
+                  ))}
+                </select>
               </div>
             );
           })}
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-            <span style={{ fontWeight: 900, color: "#07153a" }}>Totale {fmtEur(totale)} €</span>
+            <span style={{ fontWeight: 900, color: "#07153a" }}>
+              Imponibile {fmtEur(imponibile)} € · IVA {fmtEur(iva)} € · Totale {fmtEur(totale)} €
+            </span>
             <button style={btnStyle("success", salvando)} disabled={salvando} onClick={salva}>
               {salvando ? "Salvo..." : "Salva prezzi"}
             </button>
@@ -1921,7 +2026,9 @@ export default function App() {
   const [newOrderCap, setNewOrderCap] = useState("");
   const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
-  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "" }]);
+  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4" }]);
+  // Un click, una azione: vedi useUnaAzioneAllaVolta.
+  const { esegui: azioneUnica, attive: azioniInCorso } = useUnaAzioneAllaVolta();
   // Cosa abbiamo gia' venduto a questo cliente FUORI dal nostro catalogo, negli
   // ultimi 12 mesi. Caricato una volta per tutto l'ordine che si sta scrivendo.
   const storicoFuoriMag = useStoricoFuoriMagazzino({
@@ -4700,7 +4807,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
   };
 
   const addEmptyOrderLine = () => {
-    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "" }]);
+    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4" }]);
   };
 
   const updateNewOrderLine = (index, field, value) => {
@@ -4742,6 +4849,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
             : {
                 prezzoUnitario: Number(prezzo),
                 scontoPct: Number(String(line.scontoPct ?? "").trim() || 0),
+                ivaPct: Number(String(line.ivaPct ?? "").trim() || 4),
                 prezzoOrigine: "storico-cliente",
               };
 
@@ -4825,7 +4933,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       setNewOrderCap("");
       setNewOrderCategory("");
       setNewOrderNotes("");
-      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "" }]);
+      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4" }]);
       setOrderDialogOpen(false);
       setPage("ordini");
 
@@ -7671,7 +7779,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
                   <RefreshCw size={18} /> Aggiorna
                 </button>
-                <button style={btnStyle("primary")} onClick={archiveAllPreparedOrders}>
+                <button style={btnStyle("primary")} onClick={() => azioneUnica("archivia-tutti", archiveAllPreparedOrders)}>
                   <Archive size={18} /> Archivia preparati
                 </button>
               </div>
@@ -9556,6 +9664,61 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
             <div style={{ display: "grid", gap: 12 }}>
               <div style={{ fontSize: 18, fontWeight: 800 }}>Righe ordine</div>
 
+              {/* Cosa ha gia' ordinato questo cliente, TUTTO: sia roba di
+                  magazzino sia articoli fatti apposta per lui. Toccandone uno
+                  si riempie la prima riga libera. E' la stessa comodita' che
+                  c'e' aggiungendo una riga a un ordine gia' aperto. */}
+              {newOrderClientId || newOrderCustomer.trim() ? (
+                <StoricoClientePanel
+                  cliente={newOrderCustomer.trim()}
+                  codiceCliente={newOrderClientId}
+                  prodotti={products}
+                  onScegli={(a) => {
+                    const normC = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+                    const cod = normC(a.codice);
+                    const prod = cod
+                      ? products.find((p) => normC(p.code) === cod || normC(p.id) === cod)
+                      : null;
+                    // Prima riga ancora vuota, altrimenti se ne aggiunge una.
+                    const libera = newOrderLines.findIndex(
+                      (l) => !l.productId && !String(l.customName || "").trim()
+                    );
+                    const scrivi = (idx) => {
+                      if (prod) {
+                        updateNewOrderLine(idx, "isOutsideStock", false);
+                        updateNewOrderLine(idx, "productId", String(prod.id));
+                        updateNewOrderLine(idx, "productSearch", prod.name || "");
+                        updateNewOrderLine(idx, "customName", "");
+                      } else {
+                        updateNewOrderLine(idx, "isOutsideStock", true);
+                        updateNewOrderLine(idx, "productId", "");
+                        updateNewOrderLine(idx, "productSearch", "");
+                        updateNewOrderLine(
+                          idx,
+                          "customName",
+                          [a.codice, a.descrizione].filter(Boolean).join(" ")
+                        );
+                      }
+                      updateNewOrderLine(
+                        idx,
+                        "prezzoUnitario",
+                        a.ultimoPrezzo != null ? String(a.ultimoPrezzo) : ""
+                      );
+                      updateNewOrderLine(idx, "scontoPct", a.ultimoSconto ? String(a.ultimoSconto) : "");
+                    };
+                    if (libera >= 0) {
+                      scrivi(libera);
+                    } else {
+                      // Nessuna riga libera: ne aggiungo una e ci scrivo dentro
+                      // appena React l'ha montata.
+                      const nuovoIndice = newOrderLines.length;
+                      addEmptyOrderLine();
+                      setTimeout(() => scrivi(nuovoIndice), 0);
+                    }
+                  }}
+                />
+              ) : null}
+
               {newOrderLines.map((line, index) => (
                 <div
                   key={index}
@@ -9651,10 +9814,12 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                     </button>
                   </div>
 
-                  {/* Prezzo e sconto della riga: precompilati da quello che il cliente
-                      ha pagato l'ultima volta, e sempre correggibili a mano. */}
-                  {line.isOutsideStock && String(line.prezzoUnitario || "") !== "" ? (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  {/* Prezzo, sconto e IVA della riga: precompilati da quello che il
+                      cliente ha pagato l'ultima volta, e sempre correggibili a mano.
+                      Si vedono su TUTTE le righe, non solo su quelle fuori magazzino:
+                      altrimenti l'ordine parte senza valore. */}
+                  {line.productId || String(line.customName || "").trim() ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                       <div>
                         <label style={{ fontSize: 12, color: "#5a6e90", fontWeight: 700 }}>
                           Prezzo € (ultimo fatto a questo cliente)
@@ -9681,6 +9846,18 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                           value={line.scontoPct || ""}
                           onChange={(e) => updateNewOrderLine(index, "scontoPct", e.target.value)}
                         />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 12, color: "#5a6e90", fontWeight: 700 }}>IVA</label>
+                        <select
+                          style={inputStyle()}
+                          value={line.ivaPct || "4"}
+                          onChange={(e) => updateNewOrderLine(index, "ivaPct", e.target.value)}
+                        >
+                          {ALIQUOTE_IVA.map((a) => (
+                            <option key={a} value={String(a)}>{a}%</option>
+                          ))}
+                        </select>
                       </div>
                     </div>
                   ) : null}
@@ -9742,10 +9919,46 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               <button style={btnStyle("outline")} onClick={addEmptyOrderLine}>
                 <Plus size={16} /> Aggiungi riga
               </button>
+
+              {/* Quanto vale l'ordine, prima di crearlo. */}
+              {(() => {
+                const imponibile = newOrderLines.reduce((acc, l) => {
+                  const q = Number(l.qtyOrdered || 0);
+                  const p = Number(l.prezzoUnitario || 0);
+                  const sc = Number(l.scontoPct || 0);
+                  return acc + q * p * (1 - sc / 100);
+                }, 0);
+                const iva = newOrderLines.reduce((acc, l) => {
+                  const q = Number(l.qtyOrdered || 0);
+                  const p = Number(l.prezzoUnitario || 0);
+                  const sc = Number(l.scontoPct || 0);
+                  const al = Number(l.ivaPct || 4);
+                  return acc + q * p * (1 - sc / 100) * (al / 100);
+                }, 0);
+                if (imponibile <= 0) return null;
+                return (
+                  <div
+                    style={{
+                      ...cardStyle({ background: "#f0fdf4" }),
+                      padding: 12,
+                      fontWeight: 900,
+                      color: "#07153a",
+                      textAlign: "right",
+                    }}
+                  >
+                    Imponibile {fmtEur(imponibile)} € · IVA {fmtEur(iva)} € ·{" "}
+                    Totale {fmtEur(imponibile + iva)} €
+                  </div>
+                );
+              })()}
             </div>
 
-            <button style={btnStyle("primary")} onClick={createOrder}>
-              Crea ordine
+            <button
+              style={btnStyle("primary", !!azioniInCorso["crea-ordine"])}
+              disabled={!!azioniInCorso["crea-ordine"]}
+              onClick={() => azioneUnica("crea-ordine", createOrder)}
+            >
+              {azioniInCorso["crea-ordine"] ? "Sto creando l'ordine..." : "Crea ordine"}
             </button>
           </div>
         </Modal>
@@ -10186,7 +10399,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
             <button
               style={btnStyle("primary", savingNewLine)}
               disabled={savingNewLine}
-              onClick={createOrderLine}
+              onClick={() => azioneUnica("aggiungi-riga", createOrderLine)}
             >
               {savingNewLine ? "Salvataggio..." : "Aggiungi riga"}
             </button>

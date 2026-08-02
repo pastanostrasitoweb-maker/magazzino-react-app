@@ -99,6 +99,7 @@ const mapOrdineRow = (row) => ({
   Totale_Imponibile: row.totale_imponibile === null || row.totale_imponibile === undefined
     ? null
     : Number(row.totale_imponibile),
+  Regime_Iva: row.regime_iva ?? "",
   Unito_In: row.unito_in ?? "",
   Data_Ordine: toIsoString(row.data_ordine),
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
@@ -117,6 +118,7 @@ const mapRigaRow = (row) => ({
     : Number(row.prezzo_unitario),
   Sconto_Pct: Number(row.sconto_pct ?? 0),
   Prezzo_Origine: row.prezzo_origine ?? "",
+  Iva_Pct: row.iva_pct === null || row.iva_pct === undefined ? null : Number(row.iva_pct),
 });
 const mapAssegRow = (row) => ({
   ID_Assegnazione: String(row.id_assegnazione ?? ""),
@@ -566,6 +568,10 @@ async function updateOrder(params) {
   if (p.paymentStatus !== undefined) patch.stato_pagamento = p.paymentStatus || null;
   if (p.corriere !== undefined) patch.corriere = p.corriere;
   if (p.ddt_numero !== undefined) patch.ddt_numero = p.ddt_numero;
+  // Regime IVA: split payment ed esteri non sono aliquote, valgono per tutto
+  // il documento e azzerano l'imposta.
+  const regime = p.regimeIva ?? p.regime_iva;
+  if (regime !== undefined) patch.regime_iva = regime || null;
 
   if (Object.keys(patch).length === 0) return { success: true };
 
@@ -945,6 +951,7 @@ async function createOrder(params) {
         : {
             prezzo_unitario: Number(prezzo),
             sconto_pct: Number(sconto || 0),
+            iva_pct: Number(line.ivaPct ?? line.iva_pct ?? 4),
             prezzo_origine: origine || "manuale",
           }),
     };
@@ -1672,6 +1679,10 @@ async function updateOrderLine(params) {
   }
   const scontoUp = p.scontoPct ?? p.sconto_pct;
   if (scontoUp !== undefined) patch.sconto_pct = Number(scontoUp || 0);
+  // Aliquota IVA della riga: nello stesso documento convivono il 4 del cibo e
+  // il 22 del trasporto, quindi sta sulla riga e non sulla testata.
+  const ivaUp = p.ivaPct ?? p.iva_pct;
+  if (ivaUp !== undefined) patch.iva_pct = ivaUp === null || ivaUp === "" ? null : Number(ivaUp);
 
   const { error } = await supabase
     .from("righe_ordine")
