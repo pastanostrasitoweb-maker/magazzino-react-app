@@ -818,6 +818,158 @@ function buildOrdersWithLines(orders, lines) {
 }
 
 
+// Ricerca sugli articoli FUORI MAGAZZINO gia' venduti a un cliente: quelli che
+// nel nostro catalogo non esistono (piu'), presi dalle sue fatture degli ultimi
+// 12 mesi. Si scrive l'inizio di una parola e sotto compaiono, esattamente come
+// per i prodotti di magazzino. Scegliendone uno la riga si compila da sola con
+// il nome e con il prezzo e lo sconto dell'ultima volta.
+function StoricoFuoriMagazzinoSelect({ articoli, caricando, testo, onTesto, onScegli }) {
+  const [open, setOpen] = useState(false);
+  const query = String(testo || "").trim().toLowerCase();
+
+  const suggerimenti = articoli
+    .filter((a) => {
+      if (!query) return true;
+      return `${a.codice} ${a.descrizione}`.toLowerCase().includes(query);
+    })
+    .slice(0, 12);
+
+  return (
+    <div style={{ position: "relative", minWidth: 0 }}>
+      <input
+        style={inputStyle()}
+        value={testo}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => {
+          onTesto(e.target.value);
+          setOpen(true);
+        }}
+        placeholder={
+          caricando
+            ? "Cerco cosa gli abbiamo gia' venduto..."
+            : articoli.length
+              ? `Scrivi o scegli tra i ${articoli.length} gia' venduti a questo cliente`
+              : "Nome articolo fuori magazzino"
+        }
+      />
+
+      {open && !caricando && articoli.length > 0 ? (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 40,
+            top: "100%",
+            left: 0,
+            right: 0,
+            marginTop: 6,
+            background: "#fff",
+            border: "1px solid #bbf7d0",
+            borderRadius: 14,
+            boxShadow: "0 18px 40px rgba(16,24,40,.16)",
+            maxHeight: 300,
+            overflowY: "auto",
+          }}
+          onMouseLeave={() => setOpen(false)}
+        >
+          <div
+            style={{
+              padding: "8px 12px",
+              fontSize: 12,
+              fontWeight: 800,
+              color: "#166534",
+              background: "#f0fdf4",
+              borderBottom: "1px solid #dcfce7",
+            }}
+          >
+            Già venduti a questo cliente · ultimi 12 mesi
+          </div>
+          {suggerimenti.length === 0 ? (
+            <div style={{ padding: 12, color: "#6b7280" }}>Nessuno con questo testo.</div>
+          ) : (
+            suggerimenti.map((a, i) => (
+              <button
+                key={`${a.codice}-${i}`}
+                type="button"
+                onClick={() => {
+                  onScegli(a);
+                  setOpen(false);
+                }}
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  border: "none",
+                  borderBottom: "1px solid #f1f5f9",
+                  background: "transparent",
+                  padding: "10px 12px",
+                  cursor: "pointer",
+                  display: "grid",
+                  gap: 3,
+                }}
+              >
+                <div style={{ fontWeight: 800, fontSize: 13 }}>
+                  {a.codice ? <span style={{ color: "#16a34a" }}>{a.codice} </span> : null}
+                  {a.descrizione}
+                </div>
+                <div style={{ fontSize: 12, color: "#4b5563", fontWeight: 700 }}>
+                  {a.ultimoPrezzo != null ? `${a.ultimoPrezzo.toFixed(2)} €` : "—"}
+                  {a.ultimoSconto ? ` · sconto ${a.ultimoSconto}%` : ""}
+                  {a.unitaMisura ? ` · ${a.unitaMisura}` : ""}
+                  {` · ${a.ultimoOrdine}`}
+                  {a.volte > 1 ? ` · ${a.volte} volte` : ""}
+                  {a.prezzoVariato ? (
+                    <span style={{ color: "#b45309" }}>
+                      {` · variato ${a.prezzoMin?.toFixed(2)}-${a.prezzoMax?.toFixed(2)}`}
+                    </span>
+                  ) : null}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Carica una volta sola gli articoli fuori magazzino di un cliente e li tiene
+// pronti per tutte le righe dell'ordine che si sta scrivendo.
+function useStoricoFuoriMagazzino({ cliente, codiceCliente, prodotti, attivo }) {
+  const [stato, setStato] = useState({ caricando: false, articoli: [] });
+
+  useEffect(() => {
+    let vivo = true;
+    if (!attivo || (!cliente && !codiceCliente)) {
+      setStato({ caricando: false, articoli: [] });
+      return () => { vivo = false; };
+    }
+    setStato({ caricando: true, articoli: [] });
+    (async () => {
+      try {
+        const r = await callSheetsApi({
+          action: "getStoricoCliente",
+          payload: JSON.stringify({ cliente, codiceCliente }),
+        });
+        if (!vivo) return;
+        const norm = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const inMagazzino = (a) => {
+          const c = norm(a.codice);
+          if (!c) return false; // senza codice e' per definizione fuori magazzino
+          return (prodotti || []).some((p) => norm(p.code) === c || norm(p.id) === c);
+        };
+        setStato({
+          caricando: false,
+          articoli: ((r && r.articoli) || []).filter((a) => !inMagazzino(a)),
+        });
+      } catch (_) {
+        if (vivo) setStato({ caricando: false, articoli: [] });
+      }
+    })();
+    return () => { vivo = false; };
+  }, [cliente, codiceCliente, prodotti, attivo]);
+
+  return stato;
+}
+
 function ProductSearchSelect({
   products,
   value,
@@ -1517,6 +1669,14 @@ export default function App() {
   const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
   const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "" }]);
+  // Cosa abbiamo gia' venduto a questo cliente FUORI dal nostro catalogo, negli
+  // ultimi 12 mesi. Caricato una volta per tutto l'ordine che si sta scrivendo.
+  const storicoFuoriMag = useStoricoFuoriMagazzino({
+    cliente: newOrderCustomer.trim(),
+    codiceCliente: newOrderClientId,
+    prodotti: products,
+    attivo: orderDialogOpen,
+  });
 
   const [editOrderDialogOpen, setEditOrderDialogOpen] = useState(false);
   const [editOrderCustomer, setEditOrderCustomer] = useState("");
@@ -9175,13 +9335,28 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                     }}
                   >
                     {line.isOutsideStock ? (
-                      <input
-                        style={inputStyle()}
-                        value={line.customName || ""}
-                        onChange={(event) =>
-                          updateNewOrderLine(index, "customName", event.target.value)
-                        }
-                        placeholder="Nome articolo fuori magazzino, o scegli qui sotto"
+                      <StoricoFuoriMagazzinoSelect
+                        articoli={storicoFuoriMag.articoli}
+                        caricando={storicoFuoriMag.caricando}
+                        testo={line.customName || ""}
+                        onTesto={(v) => updateNewOrderLine(index, "customName", v)}
+                        onScegli={(a) => {
+                          updateNewOrderLine(
+                            index,
+                            "customName",
+                            [a.codice, a.descrizione].filter(Boolean).join(" ")
+                          );
+                          updateNewOrderLine(
+                            index,
+                            "prezzoUnitario",
+                            a.ultimoPrezzo != null ? String(a.ultimoPrezzo) : ""
+                          );
+                          updateNewOrderLine(
+                            index,
+                            "scontoPct",
+                            a.ultimoSconto ? String(a.ultimoSconto) : ""
+                          );
+                        }}
                       />
                     ) : (
                       <ProductSearchSelect
@@ -9215,35 +9390,38 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                     </button>
                   </div>
 
-                  {/* Riga fuori magazzino: sotto compaiono gli articoli fatti apposta
-                      per questo cliente, presi dalle sue fatture degli ultimi 12 mesi.
-                      Chi carica non deve ricordarsi come si chiamavano ne' quanto
-                      costavano: tocca e la riga si compila. */}
-                  {line.isOutsideStock && (newOrderClientId || newOrderCustomer.trim()) ? (
-                    <StoricoClientePanel
-                      cliente={newOrderCustomer.trim()}
-                      codiceCliente={newOrderClientId}
-                      prodotti={products}
-                      soloFuoriMagazzino
-                      titolo="Articoli fuori magazzino già fatti a questo cliente"
-                      onScegli={(a) => {
-                        updateNewOrderLine(
-                          index,
-                          "customName",
-                          [a.codice, a.descrizione].filter(Boolean).join(" ")
-                        );
-                        updateNewOrderLine(
-                          index,
-                          "prezzoUnitario",
-                          a.ultimoPrezzo != null ? String(a.ultimoPrezzo) : ""
-                        );
-                        updateNewOrderLine(
-                          index,
-                          "scontoPct",
-                          a.ultimoSconto ? String(a.ultimoSconto) : ""
-                        );
-                      }}
-                    />
+                  {/* Prezzo e sconto della riga: precompilati da quello che il cliente
+                      ha pagato l'ultima volta, e sempre correggibili a mano. */}
+                  {line.isOutsideStock && String(line.prezzoUnitario || "") !== "" ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div>
+                        <label style={{ fontSize: 12, color: "#5a6e90", fontWeight: 700 }}>
+                          Prezzo € (ultimo fatto a questo cliente)
+                        </label>
+                        <input
+                          style={inputStyle()}
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={line.prezzoUnitario || ""}
+                          onChange={(e) => updateNewOrderLine(index, "prezzoUnitario", e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 12, color: "#5a6e90", fontWeight: 700 }}>
+                          Sconto %
+                        </label>
+                        <input
+                          style={inputStyle()}
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          max="100"
+                          value={line.scontoPct || ""}
+                          onChange={(e) => updateNewOrderLine(index, "scontoPct", e.target.value)}
+                        />
+                      </div>
+                    </div>
                   ) : null}
 
                   {/* Selettore lotto: visibile solo per righe di magazzino con prodotto scelto. */}
