@@ -296,41 +296,44 @@ async function bulkLoad() {
     Note: row.note ?? "",
   }));
 
-  // ANAGRAFICA GAMMA nel selettore clienti (Luca 2026-07-17): la tabella
-  // clienti locale e' vuota, ma clienti_gestionale (sync notturna TeamSystem,
-  // ~2000 record) ha tutto. Si aggiunge come fonte del selettore ordini:
-  // ID 'CLI-<codice>' cosi' l'ordine salva un id_cliente aggan ciabile da
-  // badge pagamento e app agenti. Dedup sui codici gia' presenti in locale.
+  // REGISTRO CLIENTI UNICO nel selettore (dal 2026-08-02, prima era
+  // clienti_gestionale). `clienti_master` e' un superset: i ~2041 clienti a
+  // gestionale con codice 'CLI-<B-CODCLI>' PIU' quelli nati fuori dal
+  // gestionale (agenti, magazzino) con codice proprio. Quindi ogni scelta nel
+  // selettore porta un codice, anche per i clienti che a gestionale non ci
+  // sono ancora. Il codice sull'ordine e' quello che permette al CRM di
+  // sapere quando quel cliente ha ordinato l'ultima volta.
   const clienti = [...clientiLocali];
   try {
     const codici = new Set(clientiLocali.map((c) => String(c.Codice_Cliente_TS || "")));
     const PAGE = 1000;
     for (let from = 0; from < 20000; from += PAGE) {
       const { data, error } = await supabase
-        .from("clienti_gestionale")
-        .select("codice_cliente,ragione_sociale,piva,citta,cap,provincia,indirizzo,telefono,email")
-        .order("codice_num")
+        .from("clienti_master")
+        .select("codice,codice_gestionale,ragione_sociale,piva,citta,provincia,telefono,email,origine")
+        .order("ragione_sociale")
         .range(from, from + PAGE - 1);
       if (error) break;
       for (const r of data || []) {
-        const cod = String(r.codice_cliente || "");
-        if (!cod || codici.has(cod) || !r.ragione_sociale) continue;
+        const cod = String(r.codice || "");
+        if (!cod || !r.ragione_sociale) continue;
+        if (r.codice_gestionale && codici.has(String(r.codice_gestionale))) continue;
         clienti.push({
-          ID_Cliente: `CLI-${cod}`,
+          ID_Cliente: cod,
           Ragione_Sociale: r.citta ? `${r.ragione_sociale} · ${r.citta}` : r.ragione_sociale,
-          Categoria: "Anagrafica GAMMA",
+          Categoria: r.origine === "gestionale" ? "Anagrafica GAMMA" : `Registro · ${r.origine || ""}`,
           Categoria_TS: "",
-          Codice_Cliente_TS: cod,
+          Codice_Cliente_TS: r.codice_gestionale || "",
           PIVA: r.piva || "",
           Codice_Fiscale: "",
           Codice_Destinatario_TS: "",
-          Fonte: "GAMMA",
+          Fonte: r.origine === "gestionale" ? "GAMMA" : "REGISTRO",
           Attivo: true,
           Note: "",
-          Cap: r.cap || "",
+          Cap: "",
           Provincia: r.provincia || "",
           Citta: r.citta || "",
-          Indirizzo: r.indirizzo || "",
+          Indirizzo: "",
           Telefono: r.telefono || "",
           Email: r.email || "",
         });
@@ -338,7 +341,7 @@ async function bulkLoad() {
       if (!data || data.length < PAGE) break;
     }
   } catch (_) {
-    // anagrafica gestionale non disponibile: il selettore resta coi locali
+    // registro non disponibile: il selettore resta coi clienti locali
   }
 
   // Anagrafiche degli ordini arrivati dall'APP agenti: lo snapshot JSON del
@@ -822,11 +825,73 @@ async function markOrderPrepared(params) {
   return { success: true, ordine: row, stockMovements, stockWarnings: [] };
 }
 
+// Registra un cliente nuovo nel registro unico e restituisce il suo codice.
+// Serve quando si carica un ordine per un cliente che non e' ancora in
+// anagrafica: invece di lasciare l'ordine senza codice (e sparire dal CRM),
+// il cliente entra nel registro e il codice esiste da subito.
+async function registraClienteRegistro(params) {
+  const p = parsePayload(params);
+  const ragione = String(p.ragioneSociale || p.cliente || p.customer || "").trim();
+  if (!ragione) return { ok: false, error: "ragione sociale mancante" };
+  try {
+    const { data, error } = await supabase.rpc("nuovo_cliente_registro", {
+      p_ragione_sociale: ragione,
+      p_citta: p.citta || null,
+      p_provincia: p.provincia || null,
+      p_piva: p.piva || null,
+      p_telefono: p.telefono || null,
+      p_email: p.email || null,
+      p_origine: p.origine || "magazzino",
+    });
+    if (error) return failure(error);
+    return { ok: true, success: true, codice: data };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+// Trova il codice di un cliente gia' nel registro, per nome esatto.
+// "IL MELOGRANO S.R.L. · PALMANOVA" e "Il Melograno S.r.l." collassano uguali.
+async function cercaCodiceRegistro(nome) {
+  const k = String(nome || "").split("·")[0].trim();
+  if (!k) return "";
+  const { data } = await supabase
+    .from("clienti_master")
+    .select("codice, ragione_sociale")
+    .ilike("ragione_sociale", k)
+    .limit(2);
+  if (data && data.length === 1) return String(data[0].codice);
+  return "";
+}
+
 async function createOrder(params) {
   const p = parsePayload(params);
   const idOrdine = p.id || p.idOrdine || p.orderId || `ORD-${Date.now()}`;
   const cliente = p.customer || p.cliente || "";
-  const idCliente = p.clienteId || p.idCliente || p.id_cliente || "";
+  let idCliente = p.clienteId || p.idCliente || p.id_cliente || "";
+
+  // Ogni ordine deve portare il codice cliente: e' il filo che tiene insieme
+  // magazzino, CRM e fatturazione. Se chi carica ha scritto solo il nome,
+  // NON blocchiamo (regola di Luca: segnala ma vai avanti): cerchiamo il
+  // cliente nel registro e, se non c'e', lo registriamo al volo prendendo il
+  // codice che torna. L'ordine parte comunque, ma con il codice attaccato.
+  if (!idCliente && cliente) {
+    try {
+      idCliente = await cercaCodiceRegistro(cliente);
+      if (!idCliente) {
+        const r = await registraClienteRegistro({
+          ragioneSociale: String(cliente).split("·")[0].trim(),
+          citta: p.citta || null,
+          piva: p.piva || null,
+          origine: "magazzino",
+        });
+        if (r.ok && r.codice) idCliente = String(r.codice);
+      }
+    } catch (_) {
+      // Registro non raggiungibile: l'ordine si salva lo stesso, senza codice.
+      // Meglio un ordine senza codice che un ordine perso.
+    }
+  }
   const note = p.notes || p.note || "";
   const dataOrdine = p.date || p.data_ordine || null;
   const stato = p.status || p.stato || "Da preparare";
@@ -2364,6 +2429,8 @@ export async function callSheetsApi(params = {}) {
         return await getOrdiniAcquistiInArrivo();
       case "getOrdiniArchiviati":
         return await getOrdiniArchiviati(params);
+      case "registraClienteRegistro":
+        return await registraClienteRegistro(params);
       case "getStoricoCliente":
         return await getStoricoCliente(params);
       case "cercaClienteStorico":
