@@ -273,12 +273,53 @@ const TIPOLOGIE = ["HORECA", "FARMA", "GDO", "EXPORT", "BIOLOGICO"];
 
 // IVA. Le prime tre sono aliquote vere, le altre sono REGIMI che valgono per
 // tutto il documento e azzerano l'imposta (regola di Luca 02/08/2026).
-const ALIQUOTE_IVA = [4, 10, 22];
+// Aliquote scegliibili sulla singola riga. Con aliquota 0 la fattura
+// elettronica NON basta a zero: vuole la NATURA, altrimenti lo SdI scarta il
+// documento. Percio' le due voci a zero portano gia' il codice giusto
+// (Luca 02/08/2026).
+//   N3.1 = esportazioni fuori UE, art. 8 DPR 633/72
+//   N3.2 = cessioni intracomunitarie, art. 41 DL 331/93
+const ALIQUOTE_IVA = [
+  { valore: 4, natura: "", etichetta: "4%" },
+  { valore: 10, natura: "", etichetta: "10%" },
+  { valore: 22, natura: "", etichetta: "22%" },
+  { valore: 0, natura: "N3.1", etichetta: "0% Extra UE · non imp. art. 8 (N3.1)" },
+  { valore: 0, natura: "N3.2", etichetta: "0% UE · non imp. art. 41 (N3.2)" },
+];
+
+// Chiave della tendina: con due voci a zero il solo numero non basta.
+const chiaveAliquota = (a) => `${a.valore}|${a.natura || ""}`;
+// Regimi del documento. Attenzione: lo split payment NON e' una natura e NON
+// azzera l'aliquota. In fattura elettronica l'IVA resta quella normale e cambia
+// solo l'esigibilita' (EsigibilitaIVA = "S", scissione dei pagamenti): il
+// cliente la versa allo Stato invece che a noi. Quindi qui non si tocca
+// l'aliquota, si toglie solo dal totale che il cliente ci paga.
 const REGIMI_IVA = [
-  { key: "normale", label: "IVA normale", aliquotaZero: false },
-  { key: "split", label: "Split payment (IVA a carico del cliente)", aliquotaZero: true },
-  { key: "estero_extra_ue", label: "Estero extra UE · non imponibile art. 8", aliquotaZero: true },
-  { key: "estero_ue", label: "Estero UE · non imponibile art. 41", aliquotaZero: true },
+  { key: "normale", label: "IVA normale", natura: "", esigibilita: "", ivaEsiste: true, ivaAlCliente: true },
+  {
+    key: "split",
+    label: "Split payment · scissione dei pagamenti (EsigibilitaIVA S)",
+    natura: "",
+    esigibilita: "S",
+    ivaEsiste: true,      // l'imposta c'e'...
+    ivaAlCliente: false,  // ...ma la versa il cliente allo Stato, non a noi
+  },
+  {
+    key: "estero_extra_ue",
+    label: "Estero Extra UE · non imponibile art. 8 (N3.1)",
+    natura: "N3.1",
+    esigibilita: "",
+    ivaEsiste: false,
+    ivaAlCliente: false,
+  },
+  {
+    key: "estero_ue",
+    label: "Estero UE · non imponibile art. 41 (N3.2)",
+    natura: "N3.2",
+    esigibilita: "",
+    ivaEsiste: false,
+    ivaAlCliente: false,
+  },
 ];
 
 // UN CLICK, UNA AZIONE (regola di Luca 02/08/2026). Fra il click e la risposta
@@ -814,6 +855,7 @@ function normalizeOrderLines(rows, products) {
         })(),
         scontoPct: Number(getField(row, ["Sconto_Pct", "sconto_pct"]) || 0),
         prezzoOrigine: String(getField(row, ["Prezzo_Origine", "prezzo_origine"]) || ""),
+        naturaIva: String(getField(row, ["Natura_Iva", "natura_iva"]) || ""),
         ivaPct: (() => {
           const v = getField(row, ["Iva_Pct", "iva_pct"]);
           return v === "" || v === null || v === undefined ? null : Number(v);
@@ -1068,6 +1110,7 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
         sconto: l.scontoPct ? String(l.scontoPct) : "",
         // Il nostro prodotto sta al 4%: e' il caso normale, si cambia dove serve.
         iva: l.ivaPct === null || l.ivaPct === undefined ? "4" : String(l.ivaPct),
+        natura: l.naturaIva || "",
       };
     }
     setBozza(iniziale);
@@ -1138,7 +1181,7 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
   }, 0);
 
   // Con split payment o estero l'imposta non si somma al totale del cliente.
-  const iva = regimeCorrente.aliquotaZero
+  const iva = !regimeCorrente.ivaEsiste
     ? 0
     : righe.reduce((s, l) => {
         const p = Number(bozza[l.lineId]?.prezzo || 0);
@@ -1147,7 +1190,8 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
         return s + Number(l.qtyOrdered || 0) * p * (1 - sc / 100) * (al / 100);
       }, 0);
 
-  const totale = imponibile + iva;
+  // Quello che il cliente ci paga davvero: con lo split l'IVA la versa allo Stato.
+  const totale = imponibile + (regimeCorrente.ivaAlCliente ? iva : 0);
 
   const salva = async () => {
     setSalvando(true);
@@ -1164,6 +1208,7 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
             prezzoUnitario: p === "" ? null : Number(p),
             scontoPct: sc === "" ? 0 : Number(sc),
             ivaPct: Number(bozza[l.lineId]?.iva ?? 4),
+            naturaIva: bozza[l.lineId]?.natura || "",
             prezzoOrigine: "valorizzazione-preparati",
           }),
         });
@@ -1237,9 +1282,11 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
                 <option key={r.key} value={r.key}>{r.label}</option>
               ))}
             </select>
-            {regimeCorrente.aliquotaZero ? (
+            {!regimeCorrente.ivaAlCliente ? (
               <span style={{ fontSize: 12, color: "#b45309", fontWeight: 700 }}>
-                Imposta non addebitata al cliente
+                {regimeCorrente.ivaEsiste
+                  ? "L'IVA c'e' ma la versa il cliente allo Stato: non la incassiamo noi"
+                  : "Operazione non imponibile: l'imposta non c'e'"}
               </span>
             ) : null}
           </div>
@@ -1296,18 +1343,21 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
                 />
                 <select
                   style={{ ...inputStyle(), padding: "6px 8px" }}
-                  value={bozza[l.lineId]?.iva ?? "4"}
-                  disabled={regimeCorrente.aliquotaZero}
-                  title={regimeCorrente.aliquotaZero ? "Con questo regime l'imposta non si addebita" : "Aliquota IVA della riga"}
+                  value={`${bozza[l.lineId]?.iva ?? "4"}|${bozza[l.lineId]?.natura ?? ""}`}
+                  disabled={!regimeCorrente.ivaEsiste}
+                  title={!regimeCorrente.ivaEsiste ? "Con questo regime l'imposta non c'e'" : "Aliquota IVA della riga"}
                   onChange={(e) =>
                     setBozza((prev) => ({
                       ...prev,
-                      [l.lineId]: { ...(prev[l.lineId] || {}), iva: e.target.value },
+                      [l.lineId]: (() => {
+                        const [al, nat] = String(e.target.value).split("|");
+                        return { ...(prev[l.lineId] || {}), iva: al, natura: nat || "" };
+                      })(),
                     }))
                   }
                 >
                   {ALIQUOTE_IVA.map((a) => (
-                    <option key={a} value={String(a)}>{a}%</option>
+                    <option key={chiaveAliquota(a)} value={chiaveAliquota(a)}>{a.etichetta}</option>
                   ))}
                 </select>
               </div>
@@ -1316,7 +1366,8 @@ function ValorizzazioneOrdine({ order, onSalvato }) {
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
             <span style={{ fontWeight: 900, color: "#07153a" }}>
-              Imponibile {fmtEur(imponibile)} € · IVA {fmtEur(iva)} € · Totale {fmtEur(totale)} €
+              Imponibile {fmtEur(imponibile)} € · IVA {fmtEur(iva)} €
+              {regimeCorrente.ivaAlCliente ? "" : " (non incassata)"} · Da incassare {fmtEur(totale)} €
             </span>
             <button style={btnStyle("success", salvando)} disabled={salvando} onClick={salva}>
               {salvando ? "Salvo..." : "Salva prezzi"}
@@ -2012,7 +2063,24 @@ export default function App() {
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
   const [editProductDialogOpen, setEditProductDialogOpen] = useState(false);
 
-  const [isAdmin, setIsAdmin] = useState(false);
+  // La modalita' Admin resta attiva finche' la scheda e' aperta. Prima stava
+  // solo in memoria: bastava un ricaricamento (e ogni pubblicazione ne provoca
+  // uno) e i bottoni Modifica/Riga sparivano senza dire niente. Si usa
+  // sessionStorage e non localStorage: chiudendo la scheda si esce.
+  const [isAdmin, setIsAdmin] = useState(() => {
+    try {
+      return sessionStorage.getItem("magazzino_admin") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (isAdmin) sessionStorage.setItem("magazzino_admin", "1");
+      else sessionStorage.removeItem("magazzino_admin");
+    } catch {}
+  }, [isAdmin]);
   const [adminPinInput, setAdminPinInput] = useState("");
   const [adminError, setAdminError] = useState("");
 
@@ -2026,7 +2094,7 @@ export default function App() {
   const [newOrderCap, setNewOrderCap] = useState("");
   const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
-  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4" }]);
+  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
   // Un click, una azione: vedi useUnaAzioneAllaVolta.
   const { esegui: azioneUnica, attive: azioniInCorso } = useUnaAzioneAllaVolta();
   // Cosa abbiamo gia' venduto a questo cliente FUORI dal nostro catalogo, negli
@@ -4807,7 +4875,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
   };
 
   const addEmptyOrderLine = () => {
-    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4" }]);
+    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
   };
 
   const updateNewOrderLine = (index, field, value) => {
@@ -4850,6 +4918,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 prezzoUnitario: Number(prezzo),
                 scontoPct: Number(String(line.scontoPct ?? "").trim() || 0),
                 ivaPct: Number(String(line.ivaPct ?? "").trim() || 4),
+                naturaIva: String(line.naturaIva ?? ""),
                 prezzoOrigine: "storico-cliente",
               };
 
@@ -4933,7 +5002,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       setNewOrderCap("");
       setNewOrderCategory("");
       setNewOrderNotes("");
-      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4" }]);
+      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
       setOrderDialogOpen(false);
       setPage("ordini");
 
@@ -7196,7 +7265,16 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                             </button>
 
                           </>
-                        ) : null}
+                        ) : (
+                          // Meglio un bottone che spiega di un bottone che sparisce.
+                          <button
+                            style={{ ...btnStyle("soft"), opacity: 0.85 }}
+                            title="Modificare le righe richiede la modalita' Admin"
+                            onClick={() => setAdminDialogOpen(true)}
+                          >
+                            <Plus size={16} /> Riga · sblocca con Admin
+                          </button>
+                        )}
 
                         {String(selectedOrder.status || "").trim().toLowerCase() !== "preparato" ? (
                           <button style={btnStyle("warning")} onClick={markOrderStopped}>
@@ -9851,11 +9929,15 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                         <label style={{ fontSize: 12, color: "#5a6e90", fontWeight: 700 }}>IVA</label>
                         <select
                           style={inputStyle()}
-                          value={line.ivaPct || "4"}
-                          onChange={(e) => updateNewOrderLine(index, "ivaPct", e.target.value)}
+                          value={`${line.ivaPct || "4"}|${line.naturaIva || ""}`}
+                          onChange={(e) => {
+                            const [al, nat] = String(e.target.value).split("|");
+                            updateNewOrderLine(index, "ivaPct", al);
+                            updateNewOrderLine(index, "naturaIva", nat || "");
+                          }}
                         >
                           {ALIQUOTE_IVA.map((a) => (
-                            <option key={a} value={String(a)}>{a}%</option>
+                            <option key={chiaveAliquota(a)} value={chiaveAliquota(a)}>{a.etichetta}</option>
                           ))}
                         </select>
                       </div>

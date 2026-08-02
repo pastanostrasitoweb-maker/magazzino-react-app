@@ -119,6 +119,7 @@ const mapRigaRow = (row) => ({
   Sconto_Pct: Number(row.sconto_pct ?? 0),
   Prezzo_Origine: row.prezzo_origine ?? "",
   Iva_Pct: row.iva_pct === null || row.iva_pct === undefined ? null : Number(row.iva_pct),
+  Natura_Iva: row.natura_iva ?? "",
 });
 const mapAssegRow = (row) => ({
   ID_Assegnazione: String(row.id_assegnazione ?? ""),
@@ -952,6 +953,7 @@ async function createOrder(params) {
             prezzo_unitario: Number(prezzo),
             sconto_pct: Number(sconto || 0),
             iva_pct: Number(line.ivaPct ?? line.iva_pct ?? 4),
+            natura_iva: line.naturaIva ?? line.natura_iva ?? null,
             prezzo_origine: origine || "manuale",
           }),
     };
@@ -1683,6 +1685,9 @@ async function updateOrderLine(params) {
   // il 22 del trasporto, quindi sta sulla riga e non sulla testata.
   const ivaUp = p.ivaPct ?? p.iva_pct;
   if (ivaUp !== undefined) patch.iva_pct = ivaUp === null || ivaUp === "" ? null : Number(ivaUp);
+  // Natura: obbligatoria in fattura elettronica quando l'aliquota e' 0.
+  const naturaUp = p.naturaIva ?? p.natura_iva;
+  if (naturaUp !== undefined) patch.natura_iva = naturaUp || null;
 
   const { error } = await supabase
     .from("righe_ordine")
