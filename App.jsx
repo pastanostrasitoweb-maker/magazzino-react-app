@@ -392,6 +392,115 @@ const MOTIVI_FERMO = [
 // Per tornare a bloccare basta rimettere true (nessun'altra modifica serve).
 const ANAGRAFICA_BLOCCA = false;
 
+// Peso dell'ordine, sempre correggibile a mano. Il calcolo somma solo le righe
+// di magazzino con peso noto: un articolo fuori magazzino pesa 0 e l'ordine
+// risulta piu' leggero di com'e'. Chi spedisce ha la bilancia davanti.
+function PesoOrdine({ ord, onSalva }) {
+  const [valore, setValore] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  // Riparte dal peso dell'ordine ogni volta che cambia ordine.
+  useEffect(() => {
+    setValore(ord?.pesoIsManual ? String(ord.pesoManuale) : "");
+  }, [ord?.id, ord?.pesoIsManual, ord?.pesoManuale]);
+
+  const salva = async (v) => {
+    setSalvando(true);
+    try {
+      await onSalva(ord.id, v);
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  return (
+    <div style={{
+      border: "1px solid #e5edf6", borderRadius: 12, padding: 12,
+      display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+    }}>
+      <div style={{ flex: 1, minWidth: 180 }}>
+        <div style={{ fontSize: 12, color: "#66758b", fontWeight: 700 }}>Peso della spedizione</div>
+        <div style={{ fontSize: 12, color: "#8a94a6", marginTop: 2 }}>
+          {ord.pesoIsManual
+            ? `Scritto a mano. Calcolato dalle righe: ${fmtKg(ord.pesoCalcolato)} kg`
+            : `Calcolato dalle righe: ${fmtKg(ord.pesoCalcolato)} kg`}
+        </div>
+      </div>
+      <input
+        style={{ ...inputStyle(), width: 110, height: 42, textAlign: "right" }}
+        value={valore}
+        inputMode="decimal"
+        placeholder={fmtKg(ord.pesoCalcolato)}
+        onChange={(e) => setValore(e.target.value.replace(",", "."))}
+      />
+      <span style={{ fontWeight: 800, color: "#40516a" }}>kg</span>
+      <button
+        style={{ ...compactBtnStyle("primary"), opacity: salvando ? 0.5 : 1 }}
+        disabled={salvando}
+        onClick={() => salva(valore.trim())}
+      >
+        {salvando ? "Salvo…" : "Salva peso"}
+      </button>
+      {ord.pesoIsManual ? (
+        <button
+          style={compactBtnStyle("outline")}
+          disabled={salvando}
+          onClick={() => { setValore(""); salva(""); }}
+          title="Torna al peso calcolato dalle righe"
+        >
+          Ricalcola
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// Corriere fuori elenco. Il motore conosce solo quelli a contratto, ma si
+// spedisce anche col corriere locale, col ritiro del cliente o col mezzo
+// nostro: dev'essere sempre possibile scriverlo.
+function AltroCorriere({ ord, onSalva }) {
+  const [valore, setValore] = useState("");
+  const noto = (ord.transport && !ord.transport.errore
+    ? [ord.transport.consigliato, ...ord.transport.alternative]
+    : []
+  ).some((o) => o.corriere === ord.courier);
+  const fuoriElenco = ord.courier && !noto;
+
+  return (
+    <div style={{
+      border: "1px dashed #cbd5e1", borderRadius: 12, padding: 12,
+      display: "grid", gap: 8,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#40516a" }}>
+        Un altro corriere
+      </div>
+      {fuoriElenco ? (
+        <div style={{ fontSize: 12.5, color: "#15803d", fontWeight: 700 }}>
+          Adesso l'ordine parte con <b>{ord.courier}</b>, scritto a mano.
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: "#8a94a6" }}>
+          Corriere locale, ritiro del cliente, mezzo nostro: scrivilo qui e finisce sul DDT.
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input
+          style={{ ...inputStyle(), flex: 1, minWidth: 170, height: 42 }}
+          value={valore}
+          placeholder="Es. Ritiro del cliente"
+          onChange={(e) => setValore(e.target.value)}
+        />
+        <button
+          style={compactBtnStyle("primary")}
+          disabled={!valore.trim()}
+          onClick={() => { onSalva(ord.id, valore.trim()); setValore(""); }}
+        >
+          Usa questo
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // La linea di demarcazione: fino al 31/07/2026 i documenti li faceva
 // TeamSystem, dal 02/08 li facciamo noi dal magazzino. I controlli sui campi
 // mancanti guardano solo da qui in avanti: il pregresso non si rincorre.
@@ -767,6 +876,13 @@ function normalizeOrders(rows) {
       unitoIn: String(getField(row, ["Unito_In", "unito_in"]) || "").trim(),
       colliManual: (() => {
         const raw = getField(row, ["Colli", "Numero_Colli", "Colli_Ordine"]);
+        if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+        const n = Number(raw);
+        return Number.isFinite(n) && n >= 0 ? n : null;
+      })(),
+      // Peso scritto a mano: vince sulla somma delle righe.
+      pesoManuale: (() => {
+        const raw = getField(row, ["Peso_Manuale", "peso_manuale"]);
         if (raw === undefined || raw === null || String(raw).trim() === "") return null;
         const n = Number(raw);
         return Number.isFinite(n) && n >= 0 ? n : null;
@@ -3293,10 +3409,16 @@ export default function App() {
       const righeDaBollinare = lines.filter((l) => /DA BOLLINARE/i.test(String(l.productName || "")));
       // Peso totale ordine = somma di (quantita' ordinata × peso unitario) per
       // ogni riga di magazzino con peso noto.
-      const pesoTotale = lines.reduce(
+      // Il calcolo somma solo i prodotti a catalogo con peso noto: un articolo
+      // fuori magazzino pesa 0 e l'ordine risulta piu' leggero di com'e'. Chi
+      // spedisce ha la bilancia davanti, quindi il peso scritto a mano vince
+      // sempre, e da li' in poi comanda su preventivo, colli e DDT.
+      const pesoCalcolato = lines.reduce(
         (sum, line) => sum + Number(line.qtyOrdered || 0) * Number(line.weightKg || 0),
         0
       );
+      const pesoIsManual = order.pesoManuale !== null && order.pesoManuale !== undefined;
+      const pesoTotale = pesoIsManual ? Number(order.pesoManuale) : pesoCalcolato;
       // Trasporto: preventivo corriere dal motore logistica, con peso ordine +
       // CAP + temperatura dedotta dai prodotti. Il CAP e' quello SALVATO
       // sull'ordine (order.cap, congelato alla creazione, vale per ogni cliente
@@ -3354,6 +3476,8 @@ export default function App() {
         righeDaBollinare,
         daBollinare: righeDaBollinare.length > 0,
         colliIsManual: order.colliManual !== null && order.colliManual !== undefined,
+        pesoCalcolato,
+        pesoIsManual,
       };
     });
   }, [orders, assignments, products, clientsById]);
@@ -4442,6 +4566,34 @@ export default function App() {
   // (torna a "da verificare"). Campo predisposto per futura API dal gestionale.
   // Corriere scelto per l'ordine (dal modale Opzioni trasporto). Persiste su
   // ordini.corriere: e' quello che poi finisce su Spedito e sul DDT.
+  // Peso scritto a mano. Stringa vuota = "ricalcolalo tu dalle righe".
+  const setOrderPeso = async (orderId, peso) => {
+    if (!orderId) return;
+    const val = String(peso ?? "").trim();
+    const n = val === "" ? null : Number(val);
+    if (val !== "" && (!Number.isFinite(n) || n < 0)) {
+      alert("Il peso deve essere un numero, in chilogrammi. Esempio: 14,5");
+      return;
+    }
+    const previousOrders = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(orderId) ? { ...o, pesoManuale: n } : o))
+    );
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId, peso_manuale: val === "" ? "" : n }),
+      });
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+        alert("Errore nel salvataggio del peso: " + ((result && result.error) || "sconosciuto"));
+      }
+    } catch (e) {
+      setOrders(previousOrders);
+      alert("Errore di collegamento nel salvataggio del peso.");
+    }
+  };
+
   const setOrderCourier = async (orderId, corriere) => {
     if (!orderId) return;
     const previousOrders = orders;
@@ -11210,25 +11362,30 @@ ${consegnaHtml}
             const ord = ordersWithComputed.find((o) => String(o.id) === String(transportModalOrderId));
             if (!ord) return null;
             const t = ord.transport;
-            if (!t || t.errore) {
-              return (
-                <div style={{ display: "grid", gap: 12 }}>
-                  <div style={{ color: "#40516a", fontWeight: 700 }}>{ord.customer || "Ordine"}</div>
-                  <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 14, color: "#b45309" }}>
-                    Impossibile calcolare il trasporto: {t?.errore || "dati mancanti"}.
-                    {t?.errore === "CAP destinazione mancante"
-                      ? " Il cliente non ha un CAP nell'anagrafica GAMMA."
-                      : ""}
-                  </div>
-                </div>
-              );
-            }
-            const opzioni = [t.consigliato, ...t.alternative];
+            const opzioni = t && !t.errore ? [t.consigliato, ...t.alternative] : [];
             return (
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ color: "#40516a", fontSize: 14 }}>
-                  {ord.customer} · {fmtKg(ord.pesoTotale)} kg · {temperaturaLabel(ord.temperatura)} · CAP {ord.capDest}
+                  {ord.customer} · {temperaturaLabel(ord.temperatura)}
+                  {ord.capDest ? ` · CAP ${ord.capDest}` : ""}
                 </div>
+
+                {/* Peso: il calcolo somma solo i prodotti a catalogo, quindi
+                    deve restare sempre correggibile a mano (Luca 03/08/2026). */}
+                <PesoOrdine ord={ord} onSalva={setOrderPeso} />
+
+                {t?.errore ? (
+                  <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 14, color: "#b45309", fontSize: 13.5 }}>
+                    Non riesco a calcolare il preventivo: {t.errore}.
+                    {t.errore === "CAP destinazione mancante"
+                      ? " Il cliente non ha un CAP in anagrafica."
+                      : " Correggi il peso qui sopra e il preventivo si ricalcola."}
+                    <div style={{ marginTop: 6 }}>
+                      Puoi comunque scrivere il corriere a mano qui sotto.
+                    </div>
+                  </div>
+                ) : null}
+
                 {opzioni.map((o, i) => (
                   <div
                     key={o.corriereId}
@@ -11268,6 +11425,11 @@ ${consegnaHtml}
                     </div>
                   </div>
                 ))}
+
+                {/* Il motore conosce solo i corrieri a contratto. Capita di
+                    spedire con un altro (corriere locale, ritiro del cliente,
+                    mezzo nostro): dev'essere sempre possibile scriverlo. */}
+                <AltroCorriere ord={ord} onSalva={setOrderCourier} />
               </div>
             );
           })()}

@@ -95,6 +95,12 @@ const mapOrdineRow = (row) => ({
   // ordini del 03/08 il primo era pieno e il secondo vuoto, e il DDT usciva
   // senza vettore perche' l'app questa colonna non la leggeva proprio.
   Corriere_Spedizione: row.corriere_spedizione ?? "",
+  // Peso scritto a mano: vince sulla somma dei pesi delle righe. Serve perche'
+  // il calcolo somma solo i prodotti a catalogo con peso noto, e chi spedisce
+  // ha la bilancia davanti (Luca 03/08/2026).
+  Peso_Manuale: row.peso_manuale === null || row.peso_manuale === undefined
+    ? null
+    : Number(row.peso_manuale),
   DDT_Numero: row.ddt_numero ?? "",
   Motivo_Fermo: row.motivo_fermo ?? "",
   Listino: row.listino ?? "",
@@ -583,6 +589,11 @@ async function updateOrder(params) {
   if (p.colli !== undefined) {
     // colli "" significa "ripristina default" (campo nullable).
     patch.colli = p.colli === "" || p.colli === null ? null : Number(p.colli);
+  }
+  if (p.peso_manuale !== undefined) {
+    // Come i colli: "" vuol dire "torna a calcolarlo tu".
+    patch.peso_manuale =
+      p.peso_manuale === "" || p.peso_manuale === null ? null : Number(p.peso_manuale);
   }
   if (p.data_ordine !== undefined) patch.data_ordine = p.data_ordine || null;
   if (p.date !== undefined) patch.data_ordine = p.date || null;
