@@ -4333,42 +4333,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ordersWithComputed, ddtSearch]);
 
-  const unarchiveOrder = async (orderId) => {
-    if (!orderId) return;
 
-    const conferma = window.confirm("Vuoi disarchiviare questo ordine?");
-    if (!conferma) return;
-
-    const previousOrders = orders;
-
-    setOrders((prev) =>
-      prev.map((order) =>
-        String(order.id) === String(orderId) ? { ...order, archived: false } : order
-      )
-    );
-
-    try {
-      const result = await callSheetsApi({
-        action: "unarchiveOrder",
-        orderId,
-      });
-
-      if (!result || !result.success) {
-        setOrders(previousOrders);
-        alert(
-          "Errore nel disarchiviare l'ordine: " +
-            ((result && result.error) || "errore sconosciuto")
-        );
-        return;
-      }
-
-      setPage("ordini");
-      setSelectedOrderId(orderId);
-    } catch (error) {
-      setOrders(previousOrders);
-      alert("Errore di collegamento con Google Sheet: " + String(error));
-    }
-  };
+  // NIENTE ritorno indietro da Spedito o da Archiviato (regola di Luca
+  // 03/08/2026). Le due funzioni che lo facevano, unarchiveOrder e
+  // reopenShippedOrder, sono state tolte apposta e non vanno rimesse: quando
+  // l'ordine passa a Spedito il database emette il DDT, che e' un documento
+  // fiscale. Il divieto vive nel database (sql/ddt_alla_spedizione.sql), qui
+  // non c'e' piu' nemmeno il pulsante che avrebbe mentito.
+  // Correggere resta possibile: prezzi, colli, peso e anagrafica di un ordine
+  // spedito si modificano ancora, fino a quando il DDT parte verso Sibill.
 
   const openEditOrderDialog = () => {
     if (!selectedOrder) return;
@@ -4621,9 +4594,22 @@ export default function App() {
     if (!order) return;
     const corriere =
       order.courier || order.transport?.consigliato?.corriere || "";
+    // Segnare spedito EMETTE il documento di trasporto, e da li' non si torna
+    // indietro (regola di Luca 03/08/2026). Va detto prima di farlo, non dopo,
+    // e va detto anche cosa manca: correggere un DDT gia' uscito e' un'altra
+    // faccenda rispetto a completarlo un minuto prima.
+    const mancanti = campiMancantiDDT(order);
+    const avviso =
+      mancanti.totale > 0
+        ? "\n\nATTENZIONE, sul documento mancano:\n- " +
+          [...mancanti.bloccanti, ...mancanti.daCompletare].join("\n- ")
+        : "";
     const conferma = window.confirm(
       `Segnare come SPEDITO l'ordine di ${order.customer || order.id}?` +
-        (corriere ? `\nCorriere: ${corriere}` : "\nNessun corriere selezionato.")
+        (corriere ? `\nCorriere: ${corriere}` : "\nNessun corriere selezionato.") +
+        "\n\nViene emesso il DOCUMENTO DI TRASPORTO con il prossimo numero, e " +
+        "l'ordine NON potra' piu' tornare indietro." +
+        avviso
     );
     if (!conferma) return;
     const previousOrders = orders;
@@ -4643,6 +4629,15 @@ export default function App() {
         setOrders(previousOrders);
         alert("Errore nel segnare spedito: " + ((result && result.error) || "sconosciuto"));
       } else {
+        // Il numero DDT lo stacca il database nello stesso momento in cui
+        // scrive "Spedito" (trigger, sql/ddt_alla_spedizione.sql). Qui lo si
+        // rilegge per mostrarlo subito, senza aspettare un refresh.
+        const numero = String(result.ordine?.ddt_numero || result.ordine?.DDT_Numero || "").trim();
+        if (numero) {
+          setOrders((prev) =>
+            prev.map((o) => (String(o.id) === String(order.id) ? { ...o, ddtNumero: numero } : o))
+          );
+        }
         // Avvisa l'app agenti: l'ordine risulta "Spedito" in "I tuoi ordini".
         aggiornaStatoOrdineApp(order.id, "Spedito").catch(() => {});
       }
@@ -4654,36 +4649,6 @@ export default function App() {
 
   // Riporta un ordine SPEDITO indietro tra i Preparati (errore, modifica).
   // Corriere e DDT restano associati; l'ordine esce dalla sezione Spediti.
-  const reopenShippedOrder = async (order) => {
-    if (!order) return;
-    const conferma = window.confirm(
-      `Riportare tra i PREPARATI l'ordine di ${order.customer || order.id}?\n\n` +
-        "Esce dalla sezione Spediti e torna tra i preparati, così puoi modificarlo. " +
-        "Corriere e DDT restano associati."
-    );
-    if (!conferma) return;
-    const previousOrders = orders;
-    setOrders((prev) =>
-      prev.map((o) => (String(o.id) === String(order.id) ? { ...o, status: "Preparato" } : o))
-    );
-    try {
-      const result = await callSheetsApi({
-        action: "updateOrder",
-        payload: JSON.stringify({ orderId: order.id, status: "Preparato" }),
-      });
-      if (!result || !result.success) {
-        setOrders(previousOrders);
-        alert("Errore nel riportare in preparati: " + ((result && result.error) || "sconosciuto"));
-      } else {
-        // Riporta l'agente da "Spedito" a "Ricevuto · in gestione".
-        aggiornaStatoOrdineApp(order.id, "Importato").catch(() => {});
-        setPage("preparati");
-      }
-    } catch (error) {
-      setOrders(previousOrders);
-      alert("Errore di collegamento: " + String(error));
-    }
-  };
 
   // DDT: genera (o ristampa) il documento di trasporto in una finestra
   // stampabile. Numerazione progressiva per anno, salvata su ordini.ddt_numero.
@@ -8913,13 +8878,10 @@ ${consegnaHtml}
                     </div>
 
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      <button
-                        style={btnStyle("outline")}
-                        onClick={() => reopenShippedOrder(order)}
-                        title="Riporta l'ordine tra i preparati per modificarlo"
-                      >
-                        <RotateCcw size={16} /> Riporta in preparati
-                      </button>
+                      {/* Niente ritorno ai preparati: l'ordine spedito ha il DDT
+                          emesso. Correggere resta possibile (prezzi, colli, peso,
+                          anagrafica): quello che non si puo' e' far finta che il
+                          documento non sia uscito. */}
                       <button
                         style={btnStyle("outline")}
                         onClick={() => generaDDT(order)}
@@ -9476,11 +9438,19 @@ ${consegnaHtml}
                               >
                                 📄 {order.ddtNumero ? "Vedi DDT" : "Genera DDT"}
                               </button>
-                              {/* Disarchiviare e' un'azione reversibile: sempre disponibile
-                                  (anche senza PIN admin). Si deve poter tornare indietro. */}
-                              <button style={btnStyle("outline")} onClick={() => unarchiveOrder(order.id)}>
-                                <RotateCcw size={16} /> Disarchivia
-                              </button>
+                              {/* Niente Disarchivia. Un ordine archiviato ha il DDT
+                                  emesso: e' un documento fiscale, non si annulla
+                                  facendolo sparire (regola di Luca 03/08/2026, deroga
+                                  voluta al "tutto reversibile"). Il database lo rifiuta
+                                  comunque, il pulsante avrebbe solo mentito.
+                                  Correggere si puo': i dati restano modificabili fino a
+                                  quando il DDT parte verso Sibill. */}
+                              <div style={{
+                                fontSize: 11.5, color: "#8a94a6", textAlign: "center",
+                                lineHeight: 1.35, maxWidth: 190,
+                              }}>
+                                DDT emesso: l'ordine non torna indietro
+                              </div>
                             </div>
                           )}
                         </div>

@@ -561,15 +561,18 @@ async function assignLot(params) {
   };
 }
 
-async function unarchiveOrder(params) {
-  const idOrdine = params.orderId || params.idOrdine || params.ID_Ordine;
-  if (!idOrdine) return { success: false, error: "orderId mancante" };
-  const { error } = await supabase
-    .from("ordini")
-    .update({ archiviato: false })
-    .eq("id_ordine", String(idOrdine));
-  if (error) return failure(error);
-  return { success: true };
+// Disarchiviare non si fa piu' (regola di Luca 03/08/2026): un ordine
+// archiviato ha il DDT emesso, che e' un documento fiscale. Il divieto vero sta
+// nel database (sql/ddt_alla_spedizione.sql); questa resta solo per rispondere
+// con una frase comprensibile a chi la chiama ancora, invece di far arrivare
+// l'errore grezzo di Postgres a video.
+async function unarchiveOrder() {
+  return {
+    success: false,
+    error:
+      "L'ordine e' archiviato e il documento di trasporto e' gia' stato emesso: " +
+      "non si puo' disarchiviare. I dati restano modificabili fino all'invio a Sibill.",
+  };
 }
 
 async function updateOrder(params) {
