@@ -1479,6 +1479,203 @@ function PrezziDisponibili({ codice, storico, listini, onScegli, compatto }) {
   );
 }
 
+// Ricerca a comparsa: un campo solo, si scrive e sotto escono i risultati.
+// Sostituisce le tendine native, che con 2.195 clienti o 51 agenti costringono
+// a scorrere a mano un elenco infinito (Luca 03/08/2026: "devi metterti a
+// cercare, non piace"). Regge tastiera (frecce, invio, esc) e tocco.
+function RicercaSelect({
+  voci,                 // [{ id, titolo, sottotitolo, etichetta, gruppo }]
+  value,
+  onChange,
+  placeholder = "Scrivi per cercare...",
+  vuotoLabel = "Nessun risultato",
+  icona = null,
+  colore = "#1d4ed8",
+}) {
+  const [testo, setTesto] = useState("");
+  const [aperto, setAperto] = useState(false);
+  const [attivo, setAttivo] = useState(0);
+  const boxRef = useRef(null);
+
+  const scelto = voci.find((v) => String(v.id) === String(value));
+
+  const q = testo.trim().toLowerCase();
+  const risultati = useMemo(() => {
+    if (!q) return voci.slice(0, 40);
+    const parole = q.split(/\s+/).filter(Boolean);
+    return voci
+      .filter((v) => {
+        const testoVoce = `${v.titolo} ${v.sottotitolo || ""} ${v.etichetta || ""} ${v.gruppo || ""}`.toLowerCase();
+        return parole.every((p) => testoVoce.includes(p));
+      })
+      .slice(0, 40);
+  }, [voci, q]);
+
+  useEffect(() => {
+    setAttivo(0);
+  }, [q]);
+
+  // Un clic fuori chiude la tendina.
+  useEffect(() => {
+    if (!aperto) return undefined;
+    const fuori = (e) => {
+      if (boxRef.current && !boxRef.current.contains(e.target)) setAperto(false);
+    };
+    document.addEventListener("mousedown", fuori);
+    return () => document.removeEventListener("mousedown", fuori);
+  }, [aperto]);
+
+  const scegli = (v) => {
+    onChange(v ? v.id : "");
+    setTesto("");
+    setAperto(false);
+  };
+
+  const tasti = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setAperto(true);
+      setAttivo((i) => Math.min(i + 1, risultati.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setAttivo((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter" && aperto && risultati[attivo]) {
+      e.preventDefault();
+      scegli(risultati[attivo]);
+    } else if (e.key === "Escape") {
+      setAperto(false);
+    }
+  };
+
+  // Gia' scelto: si mostra la scheda, non il campo di ricerca.
+  if (scelto && !aperto) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          border: `1px solid ${colore}33`,
+          background: `${colore}0d`,
+          borderRadius: 14,
+          padding: "10px 12px",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 850, color: "#07153a", fontSize: 14, overflowWrap: "anywhere" }}>
+            {scelto.titolo}
+          </div>
+          {scelto.sottotitolo ? (
+            <div style={{ fontSize: 12, color: "#5a6e90", fontWeight: 650, marginTop: 2 }}>
+              {scelto.sottotitolo}
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          style={{ ...compactBtnStyle("outline"), height: 32, padding: "0 12px", whiteSpace: "nowrap" }}
+          onClick={() => {
+            setAperto(true);
+            setTesto("");
+            setTimeout(() => boxRef.current?.querySelector("input")?.focus(), 0);
+          }}
+        >
+          Cambia
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={boxRef} style={{ position: "relative", minWidth: 0 }}>
+      <div style={{ position: "relative" }}>
+        <Search
+          size={16}
+          style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#97a3b6" }}
+        />
+        <input
+          style={{ ...inputStyle(), paddingLeft: 40 }}
+          value={testo}
+          autoFocus={aperto}
+          onFocus={() => setAperto(true)}
+          onChange={(e) => {
+            setTesto(e.target.value);
+            setAperto(true);
+          }}
+          onKeyDown={tasti}
+          placeholder={placeholder}
+        />
+      </div>
+
+      {aperto ? (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 60,
+            top: "100%",
+            left: 0,
+            right: 0,
+            marginTop: 6,
+            background: "#fff",
+            border: "1px solid #dbe2ea",
+            borderRadius: 16,
+            boxShadow: "0 24px 48px rgba(16,24,40,.18)",
+            maxHeight: 340,
+            overflowY: "auto",
+          }}
+        >
+          {risultati.length === 0 ? (
+            <div style={{ padding: 14, color: "#6b7280" }}>{vuotoLabel}</div>
+          ) : (
+            risultati.map((v, i) => (
+              <button
+                key={v.id}
+                type="button"
+                onMouseEnter={() => setAttivo(i)}
+                onClick={() => scegli(v)}
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  border: "none",
+                  borderBottom: "1px solid #f1f5f9",
+                  background: i === attivo ? `${colore}0f` : "transparent",
+                  padding: "10px 14px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                }}
+              >
+                {icona ? <span style={{ color: colore, flexShrink: 0 }}>{icona}</span> : null}
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "block", fontWeight: 800, fontSize: 13, color: "#07153a" }}>
+                    {v.titolo}
+                  </span>
+                  {v.sottotitolo ? (
+                    <span style={{ display: "block", fontSize: 12, color: "#6b7280", fontWeight: 600 }}>
+                      {v.sottotitolo}
+                    </span>
+                  ) : null}
+                </span>
+                {v.etichetta ? (
+                  <span style={{ ...badgeStyle("outline"), fontSize: 11, padding: "4px 8px", flexShrink: 0 }}>
+                    {v.etichetta}
+                  </span>
+                ) : null}
+              </button>
+            ))
+          )}
+          {!q && voci.length > 40 ? (
+            <div style={{ padding: "8px 14px", fontSize: 12, color: "#97a3b6", background: "#f8fafc" }}>
+              Primi 40 di {voci.length}. Scrivi per restringere.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ProductSearchSelect({
   products,
   value,
@@ -2113,7 +2310,6 @@ export default function App() {
   // casa, quando la app agenti non funziona e l'ordine arriva in azienda.
   const [agenti, setAgenti] = useState([]);
   const [newOrderAgenteId, setNewOrderAgenteId] = useState("");
-  const [agenteFiltro, setAgenteFiltro] = useState("");
   // Anagrafiche snapshot degli ordini arrivati dall'APP agenti
   // (id ordine magazzino -> oggetto cliente). Per semaforo Anagrafica e DDT.
   const [appAnagrafiche, setAppAnagrafiche] = useState({});
@@ -2246,6 +2442,32 @@ export default function App() {
     () => clients.filter((c) => c.active).sort((a, b) => a.name.localeCompare(b.name)),
     [clients]
   );
+  // I clienti pronti per la ricerca a comparsa: titolo il nome, sotto citta' e
+  // codice, cosi' si distinguono i tanti omonimi ("La Bottega del Celiaco" e'
+  // sei clienti diversi in citta' diverse).
+  const clientiPerRicerca = useMemo(
+    () =>
+      activeClients.map((c) => ({
+        id: c.id,
+        titolo: c.name,
+        sottotitolo: [c.citta, c.piva ? `P.IVA ${c.piva}` : ""].filter(Boolean).join(" · "),
+        etichetta: c.codeTs || "",
+        gruppo: c.category || "",
+      })),
+    [activeClients]
+  );
+
+  const agentiPerRicerca = useMemo(
+    () =>
+      agenti.map((a) => ({
+        id: a.Agente_Id,
+        titolo: a.Nome,
+        sottotitolo: [a.Canali ? a.Canali.split(",").join(" · ") : "", a.Zona].filter(Boolean).join(" · "),
+        etichetta: a.Agente_Id,
+      })),
+    [agenti]
+  );
+
   const clientsById = useMemo(() => {
     const m = {};
     for (const c of clients) m[c.id] = c;
@@ -5118,7 +5340,6 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       setNewOrderNotes("");
       setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
       setNewOrderAgenteId("");
-      setAgenteFiltro("");
       setOrderDialogOpen(false);
       setPage("ordini");
 
@@ -9745,55 +9966,28 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 </button>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <select
-                  style={inputStyle()}
-                  value={newOrderCategory}
-                  onChange={(event) => {
-                    setNewOrderCategory(event.target.value);
-                    // Cambiando categoria, se il cliente selezionato non e' piu' coerente, lo svuoto.
-                    const cur = clientsById[newOrderClientId];
-                    if (cur && event.target.value && cur.category !== event.target.value) {
-                      setNewOrderClientId("");
-                      setNewOrderCustomer("");
-                    }
-                  }}
-                >
-                  <option value="">Tutte le categorie</option>
-                  {clientCategories.map((cat) => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-
-                <select
-                  style={inputStyle()}
-                  value={newOrderClientId}
-                  onChange={(event) => {
-                    const id = event.target.value;
-                    setNewOrderClientId(id);
-                    const c = clientsById[id];
-                    if (c) {
-                      setNewOrderCustomer(c.name);
-                      if (c.category) setNewOrderCategory(c.category);
-                      // CAP auto-compilato dall'anagrafica del cliente scelto.
-                      setNewOrderCap(String(c.cap || ""));
-                    } else {
-                      setNewOrderCap("");
-                    }
-                  }}
-                >
-                  <option value="">— seleziona cliente —</option>
-                  {activeClientsGrouped.map((g) => (
-                    <optgroup key={g.category} label={g.category}>
-                      {g.clients.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}{c.codeTs ? ` (${c.codeTs})` : ""}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
+              {/* Un campo solo con la ricerca: con 2.195 clienti la tendina
+                  nativa costringeva a scorrere a mano. Si scrive un pezzo del
+                  nome, della citta' o del codice e i risultati escono sotto. */}
+              <RicercaSelect
+                voci={clientiPerRicerca}
+                value={newOrderClientId}
+                placeholder={`Scrivi nome, citta' o codice · ${clientiPerRicerca.length} clienti`}
+                vuotoLabel="Nessun cliente con questo testo. Se e' nuovo, usa + Nuovo cliente."
+                icona={<Users size={16} />}
+                onChange={(id) => {
+                  setNewOrderClientId(id);
+                  const c = clientsById[id];
+                  if (c) {
+                    setNewOrderCustomer(c.name);
+                    if (c.category) setNewOrderCategory(c.category);
+                    setNewOrderCap(String(c.cap || ""));
+                  } else {
+                    setNewOrderCustomer("");
+                    setNewOrderCap("");
+                  }
+                }}
+              />
 
               <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13, color: "#475569", cursor: "pointer" }}>
                 <input
@@ -9858,33 +10052,15 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               <label style={labelStyle()}>
                 Agente (se l'ordine arriva da un agente ma lo carichiamo noi)
               </label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <input
-                  style={inputStyle()}
-                  value={agenteFiltro}
-                  onChange={(e) => setAgenteFiltro(e.target.value)}
-                  placeholder={`Cerca fra ${agenti.length} agenti (nome o canale)...`}
-                />
-                <select
-                  style={inputStyle()}
-                  value={newOrderAgenteId}
-                  onChange={(e) => setNewOrderAgenteId(e.target.value)}
-                >
-                  <option value="">— Nessun agente, ordine diretto —</option>
-                  {agenti
-                    .filter((a) => {
-                      const q = agenteFiltro.trim().toLowerCase();
-                      if (!q) return true;
-                      return `${a.Nome} ${a.Canali} ${a.Zona}`.toLowerCase().includes(q);
-                    })
-                    .map((a) => (
-                      <option key={a.Agente_Id} value={a.Agente_Id}>
-                        {a.Nome}
-                        {a.Canali ? ` · ${a.Canali.split(",")[0]}` : ""}
-                      </option>
-                    ))}
-                </select>
-              </div>
+              <RicercaSelect
+                voci={agentiPerRicerca}
+                value={newOrderAgenteId}
+                placeholder={`Scrivi il nome o il canale · ${agenti.length} agenti`}
+                vuotoLabel="Nessun agente con questo testo."
+                icona={<Users size={16} />}
+                colore="#7c3aed"
+                onChange={(id) => setNewOrderAgenteId(id)}
+              />
               <div style={{ marginTop: 4, fontSize: 12, color: "#6b7280" }}>
                 Serve quando la app agenti non funziona e l'ordine ce lo mandano
                 in azienda: la provvigione e il rapporto col cliente restano suoi.
