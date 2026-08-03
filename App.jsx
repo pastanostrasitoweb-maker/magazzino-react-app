@@ -2113,6 +2113,7 @@ export default function App() {
   // casa, quando la app agenti non funziona e l'ordine arriva in azienda.
   const [agenti, setAgenti] = useState([]);
   const [newOrderAgenteId, setNewOrderAgenteId] = useState("");
+  const [agenteFiltro, setAgenteFiltro] = useState("");
   // Anagrafiche snapshot degli ordini arrivati dall'APP agenti
   // (id ordine magazzino -> oggetto cliente). Per semaforo Anagrafica e DDT.
   const [appAnagrafiche, setAppAnagrafiche] = useState({});
@@ -5117,6 +5118,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
       setNewOrderNotes("");
       setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
       setNewOrderAgenteId("");
+      setAgenteFiltro("");
       setOrderDialogOpen(false);
       setPage("ordini");
 
@@ -9856,16 +9858,33 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               <label style={labelStyle()}>
                 Agente (se l'ordine arriva da un agente ma lo carichiamo noi)
               </label>
-              <select
-                style={inputStyle()}
-                value={newOrderAgenteId}
-                onChange={(e) => setNewOrderAgenteId(e.target.value)}
-              >
-                <option value="">— Nessun agente, ordine diretto —</option>
-                {agenti.map((a) => (
-                  <option key={a.Agente_Id} value={a.Agente_Id}>{a.Nome}</option>
-                ))}
-              </select>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <input
+                  style={inputStyle()}
+                  value={agenteFiltro}
+                  onChange={(e) => setAgenteFiltro(e.target.value)}
+                  placeholder={`Cerca fra ${agenti.length} agenti (nome o canale)...`}
+                />
+                <select
+                  style={inputStyle()}
+                  value={newOrderAgenteId}
+                  onChange={(e) => setNewOrderAgenteId(e.target.value)}
+                >
+                  <option value="">— Nessun agente, ordine diretto —</option>
+                  {agenti
+                    .filter((a) => {
+                      const q = agenteFiltro.trim().toLowerCase();
+                      if (!q) return true;
+                      return `${a.Nome} ${a.Canali} ${a.Zona}`.toLowerCase().includes(q);
+                    })
+                    .map((a) => (
+                      <option key={a.Agente_Id} value={a.Agente_Id}>
+                        {a.Nome}
+                        {a.Canali ? ` · ${a.Canali.split(",")[0]}` : ""}
+                      </option>
+                    ))}
+                </select>
+              </div>
               <div style={{ marginTop: 4, fontSize: 12, color: "#6b7280" }}>
                 Serve quando la app agenti non funziona e l'ordine ce lo mandano
                 in azienda: la provvigione e il rapporto col cliente restano suoi.

@@ -354,10 +354,15 @@ async function bulkLoad() {
   try {
     const r = await supabase
       .from("agenti")
-      .select("agente_id, nome")
+      .select("agente_id, nome, canali, zona")
       .eq("attivo", true)
       .order("nome");
-    agenti = (r.data || []).map((a) => ({ Agente_Id: a.agente_id, Nome: a.nome }));
+    agenti = (r.data || []).map((a) => ({
+      Agente_Id: a.agente_id,
+      Nome: a.nome,
+      Canali: a.canali || "",
+      Zona: a.zona || "",
+    }));
   } catch (_) {
     // senza anagrafica agenti il selettore resta vuoto, l'ordine si salva lo stesso
   }
