@@ -586,12 +586,6 @@ function productCategoryLabel(product) {
   return [product?.category, product?.subcategory].filter(Boolean).join(" › ");
 }
 
-function productOptionLabel(product) {
-  const categoryLabel = productCategoryLabel(product);
-  const baseLabel = [product?.code, product?.name].filter(Boolean).join(" · ");
-
-  return categoryLabel ? `${categoryLabel} · ${baseLabel}` : baseLabel;
-}
 
 
 function productManagesLots(product) {
@@ -1680,133 +1674,42 @@ function ProductSearchSelect({
   products,
   value,
   onChange,
+  // search/onSearchChange restano nella firma per non toccare i quattro punti
+  // che li passano, ma la ricerca ora se la gestisce RicercaSelect da sola.
   search,
   onSearchChange,
-  placeholder = "Cerca per codice o descrizione",
+  placeholder = "Scrivi codice o nome del prodotto",
 }) {
-  const [open, setOpen] = useState(false);
-
-  const selectedProduct = products.find((product) => String(product.id) === String(value));
-  const query = String(search || "").trim().toLowerCase();
-
-  const suggestions = products
-    .filter((product) => {
-      if (!query) return true;
-
-      const haystack = [
-        product.code,
-        product.name,
-        product.category,
-        product.subcategory,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-
-      return haystack.includes(query);
-    })
-    .slice(0, 12);
+  const voci = useMemo(
+    () =>
+      (products || []).map((p) => ({
+        id: String(p.id),
+        titolo: p.name || "",
+        sottotitolo: [p.category, p.subcategory].filter(Boolean).join(" › "),
+        etichetta: p.code || "",
+      })),
+    [products]
+  );
 
   return (
-    <div style={{ position: "relative", minWidth: 0 }}>
-      <input
-        style={inputStyle()}
-        value={search}
-        onFocus={() => setOpen(true)}
-        onChange={(event) => {
-          onSearchChange(event.target.value);
-          setOpen(true);
-        }}
-        placeholder={selectedProduct ? productOptionLabel(selectedProduct) : placeholder}
-      />
-
-      {selectedProduct ? (
-        <div style={{ marginTop: 7, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={badgeStyle("dark")}>{selectedProduct.code}</span>
-          <span style={{ color: "#40516a", fontSize: 13, fontWeight: 750 }}>
-            {selectedProduct.name}
-          </span>
-          <button
-            type="button"
-            style={{ ...compactBtnStyle("outline"), height: 30, padding: "0 10px" }}
-            onClick={() => {
-              onChange("");
-              onSearchChange("");
-              setOpen(true);
-            }}
-          >
-            Cambia
-          </button>
-        </div>
-      ) : null}
-
-      {open && (
-        <div
-          style={{
-            position: "absolute",
-            top: "calc(100% + 8px)",
-            left: 0,
-            right: 0,
-            zIndex: 1200,
-            background: "#fff",
-            border: "1px solid #dbe2ea",
-            borderRadius: 18,
-            boxShadow: "0 18px 44px rgba(15,23,42,0.16)",
-            overflow: "hidden",
-            maxHeight: 330,
-            overflowY: "auto",
-          }}
-        >
-          {suggestions.length === 0 ? (
-            <div style={{ padding: 14, color: "#66758b", fontWeight: 750 }}>
-              Nessun prodotto trovato
-            </div>
-          ) : (
-            suggestions.map((product) => (
-              <button
-                key={product.id}
-                type="button"
-                style={{
-                  width: "100%",
-                  display: "block",
-                  textAlign: "left",
-                  padding: "12px 14px",
-                  border: 0,
-                  borderBottom: "1px solid #eef2f7",
-                  background: String(product.id) === String(value) ? "#f8fafc" : "#fff",
-                  cursor: "pointer",
-                }}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  onChange(String(product.id));
-                  onSearchChange(productOptionLabel(product));
-                  setOpen(false);
-                }}
-              >
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <span style={{ fontWeight: 950, color: "#07153a" }}>{product.code}</span>
-                  <span style={{ color: "#40516a", fontWeight: 750 }}>{product.name}</span>
-                </div>
-
-                {(product.category || product.subcategory) ? (
-                  <div style={{ marginTop: 5, color: "#7a8699", fontSize: 12, fontWeight: 750 }}>
-                    {[product.category, product.subcategory].filter(Boolean).join(" › ")}
-                  </div>
-                ) : null}
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
+    <RicercaSelect
+      voci={voci}
+      value={value}
+      placeholder={`${placeholder} · ${voci.length} articoli`}
+      vuotoLabel="Nessun prodotto con questo testo."
+      icona={<Package size={16} />}
+      colore="#0f766e"
+      onChange={(id) => {
+        onChange(id);
+        // Chi ci passa search/onSearchChange si aspetta di restare allineato.
+        if (onSearchChange) {
+          const p = (products || []).find((x) => String(x.id) === String(id));
+          onSearchChange(p ? p.name || "" : "");
+        }
+      }}
+    />
   );
 }
-
-// Pannello "Gia' ordinato da questo cliente": elenca gli articoli che quel
-// cliente ha davvero comprato, dalle fatture 2025-2026, con l'ultimo prezzo e
-// l'ultimo sconto praticati. Serve soprattutto per i clienti che hanno articoli
-// fatti apposta per loro, che in magazzino non esistono. Il prezzo che propone
-// e' un suggerimento: chi carica lo puo' sempre cambiare prima di salvare.
 function StoricoClientePanel({ cliente, codiceCliente, onScegli, soloFuoriMagazzino, prodotti, titolo }) {
   const [stato, setStato] = useState({ caricando: true });
   const [filtro, setFiltro] = useState("");
