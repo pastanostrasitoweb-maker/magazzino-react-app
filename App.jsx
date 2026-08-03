@@ -392,6 +392,11 @@ const MOTIVI_FERMO = [
 // Per tornare a bloccare basta rimettere true (nessun'altra modifica serve).
 const ANAGRAFICA_BLOCCA = false;
 
+// La linea di demarcazione: fino al 31/07/2026 i documenti li faceva
+// TeamSystem, dal 02/08 li facciamo noi dal magazzino. I controlli sui campi
+// mancanti guardano solo da qui in avanti: il pregresso non si rincorre.
+const DAL_QUANDO_SIAMO_NOI = "2026-08-02";
+
 // Campi anagrafica completabili a mano (i 12 obbligatori della checklist Luca).
 const ANAG_FIELDS = [
   { key: "ragione_sociale", label: "Ragione sociale" },
@@ -747,6 +752,10 @@ function normalizeOrders(rows) {
       cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
       // Corriere scelto per la spedizione + numero DDT (se generato).
       courier: String(getField(row, ["Corriere", "corriere"]) || "").trim(),
+      // Corriere con cui e' partito davvero (scritto alla spedizione).
+      courierSpedizione: String(
+        getField(row, ["Corriere_Spedizione", "corriere_spedizione"]) || ""
+      ).trim(),
       ddtNumero: String(getField(row, ["DDT_Numero", "ddt_numero"]) || "").trim(),
       regimeIva: String(getField(row, ["Regime_Iva", "regime_iva"]) || "").trim(),
       agenteId: String(getField(row, ["Agente_Id", "agente_id"]) || "").trim(),
@@ -2335,6 +2344,8 @@ export default function App() {
   // Codice appena assegnato dal registro a un cliente nuovo, da mostrare a chi
   // ha appena caricato l'anagrafica.
   const [nuovoCodiceCliente, setNuovoCodiceCliente] = useState(null);
+  // Archivio: mostra solo gli ordini a cui manca qualcosa per DDT/fattura.
+  const [soloIncompleti, setSoloIncompleti] = useState(false);
 
   // Canali suggeriti + quelli realmente presenti nei clienti.
   const SUGGESTED_CHANNELS = ["GDO", "Farmacia", "Horeca", "Export", "Ingrosso", "B2C", "Altro"];
@@ -2464,6 +2475,55 @@ export default function App() {
         : { stato: "ok", label: "Anagrafica OK", mancanti: [], fonte: "GAMMA" };
     }
     return { stato: "assente", label: "Anagrafica assente", mancanti: [], fonte: "" };
+  };
+
+  // Cosa manca a un ordine per poterci fare sopra un documento di trasporto
+  // e, subito dopo, la fattura. Nata il 03/08/2026: il primo giorno di prova
+  // sono andati avanti ordini senza i dati necessari, e ce ne siamo accorti
+  // solo a cose fatte. Questa lista si vede in Archivio, ordine per ordine.
+  //
+  // Distingue due gravita':
+  //  - BLOCCANTI: senza questi il DDT non si puo' proprio scrivere (a chi lo
+  //    intesto, dove lo mando).
+  //  - DA COMPLETARE: il documento esce, ma incompleto o a zero.
+  const campiMancantiDDT = (order) => {
+    const has = (v) => String(v ?? "").trim() !== "";
+    const { merged } = effectiveCliente(order);
+    const cli = clientsById[String(order?.clientId)] || {};
+    const bloccanti = [];
+    const daCompletare = [];
+
+    if (!has(order?.clientId)) bloccanti.push("Codice cliente");
+    if (!has(merged.partita_iva) && !has(cli.piva)) bloccanti.push("Partita IVA");
+    if (!has(merged.indirizzo) && !has(merged.sede_legale) && !has(cli.indirizzo)) {
+      bloccanti.push("Indirizzo di consegna");
+    }
+    if (!has(merged.cap) && !has(cli.cap) && !has(order?.cap)) bloccanti.push("CAP");
+    if (!has(merged.citta) && !has(cli.citta)) bloccanti.push("Citta'");
+    if (!has(merged.provincia) && !has(cli.provincia)) daCompletare.push("Provincia");
+
+    if (!has(order?.ddtNumero)) daCompletare.push("Numero DDT (mai generato)");
+    // Stesso ragionamento che fa generaDDT: vale il corriere scelto, e in
+    // mancanza quello consigliato dal preventivo. Segnalarlo quando il
+    // documento lo scriverebbe comunque sarebbe un falso allarme.
+    if (
+      !has(order?.courier) &&
+      !has(order?.courierSpedizione) &&
+      !has(order?.transport?.consigliato?.corriere)
+    ) {
+      daCompletare.push("Corriere");
+    }
+    if (!order?.colliIsManual) daCompletare.push("Colli non confermati");
+    if (!has(merged.metodo_pagamento)) daCompletare.push("Metodo di pagamento");
+
+    // Valorizzazione: e' il pezzo che serve per fatturare, non per spedire.
+    const righe = order?.lines || [];
+    const aZero = righe.filter((l) => !(Number(l.prezzoUnitario) > 0)).length;
+    if (righe.length === 0) bloccanti.push("Nessuna riga");
+    else if (aZero === righe.length) daCompletare.push(`Tutte le ${righe.length} righe senza prezzo`);
+    else if (aZero > 0) daCompletare.push(`${aZero} righe su ${righe.length} senza prezzo`);
+
+    return { bloccanti, daCompletare, totale: bloccanti.length + daCompletare.length };
   };
 
   // Assegna a mano la tipologia cliente (HORECA/FARMA/GDO) e la registra.
@@ -4044,6 +4104,12 @@ export default function App() {
           String(order.notes).toLowerCase().includes(q)
         );
       })
+      .filter((order) =>
+        soloIncompleti
+          ? String(order.dataPrepared || order.date || "").slice(0, 10) >= DAL_QUANDO_SIAMO_NOI &&
+            campiMancantiDDT(order).totale > 0
+          : true
+      )
       .sort((a, b) => String(b.dataPrepared || b.date || "").localeCompare(String(a.dataPrepared || a.date || "")));
 
     const groups = {};
@@ -4059,7 +4125,32 @@ export default function App() {
     });
 
     return groups;
-  }, [ordersWithComputed, orderSearch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordersWithComputed, orderSearch, soloIncompleti]);
+
+  // Quanti ordini archiviati hanno ancora buchi. Si conta su TUTTO l'archivio
+  // caricato, non sul filtro: serve a dire "guarda che ce ne sono", anche
+  // mentre stai cercando altro.
+  //
+  // MA si conta solo dal 02/08/2026 in poi. Fino al 31/07 i documenti li
+  // faceva TeamSystem e l'anagrafica non passava di qui: contare quegli ordini
+  // vorrebbe dire dire "276 ordini rotti" quando in realta' erano a posto,
+  // altrove. Il pregresso non si rincorre, conta l'allineamento da lunedi'.
+  const archivioIncompleti = useMemo(() => {
+    const dataDi = (o) => String(o.dataPrepared || o.date || "").slice(0, 10);
+    const archiviati = ordersWithComputed.filter(
+      (o) => o.archived && !o.unitoIn && dataDi(o) >= DAL_QUANDO_SIAMO_NOI
+    );
+    let bloccanti = 0;
+    let daCompletare = 0;
+    archiviati.forEach((o) => {
+      const m = campiMancantiDDT(o);
+      if (m.bloccanti.length) bloccanti += 1;
+      else if (m.daCompletare.length) daCompletare += 1;
+    });
+    return { totale: archiviati.length, bloccanti, daCompletare };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordersWithComputed]);
 
   const unarchiveOrder = async (orderId) => {
     if (!orderId) return;
@@ -4458,7 +4549,8 @@ export default function App() {
       orari: app.orari_consegna || app.orario_scarico || "",
       pagamento: app.metodo_pagamento || "",
     };
-    const corriere = order.courier || order.transport?.consigliato?.corriere || "";
+    const corriere =
+      order.courier || order.courierSpedizione || order.transport?.consigliato?.corriere || "";
     const oggi = new Date().toLocaleDateString("it-IT");
     // Mappa lotto: codice + scadenza, per riportarli nella descrizione riga.
     const lotById = Object.fromEntries(
@@ -8838,6 +8930,46 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               </button>
             </div>
 
+            {archivioIncompleti.bloccanti + archivioIncompleti.daCompletare > 0 ? (
+              <div style={{
+                border: "1px solid " + (archivioIncompleti.bloccanti ? "#fecaca" : "#fde68a"),
+                background: archivioIncompleti.bloccanti ? "#fef2f2" : "#fffbeb",
+                borderRadius: 14, padding: 14, marginBottom: 16,
+                display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap",
+              }}>
+                <div style={{ flex: 1, minWidth: 260, fontSize: 13.5, lineHeight: 1.5, color: "#7c2d12" }}>
+                  <b style={{ fontSize: 15 }}>
+                    {archivioIncompleti.bloccanti + archivioIncompleti.daCompletare} ordini su{" "}
+                    {archivioIncompleti.totale} hanno dati mancanti
+                  </b>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>
+                    Conto solo dal 02/08: prima i documenti li faceva TeamSystem.
+                  </div>
+                  <div style={{ marginTop: 2 }}>
+                    {archivioIncompleti.bloccanti > 0 ? (
+                      <>
+                        <b>{archivioIncompleti.bloccanti}</b> non hanno abbastanza dati per il documento
+                        di trasporto (manca a chi intestarlo o dove mandarlo)
+                        {archivioIncompleti.daCompletare > 0 ? ", " : ". "}
+                      </>
+                    ) : null}
+                    {archivioIncompleti.daCompletare > 0 ? (
+                      <>
+                        <b>{archivioIncompleti.daCompletare}</b> escono ma incompleti (prezzi a zero,
+                        DDT mai generato, colli non confermati).
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+                <button
+                  style={btnStyle(soloIncompleti ? "primary" : "outline")}
+                  onClick={() => setSoloIncompleti((v) => !v)}
+                >
+                  {soloIncompleti ? "Mostra tutti" : "Mostra solo questi"}
+                </button>
+              </div>
+            ) : null}
+
             <div style={{ position: "relative", marginBottom: 18 }}>
               <Search
                 size={16}
@@ -8915,7 +9047,50 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                                 <Package size={13} /> {fmtKg(order.pesoTotale)} kg
                               </span>
                               <span style={badgeStyle("outline")}>{order.colli} colli</span>
+                              {order.ddtNumero ? (
+                                <span style={badgeStyle("outline")}>{order.ddtNumero}</span>
+                              ) : (
+                                <span style={badgeStyle("warning")}>DDT mai generato</span>
+                              )}
                             </div>
+
+                            {/* Cosa manca per fare il documento. In archivio si
+                                vede a cose fatte: e' li' che ci si accorge di un
+                                ordine partito senza i dati (03/08/2026). */}
+                            {(() => {
+                              // Solo dagli ordini nostri: sui documenti fatti da
+                              // TeamSystem fino al 31/07 non abbiamo nulla da dire.
+                              const suoNostro =
+                                String(order.dataPrepared || order.date || "").slice(0, 10) >=
+                                DAL_QUANDO_SIAMO_NOI;
+                              if (!suoNostro) return null;
+                              const m = campiMancantiDDT(order);
+                              if (m.totale === 0) {
+                                return (
+                                  <div style={{ marginTop: 8, fontSize: 12, color: "#15803d", fontWeight: 700 }}>
+                                    ✓ Dati completi per DDT e fattura
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div style={{
+                                  marginTop: 10, borderRadius: 10, padding: "8px 12px", fontSize: 12.5,
+                                  border: "1px solid " + (m.bloccanti.length ? "#fecaca" : "#fde68a"),
+                                  background: m.bloccanti.length ? "#fef2f2" : "#fffbeb",
+                                  color: m.bloccanti.length ? "#991b1b" : "#92400e",
+                                  lineHeight: 1.5,
+                                }}>
+                                  {m.bloccanti.length ? (
+                                    <div><b>Manca per il DDT:</b> {m.bloccanti.join(" · ")}</div>
+                                  ) : null}
+                                  {m.daCompletare.length ? (
+                                    <div style={{ opacity: m.bloccanti.length ? 0.85 : 1 }}>
+                                      <b>Da completare:</b> {m.daCompletare.join(" · ")}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           {/* Ordine UNITO in un altro: si separa, non si disarchivia
@@ -8930,11 +9105,20 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                               </button>
                             </div>
                           ) : (
-                            /* Disarchiviare e' un'azione reversibile: sempre disponibile
-                               (anche senza PIN admin). Si deve poter tornare indietro. */
-                            <button style={btnStyle("outline")} onClick={() => unarchiveOrder(order.id)}>
-                              <RotateCcw size={16} /> Disarchivia
-                            </button>
+                            <div style={{ display: "grid", gap: 8, justifyItems: "stretch" }}>
+                              <button
+                                style={btnStyle("outline")}
+                                title={order.ddtNumero ? `Ristampa ${order.ddtNumero}` : "Genera il Documento di Trasporto"}
+                                onClick={() => generaDDT(order)}
+                              >
+                                📄 {order.ddtNumero ? "Vedi DDT" : "Genera DDT"}
+                              </button>
+                              {/* Disarchiviare e' un'azione reversibile: sempre disponibile
+                                  (anche senza PIN admin). Si deve poter tornare indietro. */}
+                              <button style={btnStyle("outline")} onClick={() => unarchiveOrder(order.id)}>
+                                <RotateCcw size={16} /> Disarchivia
+                              </button>
+                            </div>
                           )}
                         </div>
                       ))}

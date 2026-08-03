@@ -90,6 +90,11 @@ const mapOrdineRow = (row) => ({
   Stato_Pagamento: row.stato_pagamento ?? "",
   Cap: row.cap ?? "",
   Corriere: row.corriere ?? "",
+  // Il corriere con cui l'ordine e' PARTITO davvero (lo scrive la spedizione).
+  // Diverso da `corriere`, che e' quello scelto in fase di preparazione: sugli
+  // ordini del 03/08 il primo era pieno e il secondo vuoto, e il DDT usciva
+  // senza vettore perche' l'app questa colonna non la leggeva proprio.
+  Corriere_Spedizione: row.corriere_spedizione ?? "",
   DDT_Numero: row.ddt_numero ?? "",
   Motivo_Fermo: row.motivo_fermo ?? "",
   Listino: row.listino ?? "",
