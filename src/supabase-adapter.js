@@ -942,7 +942,11 @@ async function createOrder(params) {
     }
   }
   const note = p.notes || p.note || "";
-  const dataOrdine = p.date || p.data_ordine || null;
+  // Mai null: un ordine senza data non riesce ad archiviarsi (il Cashflow ci
+  // calcola la scadenza sopra e la vuole per forza), e l'errore che si vede a
+  // video parla di una tabella che con l'ordine non c'entra niente. Se chi
+  // carica non la scrive, vale oggi.
+  const dataOrdine = p.date || p.data_ordine || new Date().toISOString().slice(0, 10);
   const stato = p.status || p.stato || "Da preparare";
   const statoLav = p.workStatus || p.stato_lavorazione || "Nuovo";
   const cap = (p.cap ?? p.Cap ?? "") ? String(p.cap ?? p.Cap).trim() : null;

@@ -155,3 +155,44 @@ JOIN ordini o ON o.id_ordine = i.id_ordine
 WHERE i.stato IN ('da_inviare', 'errore')
   AND (i.inviabile_dal IS NULL OR i.inviabile_dal <= now())
 ORDER BY i.ddt_numero;
+
+-- ============================================================
+-- 4. Un ordine senza data non riusciva ad archiviarsi
+-- ============================================================
+-- Scoperto simulando il flusso completo il 03/08/2026. Il trigger del Cashflow
+-- provava a scrivere NULL in cf_fatture_attese.data_doc, che e' NOT NULL, e
+-- l'errore che arrivava a video parlava di una tabella che con l'ordine non
+-- c'entra niente. Adesso ripiega sulla data di preparazione e poi su oggi: la
+-- scadenza va calcolata da qualcosa, e il giorno in cui la merce esce e'
+-- l'approssimazione giusta. La causa a monte e' chiusa in supabase-adapter.js,
+-- dove createOrder non lascia piu' la data vuota.
+CREATE OR REPLACE FUNCTION cf_scadenza_da_magazzino() RETURNS trigger
+LANGUAGE plpgsql AS $$
+declare cod text; c record; gg int; certa boolean; d date;
+begin
+  if not (new.archiviato is true and coalesce(old.archiviato, false) is false) then
+    return new;
+  end if;
+
+  new.archiviato_il := now();
+
+  if current_date < cf_controllo_dal() then return new; end if;
+  if coalesce(new.stato,'') = 'Fermo' then return new; end if;
+
+  cod := cf_codice_da_magazzino(new.id_cliente);
+  if cod is null then return new; end if;
+
+  select * into c from cf_condizioni_cliente where codice = cod;
+  if found then gg := c.giorni; certa := true; else gg := 30; certa := false; end if;
+
+  d := coalesce(new.data_ordine, new.data_preparato, now())::date;
+
+  insert into cf_fatture_attese
+    (id, codice, cliente, documento, data_doc, giorni, cond_pag, effetto, scadenza_prevista, condizione_certa)
+  values
+    (new.id_ordine, cod, coalesce(new.cliente,''),
+     coalesce(nullif(trim(new.ddt_numero),''), new.id_ordine),
+     d, gg, c.cond_pag, c.effetto, (d + gg), certa)
+  on conflict (id) do nothing;
+  return new;
+end $$;
