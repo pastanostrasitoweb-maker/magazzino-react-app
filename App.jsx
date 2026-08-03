@@ -2332,6 +2332,9 @@ export default function App() {
     ragioneSociale: "", categoria: "", codiceClienteTs: "", piva: "", codiceFiscale: "", note: "",
   });
   const [savingClient, setSavingClient] = useState(false);
+  // Codice appena assegnato dal registro a un cliente nuovo, da mostrare a chi
+  // ha appena caricato l'anagrafica.
+  const [nuovoCodiceCliente, setNuovoCodiceCliente] = useState(null);
 
   // Canali suggeriti + quelli realmente presenti nei clienti.
   const SUGGESTED_CHANNELS = ["GDO", "Farmacia", "Horeca", "Export", "Ingrosso", "B2C", "Altro"];
@@ -5083,6 +5086,11 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
           ? prev.map((c) => (c.id === normalized.id ? normalized : c))
           : [...prev, normalized];
       });
+      // Il codice glielo assegna il registro, non chi carica. Lo mostro subito:
+      // e' il riferimento da scrivere sui documenti e da cercare nel CRM.
+      if (!isEdit && result.codice) {
+        setNuovoCodiceCliente({ codice: String(result.codice), nome: ragione, nuovo: !!result.codiceNuovo });
+      }
       startNewClient();
     } catch (error) {
       alert("Errore di collegamento: " + String(error));
@@ -10325,6 +10333,25 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               <div style={{ fontSize: 16, fontWeight: 800 }}>
                 {editingClientId ? "Modifica cliente" : "Nuovo cliente"}
               </div>
+              {nuovoCodiceCliente ? (
+                <div style={{
+                  border: "1px solid #86efac", background: "#f0fdf4", borderRadius: 10,
+                  padding: "10px 12px", display: "flex", alignItems: "center", gap: 10,
+                }}>
+                  <div style={{ flex: 1, fontSize: 13, color: "#14532d" }}>
+                    <b>{nuovoCodiceCliente.nome}</b> salvato.{" "}
+                    {nuovoCodiceCliente.nuovo ? "Codice assegnato" : "Codice gia' a registro"}:{" "}
+                    <span style={{
+                      fontFamily: "ui-monospace, monospace", fontWeight: 800, fontSize: 15,
+                      background: "#dcfce7", padding: "2px 8px", borderRadius: 6,
+                    }}>{nuovoCodiceCliente.codice}</span>
+                  </div>
+                  <button
+                    style={{ ...btnStyle("outline"), height: 30, padding: "0 12px", fontSize: 12, borderRadius: 8 }}
+                    onClick={() => setNuovoCodiceCliente(null)}
+                  >Chiudi</button>
+                </div>
+              ) : null}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div>
                   <label style={labelStyle()}>Ragione sociale</label>

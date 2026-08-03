@@ -1965,12 +1965,83 @@ async function deleteLot(params) {
 
 // ---------- CLIENTI (anagrafica) ----------
 
+// Un cliente nuovo NON puo' nascere senza un codice nostro: e' il filo che
+// tiene insieme magazzino, CRM, storico prezzi e fatturazione (regola di Luca,
+// vedi il registro unico). Il codice lo assegna sempre `clienti_master`, mai
+// l'orologio: un `CLI-<timestamp>` sembra un codice ma non e' nel registro, e
+// al primo ordine il cliente verrebbe registrato una seconda volta con un
+// codice diverso. Ordine di preferenza:
+//   1. codice gestionale scritto a mano  -> CLI-<numero>, quello vero
+//   2. cliente gia' nel registro         -> si riusa il suo, niente doppioni
+//   3. cliente davvero nuovo             -> PN-xxxxxx dal registro
+async function assegnaCodiceRegistro(p, ragione) {
+  const codTs = String(p.codiceClienteTs || p.codice_cliente_ts || "").trim();
+
+  // 1. Ha il codice del gestionale: quello comanda.
+  if (codTs) {
+    const cod = /^CLI-/i.test(codTs) ? codTs.toUpperCase() : `CLI-${codTs}`;
+    const { data } = await supabase
+      .from("clienti_master")
+      .select("codice")
+      .eq("codice", cod)
+      .maybeSingle();
+    if (data) return { codice: cod };
+    const ins = await supabase.from("clienti_master").insert({
+      codice: cod,
+      codice_gestionale: codTs.replace(/^CLI-/i, ""),
+      ragione_sociale: ragione,
+      piva: (p.piva || "").trim() || null,
+      origine: "gestionale",
+    });
+    if (!ins.error) return { codice: cod };
+  }
+
+  // 2. Stesso nome gia' a registro: si riusa, non se ne crea un altro.
+  const { data: gia } = await supabase
+    .from("clienti_master")
+    .select("codice")
+    .ilike("ragione_sociale", ragione)
+    .limit(2);
+  if (gia && gia.length === 1) return { codice: String(gia[0].codice), riusato: true };
+
+  // 3. Nuovo davvero: il registro sforna il PN.
+  const { data, error } = await supabase.rpc("nuovo_cliente_registro", {
+    p_ragione_sociale: ragione,
+    p_citta: p.citta || null,
+    p_provincia: p.provincia || null,
+    p_piva: (p.piva || "").trim() || null,
+    p_telefono: p.telefono || null,
+    p_email: p.email || null,
+    p_origine: "magazzino",
+  });
+  if (error || !data) return { errore: error };
+  return { codice: String(data), nuovo: true };
+}
+
 async function createCliente(params) {
   const p = parsePayload(params);
   const ragione = (p.ragioneSociale || p.ragione_sociale || p.nome || "").trim();
   if (!ragione) return { success: false, error: "Ragione sociale mancante" };
 
-  const idCliente = p.id || p.idCliente || `CLI-${Date.now()}`;
+  let idCliente = p.id || p.idCliente || "";
+  let codiceNuovo = false;
+  if (!idCliente) {
+    const reg = await assegnaCodiceRegistro(p, ragione);
+    if (!reg.codice) {
+      // Meglio non salvare che salvare un cliente senza codice: sarebbe
+      // invisibile al CRM e allo storico, e lo si scoprirebbe fra mesi.
+      return {
+        success: false,
+        error:
+          "Non riesco ad assegnare il codice cliente dal registro. " +
+          "Il cliente NON e' stato salvato: riprova fra un momento. (" +
+          ((reg.errore && reg.errore.message) || "registro non raggiungibile") + ")",
+      };
+    }
+    idCliente = reg.codice;
+    codiceNuovo = !!reg.nuovo;
+  }
+
   const row = {
     id_cliente: String(idCliente),
     ragione_sociale: ragione,
@@ -1989,8 +2060,16 @@ async function createCliente(params) {
     .insert(row)
     .select()
     .maybeSingle();
-  if (error) return failure(error);
-  return { success: true, cliente: data };
+  if (error) {
+    // Il codice era gia' stato staccato dal registro: se poi l'anagrafica non
+    // si salva, quel codice resterebbe li' senza nessuno dietro. Lo ritiro,
+    // ma solo se l'ho creato io adesso: se era gia' a registro non si tocca.
+    if (codiceNuovo) {
+      await supabase.from("clienti_master").delete().eq("codice", String(idCliente));
+    }
+    return failure(error);
+  }
+  return { success: true, cliente: data, codice: String(idCliente), codiceNuovo };
 }
 
 async function updateCliente(params) {
