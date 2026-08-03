@@ -39,7 +39,7 @@ Applicata al progetto `wwjgjiybyrrkafymiuew` come migrazione `20260801180000_val
 
 - `listini_gestionale` (`codice_articolo`, `listino`) → `descrizione, um, prezzo, sconto_pct, iva, fonte, aggiornato_il`
 - `clienti_listino` (`id_cliente` = codice gestionale) → `listino, sconto_pct, fonte, aggiornato_il`
-- `prezzi_cliente_storico` (`id_cliente`, `codice_articolo`, `data_doc`, `documento`) → `prezzo_unitario, sconto_pct, um, fonte`
+- ~~`prezzi_cliente_storico`~~ **ELIMINATA il 03/08/2026**: era vuota e non la usava nessuno. Il suo lavoro lo fa `storico_cliente_articolo`, che nasce dalle fatture Sibill. Ripristino in `sql/ripristina_prezzi_cliente_storico.sql`.
 
 > **Attenzione all'unità.** In `listini_gestionale` il prezzo è per **CARTONE** (`um = 'CT'`), perché è così che GAMMA espone il listino ed è così che il magazzino conta le quantità (`qtyOrdered` = cartoni). Non confonderlo col prezzo al pezzo dell'app agenti.
 
@@ -125,7 +125,7 @@ Da fare: portarli in `righe_ordine.prezzo_unitario` / `sconto_pct` con `prezzo_o
 - Lo sconto cliente oggi è `null`: lo mette a mano chi carica, finché CONFWS non lo espone.
 
 ### C. Clienti con listino dedicato (bloccato sui dati)
-Struttura pronta (`prezzi_cliente_storico`): quando arriva il WS con i prezzi delle righe, si popola e l'app propone **l'ultimo prezzo praticato a quel cliente su quell'articolo**, con `prezzo_origine='storico'`.
+**Risolto per altra via il 01-03/08/2026**: i prezzi delle righe non sono mai arrivati da GAMMA, quindi li abbiamo presi dalle fatture elettroniche di Sibill. L'app propone **l'ultimo prezzo praticato a quel cliente su quell'articolo** leggendo `storico_cliente_articolo` (4.840 righe, 493 clienti, finestra mobile 12 mesi). La tabella `prezzi_cliente_storico` prevista qui non serve piu' ed e' stata eliminata.
 Nel frattempo si può popolare a mano per **La Bottega Gluten Free Sagl** se Luca fornisce i prezzi (o li si estrae dalle fatture).
 
 ---
