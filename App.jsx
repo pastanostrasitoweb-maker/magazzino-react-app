@@ -2346,6 +2346,8 @@ export default function App() {
   const [nuovoCodiceCliente, setNuovoCodiceCliente] = useState(null);
   // Archivio: mostra solo gli ordini a cui manca qualcosa per DDT/fattura.
   const [soloIncompleti, setSoloIncompleti] = useState(false);
+  // Registro DDT (amministrazione): ricerca per numero, cliente o ordine.
+  const [ddtSearch, setDdtSearch] = useState("");
 
   // Canali suggeriti + quelli realmente presenti nei clienti.
   const SUGGESTED_CHANNELS = ["GDO", "Farmacia", "Horeca", "Export", "Ingrosso", "B2C", "Altro"];
@@ -2881,9 +2883,13 @@ export default function App() {
     }
   };
 
-  // All'apertura della pagina Archivio, carica lo storico una volta.
+  // All'apertura di Archivio o del registro DDT, carica lo storico una volta.
+  // Il registro ha bisogno dello stesso caricamento: i DDT stanno quasi tutti
+  // su ordini archiviati, e serve avere anche righe e lotti per ristampare.
   useEffect(() => {
-    if (page === "archivio" && !archivedLoaded && !loadingArchive) loadArchivedOrders();
+    if ((page === "archivio" || page === "ddt") && !archivedLoaded && !loadingArchive) {
+      loadArchivedOrders();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, archivedLoaded]);
 
@@ -4152,6 +4158,57 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ordersWithComputed]);
 
+  // Registro DDT: tutti i documenti emessi, dal piu' recente. Ordina per numero
+  // (non per data): la numerazione e' la fonte di verita' per l'amministrazione,
+  // e va letta come una serie continua.
+  const registroDDT = useMemo(() => {
+    const q = ddtSearch.trim().toLowerCase();
+    const conDdt = ordersWithComputed.filter((o) => String(o.ddtNumero || "").trim() !== "");
+    // Ci sono DUE serie: quella buona (1822, 1823...) e i vecchi
+    // 'DDT-2026-nnn' dei documenti di prova di luglio. Non vanno confuse: se
+    // si estraggono le cifre da 'DDT-2026-008' esce 2026008, che scavalcherebbe
+    // ogni numero vero. La serie buona sta sopra, la vecchia sotto in coda.
+    const isSerieBuona = (o) => /^\d+$/.test(String(o.ddtNumero).trim());
+    const num = (o) => (isSerieBuona(o) ? parseInt(String(o.ddtNumero).trim(), 10) : 0);
+    const lista = conDdt
+      .filter((o) => {
+        if (!q) return true;
+        return (
+          String(o.ddtNumero).toLowerCase().includes(q) ||
+          String(o.customer || "").toLowerCase().includes(q) ||
+          String(o.id).toLowerCase().includes(q) ||
+          String(o.clientId || "").toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const ba = isSerieBuona(a);
+        const bb = isSerieBuona(b);
+        if (ba !== bb) return ba ? -1 : 1;
+        if (ba) return num(b) - num(a);
+        return String(b.ddtNumero).localeCompare(String(a.ddtNumero));
+      });
+
+    // I buchi nella serie. Li cerco solo sui numeri puri (1822, 1823...): i
+    // vecchi 'DDT-2026-nnn' sono un'altra serie, di epoca TeamSystem, e
+    // mischiarli farebbe gridare al buco dove non c'e'.
+    const numeri = conDdt
+      .filter((o) => /^\d+$/.test(String(o.ddtNumero).trim()))
+      .map((o) => parseInt(o.ddtNumero, 10))
+      .sort((a, b) => a - b);
+    const buchi = [];
+    for (let i = 1; i < numeri.length; i += 1) {
+      for (let n = numeri[i - 1] + 1; n < numeri[i]; n += 1) buchi.push(n);
+    }
+    return {
+      lista,
+      totale: conDdt.length,
+      primo: numeri[0] ?? null,
+      ultimo: numeri[numeri.length - 1] ?? null,
+      buchi,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordersWithComputed, ddtSearch]);
+
   const unarchiveOrder = async (orderId) => {
     if (!orderId) return;
 
@@ -4499,30 +4556,25 @@ export default function App() {
     }
     let numero = order.ddtNumero;
     if (!numero) {
-      const anno = new Date().getFullYear();
-      const prefisso = `DDT-${anno}-`;
-      // Il numero si calcola sul DB (non sugli ordini in memoria): col
-      // caricamento snello lo storico dei DDT non e' caricato, contarlo a video
-      // darebbe numeri duplicati.
+      // Il numero lo decide e lo scrive il DATABASE, in una sola istruzione.
+      // Qui NON si calcola piu' niente: il vecchio "leggi il prossimo, poi
+      // scrivilo" poteva dare lo stesso numero a due postazioni e lasciava un
+      // buco se la scrittura falliva. Vedi sql/numero_ddt.sql.
       const nres = await callSheetsApi({
-        action: "prossimoNumeroDDT",
-        payload: JSON.stringify({ anno }),
+        action: "assegnaNumeroDDT",
+        payload: JSON.stringify({ orderId: order.id }),
       });
-      if (nres && nres.success && nres.numero) {
-        numero = nres.numero;
-      } else {
-        const seq =
-          orders.filter((o) => String(o.ddtNumero || "").startsWith(prefisso)).length + 1;
-        numero = `${prefisso}${String(seq).padStart(3, "0")}`;
-      }
-      const result = await callSheetsApi({
-        action: "updateOrder",
-        payload: JSON.stringify({ orderId: order.id, ddt_numero: numero }),
-      });
-      if (!result || !result.success) {
-        alert("Errore nel salvataggio numero DDT: " + ((result && result.error) || "sconosciuto"));
+      if (!nres || !nres.success || !nres.numero) {
+        // Nessun ripiego che si inventi un numero: meglio non stampare che
+        // stampare un DDT con un numero gia' usato da un altro documento.
+        alert(
+          "Non sono riuscito ad assegnare il numero DDT: " +
+            ((nres && nres.error) || "sconosciuto") +
+            "\n\nIl documento NON e' stato generato. Riprova fra un momento."
+        );
         return;
       }
+      numero = String(nres.numero);
       setOrders((prev) =>
         prev.map((o) => (String(o.id) === String(order.id) ? { ...o, ddtNumero: numero } : o))
       );
@@ -4586,9 +4638,22 @@ export default function App() {
       dest.codiceUnivoco ? `<b>Codice SdI:</b> ${esc(dest.codiceUnivoco)}` : "",
       dest.pec ? `<b>PEC:</b> ${esc(dest.pec)}` : "",
       dest.email ? `<b>Email:</b> ${esc(dest.email)}` : "",
-      dest.orari ? `<b>Orario scarico:</b> ${esc(dest.orari)}` : "",
-      dest.giornoChiusura ? `<b>Giorno chiusura:</b> ${esc(dest.giornoChiusura)}` : "",
     ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+    // Orario di scarico, giorno di chiusura e telefono vanno GRANDI, in un
+    // riquadro tutto loro (richiesta di Luca, 03/08/2026): sono le tre cose che
+    // l'autista deve leggere al volo dal furgone. Sepolte nella riga
+    // dell'anagrafica in corpo 13 non le vedeva nessuno, e il camion tornava
+    // indietro. Se mancano tutte e tre, il riquadro non compare.
+    const consegnaCelle = [
+      dest.orari ? ["Orario di scarico", dest.orari] : null,
+      dest.giornoChiusura ? ["Giorno di chiusura", dest.giornoChiusura] : null,
+      dest.telefono ? ["Telefono", dest.telefono] : null,
+    ].filter(Boolean);
+    const consegnaHtml = consegnaCelle.length
+      ? `<div class="consegna">${consegnaCelle
+          .map(([et, v]) => `<div><span>${esc(et)}</span><strong>${esc(v)}</strong></div>`)
+          .join("")}</div>`
+      : "";
     const sedeDiversa =
       dest.sedeLegale && dest.sedeLegale.trim() && dest.sedeLegale.trim() !== dest.indirizzo.trim();
     const html = `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${numero}</title>
@@ -4598,10 +4663,15 @@ export default function App() {
 table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #999;padding:6px 8px;font-size:13px;text-align:left}
 th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 .firma{display:flex;gap:40px;margin-top:40px}.firma div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px}
+.consegna{display:flex;gap:10px;margin-bottom:12px}
+.consegna>div{flex:1;border:2px solid #111;border-radius:6px;padding:8px 12px;text-align:center}
+.consegna span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#444}
+.consegna strong{display:block;font-size:26px;line-height:1.15;margin-top:2px}
 @media print{.noprint{display:none}}</style></head><body>
 <div class="top"><div><h1>GLUTEN FREE EXPERIENCE SRL</h1><div style="font-size:12px">Documento di Trasporto (D.d.T.) — D.P.R. 472/96</div></div>
 <div style="text-align:right"><div style="font-size:18px;font-weight:bold">${numero}</div><div>Data: ${oggi}</div></div></div>
-<div class="box"><b>Destinatario</b><br>${esc(dest.ragione)}<br>${esc(dest.indirizzo)}<br>${esc(dest.cap)} ${esc(dest.citta)}${dest.provincia ? " (" + esc(dest.provincia) + ")" : ""}${sedeDiversa ? "<br><span style='color:#555'>Sede legale: " + esc(dest.sedeLegale) + "</span>" : ""}<br>${dest.piva ? "P.IVA: " + esc(dest.piva) : ""}${dest.telefono ? " · Tel: " + esc(dest.telefono) : ""}${anagRows ? "<br>" + anagRows : ""}</div>
+<div class="box"><b>Destinatario</b><br>${esc(dest.ragione)}<br>${esc(dest.indirizzo)}<br>${esc(dest.cap)} ${esc(dest.citta)}${dest.provincia ? " (" + esc(dest.provincia) + ")" : ""}${sedeDiversa ? "<br><span style='color:#555'>Sede legale: " + esc(dest.sedeLegale) + "</span>" : ""}<br>${dest.piva ? "P.IVA: " + esc(dest.piva) : ""}${anagRows ? "<br>" + anagRows : ""}</div>
+${consegnaHtml}
 <div class="box"><b>Trasporto a mezzo:</b> ${esc(corriere) || "vettore"} · <b>Causale:</b> Vendita · <b>Porto:</b> franco · <b>Ordine:</b> ${esc(order.id)}${dest.pagamento ? " · <b>Pagamento:</b> " + esc(dest.pagamento) : ""}</div>
 <table><thead><tr><th>Codice</th><th>Descrizione (lotto e scadenza)</th><th style="text-align:right">Qta</th></tr></thead><tbody>${righeHtml}</tbody></table>
 <div class="tot"><span>Colli: ${order.colli ?? ""}</span><span>Peso lordo: ${fmtKg(order.pesoTotale)} kg</span></div>
@@ -6972,6 +7042,21 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
               </button>
               )}
 
+              {/* Registro DDT: la vista dell'amministrazione sui documenti di
+                  trasporto emessi, per numero, cliente o data. */}
+              {!isProduzione && (
+              <button
+                style={{
+                  ...btnStyle(page === "ddt" ? "primary" : "soft"),
+                  borderRadius: 999,
+                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                }}
+                onClick={() => setPage("ddt")}
+              >
+                📄 DDT
+              </button>
+              )}
+
               <button
                 style={{
                   ...btnStyle(page === "magazzino" ? "primary" : "soft"),
@@ -8903,6 +8988,132 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
                 vuotoLabel="Nessun messaggio. Scrivi cosa serve riordinare."
               />
             </div>
+          </div>
+        )}
+
+        {page === "ddt" && (
+          <div style={{ ...cardStyle(), padding: isSmallLayout ? 16 : 20 }}>
+            <div style={{
+              display: "flex", justifyContent: "space-between", gap: 12,
+              alignItems: "center", flexWrap: "wrap", marginBottom: 18,
+            }}>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>
+                  Registro documenti di trasporto
+                </div>
+                <div style={{ marginTop: 4, color: "#66758b", fontSize: 14 }}>
+                  Tutti i DDT emessi, dal più recente. {loadingArchive ? "Carico…" : ""}
+                </div>
+              </div>
+              <button style={btnStyle("outline", loadingArchive)} disabled={loadingArchive} onClick={loadArchivedOrders}>
+                <RefreshCw size={18} /> {loadingArchive ? "Carico…" : "Aggiorna"}
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+              <div style={{
+                border: "1px solid #e5edf6", borderRadius: 12, padding: "10px 16px",
+                background: "#f8fafc", minWidth: 130,
+              }}>
+                <div style={{ fontSize: 11, color: "#66758b", textTransform: "uppercase", letterSpacing: ".05em" }}>
+                  Documenti emessi
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>{registroDDT.totale}</div>
+              </div>
+              <div style={{
+                border: "1px solid #e5edf6", borderRadius: 12, padding: "10px 16px",
+                background: "#f8fafc", minWidth: 170,
+              }}>
+                <div style={{ fontSize: 11, color: "#66758b", textTransform: "uppercase", letterSpacing: ".05em" }}>
+                  Numerazione
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: "#07153a" }}>
+                  {registroDDT.primo ?? "—"} → {registroDDT.ultimo ?? "—"}
+                </div>
+              </div>
+              <div style={{
+                border: "1px solid " + (registroDDT.buchi.length ? "#fecaca" : "#bbf7d0"),
+                background: registroDDT.buchi.length ? "#fef2f2" : "#f0fdf4",
+                borderRadius: 12, padding: "10px 16px", minWidth: 190, flex: 1,
+              }}>
+                <div style={{ fontSize: 11, color: "#66758b", textTransform: "uppercase", letterSpacing: ".05em" }}>
+                  Buchi nella serie
+                </div>
+                <div style={{
+                  fontSize: registroDDT.buchi.length ? 15 : 22, fontWeight: 900,
+                  color: registroDDT.buchi.length ? "#991b1b" : "#15803d", lineHeight: 1.3,
+                }}>
+                  {registroDDT.buchi.length
+                    ? registroDDT.buchi.slice(0, 20).join(", ") +
+                      (registroDDT.buchi.length > 20 ? ` … e altri ${registroDDT.buchi.length - 20}` : "")
+                    : "Nessuno"}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ position: "relative", marginBottom: 18 }}>
+              <Search size={16} style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }} />
+              <input
+                style={{ ...inputStyle(), paddingLeft: 40 }}
+                value={ddtSearch}
+                onChange={(e) => setDdtSearch(e.target.value)}
+                placeholder="Cerca per numero DDT, cliente, codice cliente o ID ordine"
+              />
+            </div>
+
+            {registroDDT.lista.length === 0 ? (
+              <div style={{ color: "#66758b" }}>
+                {loadingArchive ? "Carico i documenti…" : "Nessun DDT trovato."}
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {registroDDT.lista.map((order) => (
+                  <div
+                    key={order.id}
+                    style={{
+                      border: "1px solid #e5edf6", borderRadius: 14, padding: 14,
+                      background: "#fff", display: "grid",
+                      gridTemplateColumns: isSmallLayout ? "1fr" : "110px 1fr auto",
+                      gap: 14, alignItems: "center",
+                    }}
+                  >
+                    <div style={{
+                      fontSize: 24, fontWeight: 950, color: "#07153a",
+                      fontFamily: "ui-monospace, monospace", letterSpacing: "-.02em",
+                    }}>
+                      {order.ddtNumero}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: "#07153a" }}>
+                        {order.customer || "Senza nome"}
+                      </div>
+                      <div style={{ marginTop: 3, color: "#66758b", fontSize: 12 }}>
+                        {fmtDate(order.dataPrepared || order.date)} · {order.id}
+                        {order.clientId ? ` · ${order.clientId}` : ""}
+                      </div>
+                      <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <span style={badgeStyle("outline")}>{order.colli} colli</span>
+                        <span style={badgeStyle("outline")}>{fmtKg(order.pesoTotale)} kg</span>
+                        {order.courier || order.courierSpedizione ? (
+                          <span style={badgeStyle("outline")}>
+                            {(order.courier || order.courierSpedizione).toUpperCase()}
+                          </span>
+                        ) : null}
+                        {order.archived ? <span style={badgeStyle("success")}>archiviato</span> : (
+                          <span style={badgeStyle("warning")}>{order.status}</span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      style={{ ...btnStyle("outline"), whiteSpace: "nowrap" }}
+                      onClick={() => generaDDT(order)}
+                    >
+                      📄 Vedi DDT
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

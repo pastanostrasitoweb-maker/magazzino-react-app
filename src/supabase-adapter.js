@@ -1268,27 +1268,26 @@ async function getOrdiniArchiviati(params) {
   }
 }
 
-// Prossimo numero DDT dell'anno, calcolato sul DB (con il caricamento snello lo
-// storico non e' in memoria, quindi non si puo' contare sugli ordini caricati).
-async function prossimoNumeroDDT(params) {
+// Numero DDT: lo assegna il DATABASE, in una sola istruzione sotto lock.
+//
+// Regola di Luca (03/08/2026): crescente, senza buchi. Il modo di prima
+// leggeva il prossimo numero e poi lo scriveva con una seconda chiamata: due
+// postazioni insieme prendevano lo stesso numero, e una scrittura fallita
+// bruciava un numero per sempre. Ora legge e scrive insieme, vedi
+// `sql/numero_ddt.sql`.
+//
+// E' idempotente: se l'ordine ha gia' un numero torna quello, quindi
+// ristampare un DDT non consuma mai un numero nuovo.
+async function assegnaNumeroDDT(params) {
   const p = parsePayload(params);
-  const anno = String(p.anno || new Date().getFullYear());
-  const prefisso = `DDT-${anno}-`;
+  const idOrdine = String(p.orderId || p.idOrdine || p.id_ordine || "").trim();
+  if (!idOrdine) return { success: false, error: "idOrdine mancante" };
   try {
-    const { data, error } = await supabase
-      .from("ordini")
-      .select("ddt_numero")
-      .like("ddt_numero", `${prefisso}%`)
-      .order("ddt_numero", { ascending: false })
-      .limit(1);
+    const { data, error } = await supabase.rpc("assegna_numero_ddt", {
+      p_id_ordine: idOrdine,
+    });
     if (error) return failure(error);
-    let seq = 1;
-    const ultimo = data && data[0] && data[0].ddt_numero;
-    if (ultimo) {
-      const n = parseInt(String(ultimo).slice(prefisso.length), 10);
-      if (!Number.isNaN(n)) seq = n + 1;
-    }
-    return { success: true, numero: `${prefisso}${String(seq).padStart(3, "0")}` };
+    return { success: true, numero: String(data) };
   } catch (e) {
     return failure(e);
   }
@@ -2635,8 +2634,9 @@ export async function callSheetsApi(params = {}) {
         return await cercaClienteStorico(params);
       case "collegaClienteStorico":
         return await collegaClienteStorico(params);
-      case "prossimoNumeroDDT":
-        return await prossimoNumeroDDT(params);
+      case "assegnaNumeroDDT":
+      case "prossimoNumeroDDT": // vecchio nome, stessa funzione
+        return await assegnaNumeroDDT(params);
       case "getChatMessaggi":
         return await getChatMessaggi(params);
       case "inviaChatMessaggio":
