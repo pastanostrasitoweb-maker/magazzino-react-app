@@ -4755,10 +4755,15 @@ export default function App() {
   // Riporta un ordine SPEDITO indietro tra i Preparati (errore, modifica).
   // Corriere e DDT restano associati; l'ordine esce dalla sezione Spediti.
 
-  // DDT: genera (o ristampa) il documento di trasporto in una finestra
-  // stampabile. Numerazione progressiva per anno, salvata su ordini.ddt_numero.
-  const generaDDT = async (order) => {
+  // UN SOLO motore per due documenti: il DDT e la conferma d'ordine. Cambiano
+  // tre cose (intestazione, numero, firme), tutto il resto e' identico: stesso
+  // destinatario, stesse righe, stessi prezzi. Tenerli separati vorrebbe dire
+  // correggere ogni cosa due volte e vederli divergere.
+  //   tipo = "ddt"      -> Documento di Trasporto, consuma un numero
+  //   tipo = "conferma" -> Conferma d'ordine, NON consuma nessun numero
+  const generaDocumento = async (order, tipo = "ddt") => {
     if (!order) return;
+    const isConferma = tipo === "conferma";
     const anag = anagraficaFor(order);
     if (anag.stato === "ko") {
       if (ANAGRAFICA_BLOCCA) {
@@ -4776,8 +4781,10 @@ export default function App() {
           "\n\nIl DDT viene generato comunque: questi dati resteranno vuoti sul documento."
       );
     }
-    let numero = order.ddtNumero;
-    if (!numero) {
+    // La conferma d'ordine porta il numero dell'ORDINE: non e' un documento
+    // fiscale e non deve bruciare un numero di DDT.
+    let numero = isConferma ? order.id : order.ddtNumero;
+    if (!numero && !isConferma) {
       // Il numero lo decide e lo scrive il DATABASE, in una sola istruzione.
       // Qui NON si calcola piu' niente: il vecchio "leggi il prossimo, poi
       // scrivilo" poteva dare lo stesso numero a due postazioni e lasciava un
@@ -4859,7 +4866,9 @@ export default function App() {
     // Prezzi sul documento: e' una preferenza del CLIENTE (ddt_con_prezzi
     // sull'override), non della singola stampa. Certi li vogliono vedere, altri
     // non devono vederli: dipende da chi riceve la merce.
-    const conPrezzi = !!(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi;
+    // Sul DDT i prezzi sono una scelta del cliente; sulla conferma d'ordine
+    // ci sono sempre, perche' e' proprio quello che il cliente deve confermare.
+    const conPrezzi = isConferma || !!(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi;
     const eur = (n) =>
       Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -4958,7 +4967,7 @@ export default function App() {
       : "";
     const sedeDiversa =
       dest.sedeLegale && dest.sedeLegale.trim() && dest.sedeLegale.trim() !== dest.indirizzo.trim();
-    const html = `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${numero}</title>
+    const html = `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${isConferma ? "Conferma ordine " : ""}${esc(numero)}</title>
 <style>body{font-family:Arial,sans-serif;margin:32px;color:#111}h1{font-size:20px;margin:0}
 .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:12px;margin-bottom:16px}
 .box{border:1px solid #999;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.5}
@@ -4984,9 +4993,13 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 .riepilogo{margin-top:10px;margin-left:auto;width:280px;font-size:13px}
 .riepilogo>div{display:flex;justify-content:space-between;padding:3px 0}
 .riepilogo .grande{border-top:1.5px solid #111;margin-top:4px;padding-top:6px;font-size:16px}
+.nota-conferma{margin-top:16px;padding:10px 12px;border:1px solid #999;border-radius:6px;
+  font-size:12px;line-height:1.45;color:#333;background:#fafafa}
 @media print{.noprint{display:none}}</style></head><body>
-<div class="top"><div><h1>GLUTEN FREE EXPERIENCE SRL</h1><div style="font-size:12px">Documento di Trasporto (D.d.T.) — D.P.R. 472/96</div></div>
-<div style="text-align:right"><div style="font-size:18px;font-weight:bold">${numero}</div><div>Data: ${oggi}</div></div></div>
+<div class="top"><div><h1>GLUTEN FREE EXPERIENCE SRL</h1><div style="font-size:12px">${
+  isConferma ? "Conferma d&rsquo;ordine" : "Documento di Trasporto (D.d.T.) — D.P.R. 472/96"
+}</div></div>
+<div style="text-align:right"><div style="font-size:18px;font-weight:bold">${esc(numero)}</div><div>Data: ${oggi}</div></div></div>
 <div class="anagrafica">
   <div class="riquadro">
     <h2>Destinatario</h2>
@@ -5007,7 +5020,10 @@ ${consegnaHtml}
 <table><thead><tr><th>Codice</th><th>Descrizione (lotto e scadenza)</th><th style="text-align:right">Qta</th>${intestazionePrezzi}</tr></thead><tbody>${righeHtml}</tbody></table>
 ${riepilogoPrezzi}
 <div class="tot"><span>Colli: ${order.colli ?? ""}</span><span>Peso lordo: ${fmtKg(order.pesoTotale)} kg</span></div>
-<div class="firma"><div>Firma conducente</div><div>Firma destinatario</div></div>
+${isConferma
+  ? `<div class="nota-conferma">Documento di conferma, non vale come documento di trasporto n&eacute; come fattura. Verificare quantit&agrave;, prezzi e indirizzo di consegna e segnalare eventuali differenze prima della spedizione.</div>
+     <div class="firma"><div>Per accettazione</div></div>`
+  : `<div class="firma"><div>Firma conducente</div><div>Firma destinatario</div></div>`}
 <button class="noprint" onclick="window.print()" style="margin-top:24px;padding:10px 18px;font-size:14px">Stampa</button>
 </body></html>`;
     const w = window.open("", "_blank");
@@ -5018,6 +5034,9 @@ ${riepilogoPrezzi}
     w.document.write(html);
     w.document.close();
   };
+
+  const generaDDT = (order) => generaDocumento(order, "ddt");
+  const generaConfermaOrdine = (order) => generaDocumento(order, "conferma");
 
   const setOrderPayment = async (orderId, status) => {
     if (!isAdmin || !orderId) return;
@@ -7924,6 +7943,21 @@ ${riepilogoPrezzi}
                           </div>
                         ) : null}
 
+                        {/* Prezzi gia' qui, mentre l'ordine si prepara, non solo
+                            nei Preparati: e' il momento in cui si guarda cosa
+                            si sta mandando, ed e' li' che ci si accorge di un
+                            prezzo sbagliato. La produzione non li vede.
+                            (Luca 03/08/2026) */}
+                        {!isProduzione ? (
+                          <div style={{ marginTop: 12 }}>
+                            <ValorizzazioneOrdine
+                              order={selectedOrder}
+                              onSalvato={loadDataFromSheets}
+                              listini={listiniPrezzi}
+                            />
+                          </div>
+                        ) : null}
+
                         {selectedOrder.notes ? (
                           <div
                             style={{
@@ -8069,6 +8103,21 @@ ${riepilogoPrezzi}
                         {String(selectedOrder.status || "").trim().toLowerCase() !== "preparato" ? (
                           <button style={btnStyle("warning")} onClick={markOrderStopped}>
                             <AlertTriangle size={16} /> Fermo
+                          </button>
+                        ) : null}
+
+                        {/* Conferma d'ordine: quello che si manda al cliente
+                            PRIMA di spedire, per fargli controllare quantita' e
+                            prezzi. Non consuma nessun numero di DDT: non e' un
+                            documento fiscale. La produzione non la vede, come i
+                            prezzi. */}
+                        {!isProduzione ? (
+                          <button
+                            style={btnStyle("outline")}
+                            onClick={() => generaConfermaOrdine(selectedOrder)}
+                            title="Stampa la conferma d'ordine con prezzi, da mandare al cliente"
+                          >
+                            📄 Conferma d'ordine
                           </button>
                         ) : null}
 
