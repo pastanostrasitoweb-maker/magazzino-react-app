@@ -1,6 +1,6 @@
 // hotfix assegnazione prodotti senza lotto su ID disponibilità reale
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { callSheetsApi, aggiornaStatoOrdineApp } from "./src/supabase-adapter.js";
+import { callSheetsApi, aggiornaStatoOrdineApp, nettoRiga } from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
 import {
@@ -1094,6 +1094,9 @@ function normalizeOrderLines(rows, products) {
           return v === "" || v === null || v === undefined ? null : Number(v);
         })(),
         scontoPct: Number(getField(row, ["Sconto_Pct", "sconto_pct"]) || 0),
+        // Secondo sconto, IN CASCATA sul prezzo gia' scontato dal primo:
+        // 100 con 30+10 fa 63,00, non 60,00 (Luca 04/08/2026).
+        sconto2Pct: Number(getField(row, ["Sconto2_Pct", "sconto2_pct"]) || 0),
         prezzoOrigine: String(getField(row, ["Prezzo_Origine", "prezzo_origine"]) || ""),
         naturaIva: String(getField(row, ["Natura_Iva", "natura_iva"]) || ""),
         ivaPct: (() => {
@@ -1350,6 +1353,7 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
       iniziale[l.lineId] = {
         prezzo: l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario),
         sconto: l.scontoPct ? String(l.scontoPct) : "",
+        sconto2: l.sconto2Pct ? String(l.sconto2Pct) : "",
         // Il nostro prodotto sta al 4%: e' il caso normale, si cambia dove serve.
         iva: l.ivaPct === null || l.ivaPct === undefined ? "4" : String(l.ivaPct),
         natura: l.naturaIva || "",
@@ -1441,14 +1445,20 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
       for (const l of righe) {
         const p = String(bozza[l.lineId]?.prezzo ?? "").trim();
         const sc = String(bozza[l.lineId]?.sconto ?? "").trim();
+        const sc2 = String(bozza[l.lineId]?.sconto2 ?? "").trim();
         const prima = l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario);
-        if (p === prima && sc === (l.scontoPct ? String(l.scontoPct) : "")) continue;
+        if (
+          p === prima &&
+          sc === (l.scontoPct ? String(l.scontoPct) : "") &&
+          sc2 === (l.sconto2Pct ? String(l.sconto2Pct) : "")
+        ) continue;
         await callSheetsApi({
           action: "updateOrderLine",
           payload: JSON.stringify({
             lineId: l.lineId,
             prezzoUnitario: p === "" ? null : Number(p),
             scontoPct: sc === "" ? 0 : Number(sc),
+            sconto2Pct: sc2 === "" ? 0 : Number(sc2),
             ivaPct: Number(bozza[l.lineId]?.iva ?? 4),
             naturaIva: bozza[l.lineId]?.natura || "",
             prezzoOrigine: "valorizzazione-preparati",
@@ -1590,12 +1600,31 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                   step="0.1"
                   min="0"
                   max="100"
-                  placeholder="Sc %"
+                  placeholder="Sc 1 %"
+                  title="Primo sconto, sul prezzo di listino"
                   value={bozza[l.lineId]?.sconto ?? ""}
                   onChange={(e) =>
                     setBozza((prev) => ({
                       ...prev,
                       [l.lineId]: { ...(prev[l.lineId] || {}), sconto: e.target.value },
+                    }))
+                  }
+                />
+                {/* Secondo sconto, IN CASCATA: si applica al prezzo gia'
+                    scontato dal primo. 100 con 30+10 fa 63,00, non 60,00. */}
+                <input
+                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  placeholder="Sc 2 %"
+                  title="Secondo sconto, sul prezzo gia' scontato dal primo"
+                  value={bozza[l.lineId]?.sconto2 ?? ""}
+                  onChange={(e) =>
+                    setBozza((prev) => ({
+                      ...prev,
+                      [l.lineId]: { ...(prev[l.lineId] || {}), sconto2: e.target.value },
                     }))
                   }
                 />
@@ -2582,6 +2611,12 @@ export default function App() {
   const [soloIncompleti, setSoloIncompleti] = useState(false);
   // Registro DDT (amministrazione): ricerca per numero, cliente o ordine.
   const [ddtSearch, setDdtSearch] = useState("");
+  // Tracciabilita' lotti in Archivio: si cerca un articolo (o un lotto), si
+  // sceglie il lotto e si vede a quali clienti e' andato. Solo dal 03/08.
+  const [lottoQuery, setLottoQuery] = useState("");
+  const [lottoRighe, setLottoRighe] = useState([]);
+  const [lottoScelto, setLottoScelto] = useState("");
+  const [lottoCercando, setLottoCercando] = useState(false);
   // Destinazioni merci per codice cliente. Un cliente puo' avere piu' punti
   // di consegna (3-4 negozi) e chi spedisce sceglie dove mandare la merce.
   const [destinazioni, setDestinazioni] = useState({});
@@ -4511,6 +4546,21 @@ export default function App() {
   // qualcuno lo stampa per darlo all'autista.
   // `unarchiveOrder` invece NON torna: un ordine archiviato ha il documento
   // emesso. Il divieto vive nel database (sql/ddt_alla_spedizione.sql).
+  const cercaLotti = async (q) => {
+    const testo = String(q || "").trim();
+    setLottoScelto("");
+    if (testo.length < 2) { setLottoRighe([]); return; }
+    setLottoCercando(true);
+    try {
+      const r = await callSheetsApi({ action: "tracciaLotti", payload: JSON.stringify({ q: testo }) });
+      setLottoRighe(r && r.success ? r.righe || [] : []);
+    } catch (e) {
+      setLottoRighe([]);
+    } finally {
+      setLottoCercando(false);
+    }
+  };
+
   const reopenShippedOrder = async (order) => {
     if (!order) return;
     const conferma = window.confirm(
@@ -5075,7 +5125,10 @@ export default function App() {
 
         const prezzo = Number(line.prezzoUnitario || 0);
         const sconto = Number(line.scontoPct || 0);
-        const totale = Number(line.qtyOrdered || 0) * prezzo * (1 - sconto / 100);
+        const sconto2 = Number(line.sconto2Pct || 0);
+        // I due sconti in CASCATA: il secondo sul prezzo gia' scontato dal
+        // primo. Stessa formula del database (netto_riga).
+        const totale = nettoRiga(line.qtyOrdered, prezzo, sconto, sconto2);
         imponibile += totale;
         const aliq = Number(line.ivaPct ?? 4);
         perAliquota[aliq] = (perAliquota[aliq] || 0) + totale;
@@ -5086,7 +5139,10 @@ export default function App() {
         return (
           `<tr>${base}` +
           `<td style="text-align:right">${cellaPrezzo}</td>` +
-          `<td style="text-align:right">${sconto > 0 ? eur(sconto) + "%" : ""}</td>` +
+          `<td style="text-align:right">${
+             [sconto > 0 ? eur(sconto) + "%" : "", sconto2 > 0 ? eur(sconto2) + "%" : ""]
+               .filter(Boolean).join(" + ") || ""
+           }</td>` +
           `<td style="text-align:right">${cellaTotale}</td></tr>`
         );
       })
@@ -9643,6 +9699,118 @@ ${isConferma
                 onChange={(event) => setOrderSearch(event.target.value)}
                 placeholder="Cerca in archivio per nome, note o ID"
               />
+            </div>
+
+            {/* DOVE E' FINITO UN LOTTO. Si scrive un articolo (o direttamente
+                il lotto), si sceglie fra i lotti usciti e si vede a quali
+                clienti sono andati, con le quantita'. Se un lotto va
+                richiamato, questa e' la lista delle telefonate da fare.
+                Solo dal 03/08: prima i documenti li faceva TeamSystem e la
+                catena riga-lotto-cliente non passava di qui. */}
+            <div style={{
+              border: "1px solid #e5edf6", borderRadius: 16, padding: 14, marginBottom: 18,
+              background: "#fbfdff",
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 900, color: "#07153a", marginBottom: 2 }}>
+                🔎 Dove è finito un lotto
+              </div>
+              <div style={{ fontSize: 12, color: "#66758b", marginBottom: 10 }}>
+                Scrivi un articolo o un numero di lotto. Vale per quanto è uscito dal 03/08.
+              </div>
+              <div style={{ position: "relative" }}>
+                <Search size={16} style={{ position: "absolute", left: 14, top: 18, color: "#97a3b6" }} />
+                <input
+                  style={{ ...inputStyle(), paddingLeft: 40 }}
+                  value={lottoQuery}
+                  onChange={(e) => { setLottoQuery(e.target.value); cercaLotti(e.target.value); }}
+                  placeholder="Es. NFARMA 010, oppure 178/26"
+                />
+              </div>
+
+              {lottoCercando ? (
+                <div style={{ marginTop: 10, color: "#66758b", fontSize: 13 }}>Cerco…</div>
+              ) : lottoQuery.trim().length >= 2 && lottoRighe.length === 0 ? (
+                <div style={{ marginTop: 10, color: "#66758b", fontSize: 13 }}>
+                  Nessun lotto uscito con questo testo, dal 03/08 in poi.
+                </div>
+              ) : lottoRighe.length ? (() => {
+                // Prima i LOTTI trovati, poi chi li ha ricevuti. Due passaggi,
+                // come li cerca una persona: "che lotti sono usciti?" e poi
+                // "questo dov'e' andato?".
+                const perLotto = {};
+                for (const r of lottoRighe) {
+                  const k = String(r.lotto);
+                  perLotto[k] = perLotto[k] || { lotto: k, scadenza: r.scadenza, prodotti: new Set(), righe: [], qta: 0 };
+                  perLotto[k].prodotti.add(r.codice_prodotto || r.prodotto || "");
+                  perLotto[k].righe.push(r);
+                  perLotto[k].qta += Number(r.quantita || 0);
+                }
+                const lotti = Object.values(perLotto).sort((a, b) => String(a.lotto).localeCompare(String(b.lotto)));
+                const scelto = perLotto[lottoScelto];
+                return (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {lotti.map((l) => (
+                        <button
+                          key={l.lotto}
+                          style={{
+                            ...compactBtnStyle(lottoScelto === l.lotto ? "dark" : "outline"),
+                            flexDirection: "column", alignItems: "flex-start", height: "auto",
+                            padding: "8px 12px", gap: 1,
+                          }}
+                          onClick={() => setLottoScelto(lottoScelto === l.lotto ? "" : l.lotto)}
+                        >
+                          <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 900, fontSize: 14 }}>
+                            {l.lotto}
+                          </span>
+                          <span style={{ fontSize: 11, opacity: 0.8, fontWeight: 600 }}>
+                            {[...l.prodotti].filter(Boolean).join(", ")}
+                            {l.scadenza ? ` · scad. ${fmtDate(l.scadenza)}` : ""}
+                            {` · ${l.righe.length} client${l.righe.length === 1 ? "e" : "i"}`}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {scelto ? (
+                      <div style={{ marginTop: 12, border: "1px solid #e5edf6", borderRadius: 12, overflow: "hidden" }}>
+                        <div style={{
+                          padding: "8px 12px", background: "#07153a", color: "#fff",
+                          fontSize: 13, fontWeight: 800,
+                        }}>
+                          Lotto {scelto.lotto} · {scelto.righe.length} consegne · {fmtKg(scelto.qta)} pezzi in tutto
+                        </div>
+                        {scelto.righe
+                          .slice()
+                          .sort((a, b) => Number(b.quantita || 0) - Number(a.quantita || 0))
+                          .map((r, i) => (
+                          <div key={r.id_ordine + i} style={{
+                            display: "grid",
+                            gridTemplateColumns: isSmallLayout ? "1fr" : "1fr auto auto auto",
+                            gap: 10, padding: "9px 12px", alignItems: "center",
+                            borderTop: i ? "1px solid #eef2f7" : "none", fontSize: 13,
+                          }}>
+                            <div style={{ fontWeight: 800, color: "#07153a" }}>{r.cliente}</div>
+                            <div style={{ color: "#66758b" }}>{fmtDate(r.data_uscita)}</div>
+                            <div>
+                              {r.ddt
+                                ? <span style={badgeStyle("outline")}>DDT {r.ddt}</span>
+                                : <span style={badgeStyle("warning")}>senza DDT</span>}
+                            </div>
+                            <div style={{ fontWeight: 900, textAlign: "right", minWidth: 60 }}>
+                              {fmtKg(r.quantita)} pz
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 10, color: "#66758b", fontSize: 12.5 }}>
+                        Scegli un lotto per vedere a quali clienti è andato.
+                      </div>
+                    )}
+                  </div>
+                );
+              })() : null}
             </div>
 
             <div style={{ display: "grid", gap: 16 }}>

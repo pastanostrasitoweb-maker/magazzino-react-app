@@ -77,6 +77,19 @@ async function selectIn(table, col, ids, cols = "*") {
   return out;
 }
 
+// Il netto di una riga. I due sconti vanno IN CASCATA: il secondo si applica
+// al prezzo gia' scontato dal primo, quindi 100 con 30+10 fa 63,00 e non 60,00.
+// Sommarli darebbe un prezzo piu' basso del dovuto su ogni riga.
+// Stessa formula della netto_riga() sul database (sql/valorizza_ordine.sql):
+// se cambia una, va cambiata l'altra.
+export function nettoRiga(qta, prezzo, sconto1, sconto2) {
+  return (
+    Number(qta || 0) * Number(prezzo || 0) *
+    (1 - Number(sconto1 || 0) / 100) *
+    (1 - Number(sconto2 || 0) / 100)
+  );
+}
+
 // Mapper riga DB -> forma usata dal frontend (condivisi tra bulkLoad e archivio).
 const mapOrdineRow = (row) => ({
   ID_Ordine: String(row.id_ordine ?? ""),
@@ -131,6 +144,7 @@ const mapRigaRow = (row) => ({
     ? null
     : Number(row.prezzo_unitario),
   Sconto_Pct: Number(row.sconto_pct ?? 0),
+  Sconto2_Pct: Number(row.sconto2_pct ?? 0),
   Prezzo_Origine: row.prezzo_origine ?? "",
   Iva_Pct: row.iva_pct === null || row.iva_pct === undefined ? null : Number(row.iva_pct),
   Natura_Iva: row.natura_iva ?? "",
@@ -180,17 +194,13 @@ async function ricalcolaImponibile(idOrdine) {
   try {
     const { data, error } = await supabase
       .from("righe_ordine")
-      .select("quantita_ordinata,prezzo_unitario,sconto_pct")
+      .select("quantita_ordinata,prezzo_unitario,sconto_pct,sconto2_pct")
       .eq("id_ordine", String(idOrdine));
     if (error) return;
     const righe = data || [];
     if (!righe.some((r) => r.prezzo_unitario != null)) return; // ordine non valorizzato
     const tot = righe.reduce(
-      (s, r) =>
-        s +
-        Number(r.quantita_ordinata || 0) *
-          Number(r.prezzo_unitario || 0) *
-          (1 - Number(r.sconto_pct || 0) / 100),
+      (s, r) => s + nettoRiga(r.quantita_ordinata, r.prezzo_unitario, r.sconto_pct, r.sconto2_pct),
       0
     );
     await supabase
@@ -1742,6 +1752,7 @@ async function addOrderLine(params) {
   if (prezzo !== undefined && prezzo !== null && prezzo !== "") {
     riga.prezzo_unitario = Number(prezzo);
     riga.sconto_pct = Number(p.scontoPct ?? p.sconto_pct ?? 0);
+    riga.sconto2_pct = Number(p.sconto2Pct ?? p.sconto2_pct ?? 0);
     riga.prezzo_origine = String(p.prezzoOrigine ?? p.prezzo_origine ?? "storico");
   }
 
@@ -1802,6 +1813,8 @@ async function updateOrderLine(params) {
   }
   const scontoUp = p.scontoPct ?? p.sconto_pct;
   if (scontoUp !== undefined) patch.sconto_pct = Number(scontoUp || 0);
+  const sconto2Up = p.sconto2Pct ?? p.sconto2_pct;
+  if (sconto2Up !== undefined) patch.sconto2_pct = Number(sconto2Up || 0);
   // Aliquota IVA della riga: nello stesso documento convivono il 4 del cibo e
   // il 22 del trasporto, quindi sta sulla riga e non sulla testata.
   const ivaUp = p.ivaPct ?? p.iva_pct;
@@ -2720,6 +2733,23 @@ export async function callSheetsApi(params = {}) {
         return await registraClienteRegistro(params);
       case "getStoricoCliente":
         return await getStoricoCliente(params);
+      case "tracciaLotti": {
+        // Dove e' finito un lotto. Si cerca per ARTICOLO (codice o nome) o
+        // direttamente per lotto: chi ha in mano un cartone legge il lotto,
+        // chi ha una segnalazione parte dal prodotto.
+        const pp = parsePayload(params);
+        const q = String(pp.q || "").trim();
+        if (q.length < 2) return { success: true, righe: [] };
+        const like = `%${q}%`;
+        const { data, error } = await supabase
+          .from("v_tracciabilita_lotti")
+          .select("*")
+          .or(`lotto.ilike.${like},codice_prodotto.ilike.${like},prodotto.ilike.${like}`)
+          .order("lotto")
+          .limit(500);
+        if (error) return failure(error);
+        return { success: true, righe: data || [] };
+      }
       case "getListiniPrezzi":
         return await getListiniPrezzi();
       case "cercaClienteStorico":

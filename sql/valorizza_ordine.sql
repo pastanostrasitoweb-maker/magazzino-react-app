@@ -45,6 +45,23 @@ BEGIN
     LEFT JOIN clienti_listino cl ON cl.id_cliente = o.id_cliente
    WHERE o.id_ordine = p_id_ordine;
 
+  -- L'IVA PRIMA DI TUTTO, e su TUTTE le righe.
+  -- L'aliquota non e' una scelta commerciale: e' una proprieta' del prodotto,
+  -- e va allineata anche sulle righe che hanno gia' un prezzo. Il giro prima
+  -- saltava quelle righe (il ciclo qui sotto guarda solo quelle a zero) e
+  -- restava il 4% che l'interfaccia metteva di default: su 107 righe c'era 4%
+  -- dove il prodotto dice 10%. Su un ravioli sono 6 punti di IVA sbagliati.
+  UPDATE righe_ordine ri
+     SET iva_pct = p.iva_pct
+    FROM prodotti p
+   WHERE p.id_prodotto::text = ri.id_prodotto
+     AND ri.id_ordine = p_id_ordine
+     AND p.iva_pct IS NOT NULL
+     -- Il regime estero azzera l'imposta per tutto il documento: li' lo zero
+     -- e' voluto e non va sovrascritto con l'aliquota del prodotto.
+     AND COALESCE(ri.natura_iva, '') = ''
+     AND ri.iva_pct IS DISTINCT FROM p.iva_pct;
+
   FOR r IN
     SELECT ri.id_riga,
            -- Chiave articolo senza spazi ne' punteggiatura: "HORECA 122" e
@@ -127,10 +144,14 @@ BEGIN
 
   -- Il totale dell'ordine si rifa' sempre: e' quello che arriva al Cashflow e
   -- alla coda Sibill, e non deve mai restare indietro rispetto alle righe.
+  -- netto_riga() e non la formula a mano: i due sconti vanno in CASCATA (il
+  -- secondo sul prezzo gia' scontato dal primo) e la formula deve stare in un
+  -- posto solo, altrimenti totale ordine, DDT, conferma e coda Sibill prima o
+  -- poi dicono numeri diversi.
   UPDATE ordini o
      SET totale_imponibile = (
-           SELECT ROUND(SUM(COALESCE(ri.quantita_ordinata, 0) * COALESCE(ri.prezzo_unitario, 0)
-                            * (1 - COALESCE(ri.sconto_pct, 0) / 100.0)), 2)
+           SELECT ROUND(SUM(netto_riga(ri.quantita_ordinata, ri.prezzo_unitario,
+                                       ri.sconto_pct, ri.sconto2_pct)), 2)
              FROM righe_ordine ri WHERE ri.id_ordine = p_id_ordine)
    WHERE o.id_ordine = p_id_ordine;
 
