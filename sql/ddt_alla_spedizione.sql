@@ -151,6 +151,22 @@ BEGIN
 END;
 $$;
 
+-- SECURITY DEFINER: il trigger scrive per conto dell'app e non deve dipendere
+-- dai permessi di CHI spedisce. Senza, mettere un ordine su Spedito falliva con
+-- 'row-level security policy for table ddt_sibill_invii', che a chi lavora non
+-- dice niente (Il Melograno, 04/08/2026).
+ALTER FUNCTION accoda_ddt_per_sibill() SECURITY DEFINER;
+ALTER FUNCTION accoda_ddt_per_sibill() SET search_path = public;
+
+-- E serve la policy di UPDATE: il trigger usa ON CONFLICT DO UPDATE (la coda
+-- deve seguire l'ordine finche' non e' partita) ma su ddt_sibill_invii
+-- c'erano solo INSERT e SELECT, quindi il ramo di aggiornamento era rifiutato.
+DROP POLICY IF EXISTS ddt_sibill_update ON ddt_sibill_invii;
+CREATE POLICY ddt_sibill_update ON ddt_sibill_invii
+  FOR UPDATE
+  USING (stato IN ('da_inviare','errore'))     -- gia' partito non si tocca
+  WITH CHECK (true);
+
 -- Il trigger ascolta anche il totale e il cliente, non solo lo stato: senza,
 -- un prezzo corretto durante la finestra non arrivava mai in coda.
 DROP TRIGGER IF EXISTS trg_accoda_ddt_sibill ON ordini;
