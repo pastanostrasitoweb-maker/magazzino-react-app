@@ -4480,14 +4480,43 @@ export default function App() {
   }, [ordersWithComputed, ddtSearch]);
 
 
-  // NIENTE ritorno indietro da Spedito o da Archiviato (regola di Luca
-  // 03/08/2026). Le due funzioni che lo facevano, unarchiveOrder e
-  // reopenShippedOrder, sono state tolte apposta e non vanno rimesse: quando
-  // l'ordine passa a Spedito il database emette il DDT, che e' un documento
-  // fiscale. Il divieto vive nel database (sql/ddt_alla_spedizione.sql), qui
-  // non c'e' piu' nemmeno il pulsante che avrebbe mentito.
-  // Correggere resta possibile: prezzi, colli, peso e anagrafica di un ordine
-  // spedito si modificano ancora, fino a quando il DDT parte verso Sibill.
+  // Il punto di non ritorno e' l'ARCHIVIAZIONE, non la spedizione (correzione
+  // di Luca 04/08/2026). Spedito e' ancora una fase di lavoro: capita di
+  // accorgersi di qualcosa e di dover riportare l'ordine indietro, e finche'
+  // non e' archiviato si puo'. Il DDT nasce all'archiviazione, o prima se
+  // qualcuno lo stampa per darlo all'autista.
+  // `unarchiveOrder` invece NON torna: un ordine archiviato ha il documento
+  // emesso. Il divieto vive nel database (sql/ddt_alla_spedizione.sql).
+  const reopenShippedOrder = async (order) => {
+    if (!order) return;
+    const conferma = window.confirm(
+      `Riportare tra i PREPARATI l'ordine di ${order.customer || order.id}?` +
+        (order.ddtNumero
+          ? `\n\nATTENZIONE: il DDT ${order.ddtNumero} e' gia' stato generato e resta associato all'ordine.`
+          : "\n\nNessun DDT e' stato ancora generato, quindi non si perde nessun numero.")
+    );
+    if (!conferma) return;
+    const previousOrders = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(order.id) ? { ...o, status: "Preparato" } : o))
+    );
+    try {
+      const result = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId: order.id, status: "Preparato" }),
+      });
+      if (!result || !result.success) {
+        setOrders(previousOrders);
+        alert("Errore nel riportare in preparati: " + ((result && result.error) || "sconosciuto"));
+      } else {
+        aggiornaStatoOrdineApp(order.id, "Importato").catch(() => {});
+        setPage("preparati");
+      }
+    } catch (error) {
+      setOrders(previousOrders);
+      alert("Errore di collegamento: " + String(error));
+    }
+  };
 
   const openEditOrderDialog = () => {
     if (!selectedOrder) return;
@@ -4819,8 +4848,8 @@ export default function App() {
     const conferma = window.confirm(
       `Segnare come SPEDITO l'ordine di ${order.customer || order.id}?` +
         (corriere ? `\nCorriere: ${corriere}` : "\nNessun corriere selezionato.") +
-        "\n\nViene emesso il DOCUMENTO DI TRASPORTO con il prossimo numero, e " +
-        "l'ordine NON potra' piu' tornare indietro." +
+        "\n\nSi puo' ancora tornare indietro: il documento e il punto di non " +
+        "ritorno arrivano con l'archiviazione." +
         avviso
     );
     if (!conferma) return;
@@ -9130,10 +9159,15 @@ ${isConferma
                     </div>
 
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      {/* Niente ritorno ai preparati: l'ordine spedito ha il DDT
-                          emesso. Correggere resta possibile (prezzi, colli, peso,
-                          anagrafica): quello che non si puo' e' far finta che il
-                          documento non sia uscito. */}
+                      {/* Da Spedito si torna indietro: il punto di non ritorno
+                          e' l'archiviazione. */}
+                      <button
+                        style={btnStyle("outline")}
+                        onClick={() => reopenShippedOrder(order)}
+                        title="Riporta l'ordine tra i preparati per modificarlo"
+                      >
+                        <RotateCcw size={16} /> Riporta in preparati
+                      </button>
                       <SpuntaPrezziDDT
                         attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
                         onCambia={(v) => setDdtConPrezzi(order, v)}

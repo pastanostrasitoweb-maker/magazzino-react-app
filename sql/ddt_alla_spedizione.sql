@@ -1,9 +1,17 @@
 -- Il documento di trasporto nasce con la spedizione, e da li' non si torna.
 --
--- REGOLE DI LUCA (03/08/2026):
---   1. Il DDT si genera quando l'ordine va in SPEDITO.
---   2. Da Spedito non si torna indietro in nessun modo.
---   3. Da Archiviato ancora meno.
+-- REGOLE DI LUCA (03/08, corrette il 04/08/2026):
+--   1. Il DDT nasce con l'ARCHIVIAZIONE, non con la spedizione.
+--   2. Da Spedito si torna indietro: e' ancora una fase di lavoro, capita di
+--      accorgersi di qualcosa e di dover riportare l'ordine ai preparati.
+--   3. Il punto di non ritorno e' l'ARCHIVIAZIONE: da li' il documento e'
+--      emesso e l'ordine non si disarchivia.
+--
+-- Prima il numero si staccava al passaggio a Spedito, e quello chiudeva subito
+-- la porta: troppo presto. Il numero ora si stacca in due momenti soli, con lo
+-- stesso meccanismo: quando qualcuno STAMPA il DDT (perche' lo consegna
+-- all'autista) e, se nessuno l'ha stampato, quando l'ordine si ARCHIVIA, cosi'
+-- niente finisce in archivio senza documento.
 --
 -- Perche' qui e non solo nei pulsanti: un pulsante nascosto si aggira, e
 -- soprattutto non copre le altre strade (correzione a mano, script, un'altra
