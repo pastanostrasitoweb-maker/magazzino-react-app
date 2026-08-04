@@ -2639,6 +2639,8 @@ export default function App() {
   const [lottoCercando, setLottoCercando] = useState(false);
   // Numeri DDT rimasti senza ordine: servono a SPIEGARE i buchi nel registro.
   const [ddtAnnullati, setDdtAnnullati] = useState([]);
+  // Quale ordine archiviato si sta correggendo, senza disarchiviarlo.
+  const [correggiOrderId, setCorreggiOrderId] = useState("");
   // Destinazioni merci per codice cliente. Un cliente puo' avere piu' punti
   // di consegna (3-4 negozi) e chi spedisce sceglie dove mandare la merce.
   const [destinazioni, setDestinazioni] = useState({});
@@ -10078,6 +10080,40 @@ ${isConferma
                                   </div>
                                 );
                               }
+                              // Ogni voce mancante e' un PULSANTE che apre il
+                              // posto giusto per sistemarla, senza disarchiviare
+                              // niente (Luca 04/08/2026). Disarchiviare non si
+                              // puo' piu' e non serve: i dati di un ordine
+                              // archiviato restano modificabili fino all'invio
+                              // a Sibill, e' proprio quella la finestra.
+                              const apri = (voce) => {
+                                const v = voce.toLowerCase();
+                                if (v.includes("prezzo") || v.includes("iva")) {
+                                  setCorreggiOrderId(String(order.id));
+                                  return;
+                                }
+                                if (v.includes("corriere")) { setTransportModalOrderId(order.id); return; }
+                                if (v.includes("colli")) { setCorreggiOrderId(String(order.id)); return; }
+                                if (v.includes("ddt")) { generaDDT(order); return; }
+                                // tutto il resto (agente, P.IVA, indirizzo, CAP,
+                                // citta', provincia, SdI, pagamento) sta
+                                // nell'anagrafica del cliente
+                                openCompletaAnagrafica(order);
+                              };
+                              const Voce = ({ testo, grave }) => (
+                                <button
+                                  onClick={() => apri(testo)}
+                                  title="Clicca per sistemarlo"
+                                  style={{
+                                    border: "1px solid " + (grave ? "#fca5a5" : "#fcd34d"),
+                                    background: "#fff", color: grave ? "#991b1b" : "#92400e",
+                                    borderRadius: 999, padding: "3px 10px", fontSize: 12,
+                                    fontWeight: 700, cursor: "pointer", marginRight: 6, marginTop: 4,
+                                  }}
+                                >
+                                  {testo} <span style={{ opacity: 0.6 }}>✎</span>
+                                </button>
+                              );
                               return (
                                 <div style={{
                                   marginTop: 10, borderRadius: 10, padding: "8px 12px", fontSize: 12.5,
@@ -10087,16 +10123,98 @@ ${isConferma
                                   lineHeight: 1.5,
                                 }}>
                                   {m.bloccanti.length ? (
-                                    <div><b>Manca per il DDT:</b> {m.bloccanti.join(" · ")}</div>
-                                  ) : null}
-                                  {m.daCompletare.length ? (
-                                    <div style={{ opacity: m.bloccanti.length ? 0.85 : 1 }}>
-                                      <b>Da completare:</b> {m.daCompletare.join(" · ")}
+                                    <div>
+                                      <b>Manca per il DDT:</b>{" "}
+                                      {m.bloccanti.map((x) => <Voce key={x} testo={x} grave />)}
                                     </div>
                                   ) : null}
+                                  {m.daCompletare.length ? (
+                                    <div style={{ marginTop: m.bloccanti.length ? 4 : 0 }}>
+                                      <b>Da completare:</b>{" "}
+                                      {m.daCompletare.map((x) => <Voce key={x} testo={x} />)}
+                                    </div>
+                                  ) : null}
+                                  <div style={{ marginTop: 6, fontSize: 11, opacity: 0.75 }}>
+                                    Clicca la voce per sistemarla: non serve disarchiviare.
+                                  </div>
                                 </div>
                               );
                             })()}
+
+                            {/* Prezzi, sconti, IVA e colli si correggono QUI,
+                                sull'ordine archiviato. Fino a quando il DDT non
+                                parte verso Sibill (mezzanotte del giorno dopo)
+                                i dati sono ancora nostri. */}
+                            {correggiOrderId === String(order.id) ? (
+                              <div style={{
+                                marginTop: 10, border: "1px solid #dbe2ea", borderRadius: 12,
+                                padding: 12, background: "#fff",
+                              }}>
+                                <div style={{
+                                  display: "flex", alignItems: "center", gap: 10,
+                                  marginBottom: 10, flexWrap: "wrap",
+                                }}>
+                                  <b style={{ fontSize: 13, color: "#07153a" }}>Correggi senza disarchiviare</b>
+                                  <button
+                                    style={{ ...compactBtnStyle("outline"), marginLeft: "auto" }}
+                                    onClick={() => setCorreggiOrderId("")}
+                                  >
+                                    Chiudi
+                                  </button>
+                                </div>
+
+                                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: "#40516a" }}>Colli</span>
+                                  <input
+                                    style={{ ...inputStyle(), width: 90, height: 38 }}
+                                    type="number"
+                                    min="0"
+                                    value={
+                                      colliDrafts[order.id] !== undefined
+                                        ? colliDrafts[order.id]
+                                        : String(order.colli ?? "")
+                                    }
+                                    onChange={(e) =>
+                                      setColliDrafts((prev) => ({ ...prev, [order.id]: e.target.value }))
+                                    }
+                                  />
+                                  <button
+                                    style={compactBtnStyle("primary", savingColliOrderId === String(order.id))}
+                                    disabled={savingColliOrderId === String(order.id)}
+                                    onClick={() =>
+                                      saveOrderColli(
+                                        order.id,
+                                        colliDrafts[order.id] !== undefined
+                                          ? colliDrafts[order.id]
+                                          : String(order.colli ?? "")
+                                      )
+                                    }
+                                  >
+                                    Salva colli
+                                  </button>
+                                  <button
+                                    style={compactBtnStyle("outline")}
+                                    onClick={() => setTransportModalOrderId(order.id)}
+                                    title="Corriere e peso della spedizione"
+                                  >
+                                    <Truck size={15} /> Corriere e peso
+                                  </button>
+                                  <button
+                                    style={compactBtnStyle("outline")}
+                                    onClick={() => openCompletaAnagrafica(order)}
+                                    title="Anagrafica del cliente, agente compreso"
+                                  >
+                                    <Pencil size={15} /> Anagrafica e agente
+                                  </button>
+                                </div>
+
+                                <ValorizzazioneOrdine
+                                  order={order}
+                                  onSalvato={loadDataFromSheets}
+                                  listini={listiniPrezzi}
+                                />
+                              </div>
+                            ) : null}
                           </div>
 
                           {/* Ordine UNITO in un altro: si separa, non si disarchivia
@@ -10131,11 +10249,20 @@ ${isConferma
                                   comunque, il pulsante avrebbe solo mentito.
                                   Correggere si puo': i dati restano modificabili fino a
                                   quando il DDT parte verso Sibill. */}
+                              <button
+                                style={btnStyle(correggiOrderId === String(order.id) ? "primary" : "outline")}
+                                onClick={() =>
+                                  setCorreggiOrderId(correggiOrderId === String(order.id) ? "" : String(order.id))
+                                }
+                                title="Correggi prezzi, colli, corriere e anagrafica senza disarchiviare"
+                              >
+                                <Pencil size={16} /> Correggi
+                              </button>
                               <div style={{
                                 fontSize: 11.5, color: "#8a94a6", textAlign: "center",
                                 lineHeight: 1.35, maxWidth: 190,
                               }}>
-                                DDT emesso: l'ordine non torna indietro
+                                Non si disarchivia, ma i dati si correggono
                               </div>
                             </div>
                           )}
