@@ -633,6 +633,10 @@ const ANAG_FIELDS = [
   { key: "email", label: "Email" },
   { key: "telefono", label: "Telefono referente" },
   { key: "metodo_pagamento", label: "Metodo di pagamento" },
+  // Fondamentale: senza agente non si emette il DDT (Luca 04/08/2026). Sta qui
+  // e non sull'ordine perche' e' un dato del cliente: si sceglie una volta e
+  // vale per tutti i suoi ordini futuri.
+  { key: "agente_nome", label: "Agente" },
 ];
 
 // Normalizza un canale/settore grezzo verso una delle tipologie standard.
@@ -2688,6 +2692,18 @@ export default function App() {
     );
   };
 
+  // L'agente di un ordine: quello scritto sull'ordine, altrimenti quello del
+  // CLIENTE in anagrafica. L'agente e' un dato del cliente, non della singola
+  // vendita: cambia raramente e non ha senso riscriverlo ogni volta. Sull'ordine
+  // resta la possibilita' di metterne un altro, perche' capita (una vendita
+  // fatta dalla direzione, un ordine passato da un collega).
+  const agenteDi = (order) => {
+    const suOrdine = String(order?.agenteNome || "").trim();
+    if (suOrdine) return suOrdine;
+    const ov = clientiOverride[clientKeyFor(order)] || {};
+    return String(ov.agente_nome || "").trim();
+  };
+
   const anagraficaFor = (order) => {
     const { merged, ov, fonte } = effectiveCliente(order);
     // APP (o cliente a mano con override): checklist completa sul dato unito.
@@ -2729,6 +2745,10 @@ export default function App() {
     const daCompletare = [];
 
     if (!has(order?.clientId)) bloccanti.push("Codice cliente");
+    // L'agente e' fondamentale (Luca 04/08/2026): senza, la provvigione non
+    // si sa a chi va e il rapporto col cliente non ha un nome. Vale quello
+    // scritto sull'ordine, altrimenti quello del cliente in anagrafica.
+    if (!has(agenteDi(order))) bloccanti.push("Agente");
     if (!has(merged.partita_iva) && !has(cli.piva)) bloccanti.push("Partita IVA");
     if (!has(merged.indirizzo) && !has(merged.sede_legale) && !has(cli.indirizzo)) {
       bloccanti.push("Indirizzo di consegna");
@@ -2802,6 +2822,9 @@ export default function App() {
     const { merged } = effectiveCliente(order);
     const form = {};
     for (const f of ANAG_FIELDS) form[f.key] = String(merged[f.key] ?? "");
+    form.agente_id = String(merged.agente_id ?? "");
+    // Se l'ordine porta gia' un agente, il form parte da quello.
+    if (!form.agente_nome && order.agenteNome) form.agente_nome = String(order.agenteNome);
     if (!form.cap && order?.cap) form.cap = String(order.cap);
     if (!form.sede_legale && merged.indirizzo) form.sede_legale = String(merged.indirizzo);
     setAnagForm(form);
@@ -2821,6 +2844,7 @@ export default function App() {
     try {
       const payload = { chiave, operatore: authUser?.username || "" };
       for (const f of ANAG_FIELDS) payload[f.key] = anagForm[f.key] ?? "";
+      payload.agente_id = anagForm.agente_id ?? "";
       const res = await callSheetsApi({
         action: "saveClienteOverride",
         payload: JSON.stringify(payload),
@@ -4900,6 +4924,21 @@ export default function App() {
   const generaDocumento = async (order, tipo = "ddt") => {
     if (!order) return;
     const isConferma = tipo === "conferma";
+
+    // L'AGENTE si sceglie PRIMA del documento di trasporto (Luca 04/08/2026).
+    // Qui si blocca davvero, non si avvisa: una volta emesso il DDT la merce
+    // e' partita, e ricostruire dopo a chi va la provvigione vuol dire
+    // chiederlo in giro. Sulla conferma d'ordine non serve: quella si manda al
+    // cliente prima di spedire, e l'agente si puo' ancora mettere.
+    if (!isConferma && !String(agenteDi(order) || "").trim()) {
+      alert(
+        "Manca l'AGENTE, e senza non si puo' emettere il documento di trasporto.\n\n" +
+          "Scegli l'agente dall'anagrafica del cliente (resta valido per tutti i suoi " +
+          "ordini futuri) oppure sull'ordine, se questa vendita fa eccezione."
+      );
+      openCompletaAnagrafica(order);
+      return;
+    }
     const anag = anagraficaFor(order);
     if (anag.stato === "ko") {
       if (ANAGRAFICA_BLOCCA) {
@@ -12157,6 +12196,33 @@ ${isConferma
                               ))}
                               {fuoriLista ? (
                                 <option value={attuale}>{attuale} (vecchio, da sistemare)</option>
+                              ) : null}
+                            </select>
+                          );
+                        })() : f.key === "agente_nome" ? (() => {
+                          // Lista chiusa come il pagamento: a testo libero
+                          // "Gastaldi", "A. Gastaldi" e "andrea gastaldi"
+                          // diventano tre agenti diversi, e le provvigioni non
+                          // tornano piu'.
+                          const attuale = String(anagForm[f.key] ?? "");
+                          const nomi = agenti.map((a) => a.Nome).filter(Boolean);
+                          const fuoriLista = attuale && !nomi.includes(attuale);
+                          return (
+                            <select
+                              style={{ ...inputStyle(), borderColor: missing ? "#fca5a5" : undefined }}
+                              value={attuale}
+                              onChange={(e) => {
+                                const nome = e.target.value;
+                                const a = agenti.find((x) => x.Nome === nome);
+                                setAnagForm((prev) => ({
+                                  ...prev, agente_nome: nome, agente_id: a ? a.Agente_Id : "",
+                                }));
+                              }}
+                            >
+                              <option value="">&mdash; Scegli l&rsquo;agente &mdash;</option>
+                              {nomi.map((n) => (<option key={n} value={n}>{n}</option>))}
+                              {fuoriLista ? (
+                                <option value={attuale}>{attuale} (non in elenco)</option>
                               ) : null}
                             </select>
                           );
