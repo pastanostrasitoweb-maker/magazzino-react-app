@@ -2743,6 +2743,18 @@ export async function callSheetsApi(params = {}) {
         if (error) return failure(error);
         return { success: true, annullati: data || [] };
       }
+      case "evadiParziale": {
+        // Spacca l'ordine: quello che ha i lotti va avanti, il resto nasce
+        // come ordine nuovo "Da preparare". Tutto dentro una funzione sul
+        // database: a meta' strada resterebbe merce fuori dai conti.
+        const pp = parsePayload(params);
+        const idOrdine = String(pp.orderId || pp.idOrdine || "").trim();
+        if (!idOrdine) return { success: false, error: "orderId mancante" };
+        const { data, error } = await supabase.rpc("evadi_parziale", { p_id_ordine: idOrdine });
+        if (error) return failure(error);
+        const r = Array.isArray(data) ? data[0] : data;
+        return { success: true, ...r };
+      }
       case "tracciaLotti": {
         // Dove e' finito un lotto. Si cerca per ARTICOLO (codice o nome) o
         // direttamente per lotto: chi ha in mano un cartone legge il lotto,

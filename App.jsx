@@ -4581,6 +4581,53 @@ export default function App() {
   // qualcuno lo stampa per darlo all'autista.
   // `unarchiveOrder` invece NON torna: un ordine archiviato ha il documento
   // emesso. Il divieto vive nel database (sql/ddt_alla_spedizione.sql).
+  // EVADI SOLO IL PARZIALE (Luca 04/08/2026). Quello che ha i lotti assegnati
+  // parte; il resto diventa un ordine nuovo che resta fra i "da preparare".
+  const evadiParziale = async (order) => {
+    if (!order) return;
+    const righe = order.lines || [];
+    const daFare = righe.filter((l) => Number(l.qtyToAssign || 0) > 0);
+    const pronte = righe.filter((l) => Number(l.assignedQty || 0) > 0);
+    if (!daFare.length) {
+      alert("Su questo ordine e' gia' assegnato tutto: non c'e' nessun residuo da staccare.");
+      return;
+    }
+    if (!pronte.length) {
+      alert(
+        "Su questo ordine non e' assegnato niente.\n\n" +
+          "Assegna prima i lotti a quello che vuoi far partire: il resto restera' indietro da solo."
+      );
+      return;
+    }
+    const residui = daFare
+      .map((l) => `${l.productName}: ${Number(l.qtyToAssign || 0)}`)
+      .join("\n- ");
+    if (!window.confirm(
+      `Far partire solo quello che ha i lotti?\n\n` +
+        `Resta indietro:\n- ${residui}\n\n` +
+        `Il residuo diventa un ordine NUOVO per ${order.customer || "questo cliente"}, ` +
+        `che trovi fra i "Da preparare" con gli stessi prezzi e lo stesso corriere.`
+    )) return;
+
+    try {
+      const r = await callSheetsApi({
+        action: "evadiParziale",
+        payload: JSON.stringify({ orderId: order.id }),
+      });
+      if (!r || !r.success) {
+        alert("Non sono riuscito a staccare il residuo: " + ((r && r.error) || "sconosciuto"));
+        return;
+      }
+      await loadDataFromSheets();
+      alert(
+        `Fatto.\n\nQuesto ordine ora contiene solo la merce coi lotti.\n` +
+          `Il residuo (${r.pezzi_residui} pezzi) e' l'ordine ${r.id_residuo}, fra i Da preparare.`
+      );
+    } catch (e) {
+      alert("Errore di collegamento: " + String(e));
+    }
+  };
+
   const cercaLotti = async (q) => {
     const testo = String(q || "").trim();
     setLottoScelto("");
@@ -8823,9 +8870,26 @@ ${isConferma
                           : "Segna pronto"}
                       </button>
                     ) : (
-                      <button style={btnStyle("outline", true)} disabled>
-                        <Clock size={18} /> Completa i lotti
-                      </button>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        {/* Non tutto e' assegnato. Invece di aspettare la merce
+                            che manca, si fa partire quello che c'e': il resto
+                            diventa un ordine nuovo che resta fra i Da preparare.
+                            Compare solo se qualcosa E' stato assegnato: senza,
+                            "evadi il parziale" vorrebbe dire spostare tutto e
+                            lasciare qui il vuoto. (Luca 04/08/2026) */}
+                        {selectedOrder.lines?.some((l) => Number(l.assignedQty || 0) > 0) ? (
+                          <button
+                            style={btnStyle("primary")}
+                            onClick={() => evadiParziale(selectedOrder)}
+                            title="Fa partire solo la merce coi lotti assegnati. Il resto diventa un ordine nuovo."
+                          >
+                            <CheckCircle2 size={18} /> Evadi solo il parziale
+                          </button>
+                        ) : null}
+                        <button style={btnStyle("outline", true)} disabled>
+                          <Clock size={18} /> Completa i lotti
+                        </button>
+                      </div>
                     )}
                   </div>
                 </>
