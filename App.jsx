@@ -2617,6 +2617,8 @@ export default function App() {
   const [lottoRighe, setLottoRighe] = useState([]);
   const [lottoScelto, setLottoScelto] = useState("");
   const [lottoCercando, setLottoCercando] = useState(false);
+  // Numeri DDT rimasti senza ordine: servono a SPIEGARE i buchi nel registro.
+  const [ddtAnnullati, setDdtAnnullati] = useState([]);
   // Destinazioni merci per codice cliente. Un cliente puo' avere piu' punti
   // di consegna (3-4 negozi) e chi spedisce sceglie dove mandare la merce.
   const [destinazioni, setDestinazioni] = useState({});
@@ -3186,6 +3188,11 @@ export default function App() {
   useEffect(() => {
     if ((page === "archivio" || page === "ddt") && !archivedLoaded && !loadingArchive) {
       loadArchivedOrders();
+    }
+    if (page === "ddt") {
+      callSheetsApi({ action: "ddtAnnullati" })
+        .then((r) => setDdtAnnullati(r && r.success ? r.annullati || [] : []))
+        .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, archivedLoaded]);
@@ -6044,13 +6051,37 @@ ${isConferma
     const wasPreparato =
       String(orderToDelete?.status || "").trim().toLowerCase() === "preparato";
 
+    // Se il DDT e' gia' stato emesso, cancellare l'ordine lascia un BUCO nella
+    // numerazione: quel numero esiste su un foglio che qualcuno ha in mano, e
+    // da noi non esistera' piu'. Va detto prima, non scoperto dal
+    // commercialista fra tre mesi (Luca 04/08/2026).
+    const ddt = String(orderToDelete?.ddtNumero || "").trim();
+    const avvisoDdt = ddt
+      ? `\n\n⚠️ ATTENZIONE: per questo ordine e' gia' stato emesso il DDT ${ddt}.\n` +
+        `Eliminandolo, il numero ${ddt} restera' un BUCO nella numerazione: il documento ` +
+        `esiste su carta ma non piu' qui, e nessuno sapra' spiegare quel salto.\n` +
+        `Se il documento non e' mai uscito dall'azienda si puo' fare. Se e' gia' partito col ` +
+        `camion o e' arrivato al cliente, meglio correggere l'ordine invece di eliminarlo.`
+      : "";
+
     // Conferma esplicita: messaggi diversi a seconda dello stato.
     const conferma = window.confirm(
-      wasPreparato
+      (wasPreparato
         ? "Questo ordine era PREPARATO. Eliminandolo, le quantità scaricate vengono RIMESSE in magazzino sui lotti coinvolti. Procedo?"
         : "Vuoi eliminare davvero questo ordine? Eventuali assegnazioni vengono rimosse, lo stock fisico non e' stato ancora scalato."
+      ) + avvisoDdt
     );
     if (!conferma) return;
+
+    // Con un DDT emesso si chiede due volte: la prima conferma la si da' per
+    // abitudine, la seconda si legge.
+    if (ddt) {
+      const doppia = window.confirm(
+        `Confermi di voler lasciare il buco al numero ${ddt}?\n\n` +
+          "Annulla se preferisci correggere l'ordine invece di eliminarlo."
+      );
+      if (!doppia) return;
+    }
 
     try {
       const result = await callSheetsApi({
@@ -9543,8 +9574,13 @@ ${isConferma
                   color: registroDDT.buchi.length ? "#991b1b" : "#15803d", lineHeight: 1.3,
                 }}>
                   {registroDDT.buchi.length
-                    ? registroDDT.buchi.slice(0, 20).join(", ") +
-                      (registroDDT.buchi.length > 20 ? ` … e altri ${registroDDT.buchi.length - 20}` : "")
+                    ? registroDDT.buchi.slice(0, 12).map((n) => {
+                        // Un buco spiegato e' un fatto; un buco muto e' un
+                        // problema. Se il numero e' stato annullato lo si dice.
+                        const a = ddtAnnullati.find((x) => String(x.ddt_numero) === String(n));
+                        return a ? `${n} (${a.cliente || a.motivo || "annullato"})` : `${n} (?)`;
+                      }).join(" · ") +
+                      (registroDDT.buchi.length > 12 ? ` … e altri ${registroDDT.buchi.length - 12}` : "")
                     : "Nessuno"}
                 </div>
               </div>

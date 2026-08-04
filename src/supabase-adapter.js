@@ -2733,6 +2733,16 @@ export async function callSheetsApi(params = {}) {
         return await registraClienteRegistro(params);
       case "getStoricoCliente":
         return await getStoricoCliente(params);
+      case "ddtAnnullati": {
+        // I numeri rimasti senza ordine, con il perche'. Servono al Registro
+        // DDT per spiegare i buchi invece di mostrarli e basta.
+        const { data, error } = await supabase
+          .from("ddt_annullati")
+          .select("*")
+          .order("ddt_numero");
+        if (error) return failure(error);
+        return { success: true, annullati: data || [] };
+      }
       case "tracciaLotti": {
         // Dove e' finito un lotto. Si cerca per ARTICOLO (codice o nome) o
         // direttamente per lotto: chi ha in mano un cartone legge il lotto,
