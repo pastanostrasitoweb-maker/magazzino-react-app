@@ -1545,17 +1545,37 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
 
           {righe.map((l) => {
             const a = suggerimentoPer(l);
+            // La riga con un problema si vede subito, in rosso, mentre la si
+            // lavora: senza, l'errore compariva solo dopo, in fondo, e diceva
+            // "1 riga senza aliquota" senza dire QUALE (Luca 04/08/2026).
+            const bz = bozza[l.lineId] || {};
+            const senzaPrezzo = !(Number(bz.prezzo ?? l.prezzoUnitario) > 0);
+            const senzaIva = String(bz.iva ?? (l.ivaPct ?? "")).trim() === "";
+            const inErrore = senzaPrezzo || senzaIva;
+            const perche = [senzaPrezzo ? "manca il prezzo" : "", senzaIva ? "manca l'aliquota IVA" : ""]
+              .filter(Boolean).join(" e ");
             return (
               <div
                 key={l.lineId}
+                title={inErrore ? `Da sistemare: ${perche}` : undefined}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 110px 80px 90px",
+                  gridTemplateColumns: "1fr 110px 80px 80px 90px",
                   gap: 8,
                   alignItems: "center",
+                  ...(inErrore
+                    ? {
+                        background: "#fef2f2",
+                        border: "1px solid #fecaca",
+                        borderRadius: 10,
+                        padding: "6px 8px",
+                        margin: "0 -8px",
+                      }
+                    : {}),
                 }}
               >
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: inErrore ? "#991b1b" : "#0f172a" }}>
+                  {inErrore ? <span title={perche}>⚠️ </span> : null}
                   {l.productName}
                   <span style={{ color: "#6b7280", fontWeight: 600 }}> · {l.qtyOrdered}</span>
                   {a && a.ultimoPrezzo != null ? (
@@ -2798,26 +2818,34 @@ export default function App() {
     // Stesso ragionamento che fa generaDDT: vale il corriere scelto, e in
     // mancanza quello consigliato dal preventivo. Segnalarlo quando il
     // documento lo scriverebbe comunque sarebbe un falso allarme.
-    if (
-      !has(order?.courier) &&
-      !has(order?.courierSpedizione) &&
-      !has(order?.transport?.consigliato?.corriere)
-    ) {
-      daCompletare.push("Corriere");
+    // Il corriere deve essere SEMPRE chiaro (Luca 04/08/2026): un DDT senza
+    // vettore non dice chi ha portato la merce, e se il collo si perde non si
+    // sa nemmeno a chi chiederne conto. Quello consigliato dal preventivo non
+    // basta: e' un suggerimento, non una scelta.
+    if (!has(order?.courier) && !has(order?.courierSpedizione)) {
+      bloccanti.push("Corriere");
     }
     if (!order?.colliIsManual) daCompletare.push("Colli non confermati");
     if (!has(merged.metodo_pagamento)) daCompletare.push("Metodo di pagamento");
 
     // Valorizzazione: e' il pezzo che serve per fatturare, non per spedire.
     const righe = order?.lines || [];
-    const aZero = righe.filter((l) => !(Number(l.prezzoUnitario) > 0)).length;
+    // I messaggi dicono QUALE articolo, non quante righe. "1 riga senza
+    // aliquota" costringe a cercarla a mano fra quindici; "senza aliquota IVA:
+    // Basi pizza gelo" si corregge subito. (Luca 04/08/2026)
+    const nomi = (lista) => {
+      const n = lista.map((l) => String(l.productName || "").trim()).filter(Boolean);
+      if (n.length <= 3) return n.join(", ");
+      return n.slice(0, 3).join(", ") + ` e altri ${n.length - 3}`;
+    };
+    const aZero = righe.filter((l) => !(Number(l.prezzoUnitario) > 0));
     if (righe.length === 0) bloccanti.push("Nessuna riga");
-    else if (aZero === righe.length) daCompletare.push(`Tutte le ${righe.length} righe senza prezzo`);
-    else if (aZero > 0) daCompletare.push(`${aZero} righe su ${righe.length} senza prezzo`);
+    else if (aZero.length === righe.length) daCompletare.push(`Nessun prezzo su tutte le ${righe.length} righe`);
+    else if (aZero.length > 0) daCompletare.push(`Senza prezzo: ${nomi(aZero)}`);
     // Aliquota mancante: va detto, non lasciato al valore di ripiego. Sul
     // documento diventerebbe 4% in silenzio, e su un ravioli sarebbe 10%.
-    const senzaIva = righe.filter((l) => l.prezzoUnitario > 0 && l.ivaPct == null).length;
-    if (senzaIva > 0) daCompletare.push(`${senzaIva} righe senza aliquota IVA`);
+    const senzaIva = righe.filter((l) => l.prezzoUnitario > 0 && l.ivaPct == null);
+    if (senzaIva.length > 0) daCompletare.push(`Senza aliquota IVA: ${nomi(senzaIva)}`);
 
     return { bloccanti, daCompletare, totale: bloccanti.length + daCompletare.length };
   };
@@ -4926,6 +4954,15 @@ export default function App() {
         ? "\n\nATTENZIONE, sul documento mancano:\n- " +
           [...mancanti.bloccanti, ...mancanti.daCompletare].join("\n- ")
         : "";
+    if (!String(corriere || "").trim()) {
+      alert(
+        "Manca il CORRIERE, e senza non si puo' segnare l'ordine come spedito.\n\n" +
+          "Scegline uno dalle opzioni di trasporto, oppure scrivilo a mano se e' " +
+          "un corriere locale, un ritiro del cliente o un mezzo nostro."
+      );
+      setTransportModalOrderId(order.id);
+      return;
+    }
     const conferma = window.confirm(
       `Segnare come SPEDITO l'ordine di ${order.customer || order.id}?` +
         (corriere ? `\nCorriere: ${corriere}` : "\nNessun corriere selezionato.") +
@@ -5215,7 +5252,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 .consegna{display:flex;gap:10px;margin-bottom:12px}
 .consegna>div{flex:1;border:2.5px solid #111;border-radius:6px;padding:10px 12px;text-align:center}
 .consegna span{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#333;font-weight:bold}
-.consegna strong{display:block;font-size:34px;line-height:1.1;margin-top:4px;letter-spacing:-.01em}
+.consegna strong{display:block;font-size:27px;line-height:1.15;margin-top:3px;letter-spacing:-.01em}
 /* Anagrafica in due colonne: a sinistra chi e', a destra dove va. Ogni dato
    con la sua etichetta, cosi' si trova a colpo d'occhio. */
 .anagrafica{display:flex;gap:12px;margin-bottom:12px;align-items:stretch}
@@ -9260,7 +9297,27 @@ ${isConferma
                         <div style={{ fontSize: 18, fontWeight: 950, color: "#07153a" }}>
                           {order.customer || "Ordine senza nome"}
                         </div>
-                        <span style={badgeStyle("dark")}>🚚 {order.courier || "spedito"}</span>
+                        {/* Il corriere dev'essere SEMPRE chiaro (Luca 04/08/2026).
+                            Prima, quando mancava, il bollino scriveva "spedito":
+                            che non e' un corriere, ma sembra un corriere, e uno
+                            ci passa sopra senza accorgersene. Ora si legge anche
+                            il corriere della spedizione, e se davvero non c'e'
+                            lo si dice in rosso. */}
+                        {(() => {
+                          const c = order.courier || order.courierSpedizione || "";
+                          if (c) {
+                            return <span style={badgeStyle("dark")}>🚚 {c.toUpperCase()}</span>;
+                          }
+                          return (
+                            <span
+                              style={{ ...badgeStyle("danger"), cursor: "pointer" }}
+                              title="Nessun corriere assegnato: clicca per sceglierlo"
+                              onClick={() => setTransportModalOrderId(order.id)}
+                            >
+                              ⚠️ CORRIERE MANCANTE
+                            </span>
+                          );
+                        })()}
                         {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
                         {order.daBollinare ? (
                           <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
