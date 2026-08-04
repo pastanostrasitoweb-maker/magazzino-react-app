@@ -5180,6 +5180,14 @@ export default function App() {
         // documento consegnato al cliente sembra merce regalata.
         const cellaPrezzo = prezzo > 0 ? eur(prezzo) : "da definire";
         const cellaTotale = prezzo > 0 ? eur(totale) : "—";
+        // L'aliquota su OGNI riga: sullo stesso documento convivono il 4% e
+        // il 10%, e chi controlla la fattura deve vedere quale sta dove senza
+        // ricostruirlo. Se manca si scrive, non si mette un valore di ripiego.
+        const cellaIva = line.ivaPct == null
+          ? `<span style="color:#b91c1c">da definire</span>`
+          : (Number(line.ivaPct) === 0
+              ? `0%${line.naturaIva ? " " + esc(line.naturaIva) : ""}`
+              : eur(Number(line.ivaPct)) + "%");
         return (
           `<tr>${base}` +
           `<td style="text-align:right">${cellaPrezzo}</td>` +
@@ -5187,6 +5195,7 @@ export default function App() {
              [sconto > 0 ? eur(sconto) + "%" : "", sconto2 > 0 ? eur(sconto2) + "%" : ""]
                .filter(Boolean).join(" + ") || ""
            }</td>` +
+          `<td style="text-align:right">${cellaIva}</td>` +
           `<td style="text-align:right">${cellaTotale}</td></tr>`
         );
       })
@@ -5197,12 +5206,23 @@ export default function App() {
       0
     );
     const intestazionePrezzi = conPrezzi
-      ? `<th style="text-align:right">Prezzo</th><th style="text-align:right">Sconto</th><th style="text-align:right">Totale</th>`
+      ? `<th style="text-align:right">Prezzo</th><th style="text-align:right">Sconto</th>` +
+        `<th style="text-align:right">IVA</th><th style="text-align:right">Totale</th>`
       : "";
     const riepilogoPrezzi = conPrezzi
       ? `<div class="riepilogo">
-           <div><span>Imponibile</span><b>${eur(imponibile)} €</b></div>
-           <div><span>IVA</span><b>${eur(iva)} €</b></div>
+           ${Object.entries(perAliquota)
+             .sort((a, b) => Number(a[0]) - Number(b[0]))
+             .map(([a, imp]) =>
+               // Una riga per aliquota, con imponibile e imposta: e' il
+               // riepilogo che sta su ogni fattura, e serve a chi controlla
+               // per rifare i conti senza sommare le righe a mano.
+               `<div><span>Imponibile ${eur(Number(a))}%</span><b>${eur(imp)} €</b></div>` +
+               `<div><span>IVA ${eur(Number(a))}%</span><b>${eur(imp * Number(a) / 100)} €</b></div>`
+             ).join("")}
+           <div style="border-top:1px solid #ccc;margin-top:4px;padding-top:4px">
+             <span>Totale imponibile</span><b>${eur(imponibile)} €</b></div>
+           <div><span>Totale IVA</span><b>${eur(iva)} €</b></div>
            <div class="grande"><span>Totale documento</span><b>${eur(imponibile + iva)} €</b></div>
          </div>`
       : "";
@@ -5265,7 +5285,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 .anagrafica .luogo{font-size:15px;line-height:1.4;font-weight:bold}
 .anagrafica .secondaria{font-weight:normal;color:#444;font-size:13px}
 .anagrafica .nota{margin-top:8px;font-size:11.5px;color:#777;font-style:italic}
-.riepilogo{margin-top:10px;margin-left:auto;width:280px;font-size:13px}
+.riepilogo{margin-top:10px;margin-left:auto;width:300px;font-size:13px}
 .riepilogo>div{display:flex;justify-content:space-between;padding:3px 0}
 .riepilogo .grande{border-top:1.5px solid #111;margin-top:4px;padding-top:6px;font-size:16px}
 .nota-conferma{margin-top:16px;padding:10px 12px;border:1px solid #999;border-radius:6px;
