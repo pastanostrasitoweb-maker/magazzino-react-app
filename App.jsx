@@ -27,6 +27,8 @@ import {
   Mic,
   Send,
   Truck,
+  ChevronDown,
+  MoreHorizontal,
 } from "lucide-react";
 
 // Storico: backend Apps Script (JSONP) usato fino al 2026-06-09, ora sostituito
@@ -391,6 +393,87 @@ const MOTIVI_FERMO = [
 // di completarla.
 // Per tornare a bloccare basta rimettere true (nessun'altra modifica serve).
 const ANAGRAFICA_BLOCCA = false;
+
+// Un bottone che apre un elenco di scelte, invece di N bottoni in fila.
+// Nato perche' la barra in alto era arrivata a 16 voci e quella dell'ordine a
+// 7: tutto allo stesso peso, quindi niente in evidenza (Luca 03/08/2026).
+// Le voci si passano come array: { label, icona, onClick, attivo, badge,
+// pericolo, separatoreSopra }.
+function MenuScelte({ titolo, icona, voci, variante = "soft", attivo = false, larghezza = 260, badge = null }) {
+  const [aperto, setAperto] = useState(false);
+  const box = useRef(null);
+
+  // Si chiude cliccando fuori o con Esc: un menu che resta aperto addosso
+  // agli altri comandi e' peggio dei bottoni che voleva sostituire.
+  useEffect(() => {
+    if (!aperto) return;
+    const fuori = (e) => { if (box.current && !box.current.contains(e.target)) setAperto(false); };
+    const esc = (e) => { if (e.key === "Escape") setAperto(false); };
+    document.addEventListener("mousedown", fuori);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", fuori);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [aperto]);
+
+  const visibili = (voci || []).filter(Boolean);
+  if (!visibili.length) return null;
+
+  return (
+    <div ref={box} style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        style={{ ...btnStyle(attivo ? "primary" : variante), borderRadius: 999, whiteSpace: "nowrap" }}
+        onClick={() => setAperto((v) => !v)}
+        aria-expanded={aperto}
+      >
+        {icona}
+        {titolo}
+        {badge != null && badge > 0 ? (
+          <span style={{ ...badgeStyle("warning"), marginLeft: 2 }}>{badge}</span>
+        ) : null}
+        <ChevronDown size={16} style={{ transform: aperto ? "rotate(180deg)" : "none", transition: "transform 120ms" }} />
+      </button>
+
+      {aperto ? (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 60,
+            minWidth: larghezza, background: "#fff", borderRadius: 16,
+            border: "1px solid #e5edf6", boxShadow: "0 18px 40px rgba(7,21,58,.16)",
+            padding: 6, display: "grid", gap: 2,
+          }}
+        >
+          {visibili.map((v, i) => (
+            <React.Fragment key={v.label + i}>
+              {v.separatoreSopra ? (
+                <div style={{ height: 1, background: "#eef2f7", margin: "4px 6px" }} />
+              ) : null}
+              <button
+                style={{
+                  display: "flex", alignItems: "center", gap: 10, width: "100%",
+                  padding: "10px 12px", borderRadius: 10, border: "none", cursor: "pointer",
+                  textAlign: "left", fontSize: 14, fontWeight: v.attivo ? 900 : 700,
+                  background: v.attivo ? "#eef4ff" : "transparent",
+                  color: v.pericolo ? "#b91c1c" : v.attivo ? "#07153a" : "#40516a",
+                }}
+                onMouseEnter={(e) => { if (!v.attivo) e.currentTarget.style.background = "#f6f9fc"; }}
+                onMouseLeave={(e) => { if (!v.attivo) e.currentTarget.style.background = "transparent"; }}
+                onClick={() => { setAperto(false); v.onClick(); }}
+              >
+                {v.icona}
+                <span style={{ flex: 1 }}>{v.label}</span>
+                {v.badge != null && v.badge > 0 ? (
+                  <span style={badgeStyle(v.badgeTipo || "warning")}>{v.badge}</span>
+                ) : null}
+              </button>
+            </React.Fragment>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 // Spunta "prezzi sul DDT". La preferenza sta sul CLIENTE, non sul documento:
 // si spunta una volta e vale per tutti i suoi documenti, anche quelli futuri.
@@ -3607,6 +3690,30 @@ export default function App() {
         .sort((a, b) => String(b.dataPrepared || b.date || "").localeCompare(String(a.dataPrepared || a.date || ""))),
     [ordersWithComputed]
   );
+
+  // Le quattro tappe dell'ordine, in sequenza: arriva, si prepara, parte, si
+  // archivia. Sono le uniche che restano sempre in vista, perche' sono il
+  // lavoro di tutti i giorni. Tenerle qui, e non sparse nel JSX, vuol dire che
+  // per aggiungerne una si tocca una riga sola.
+  const TAPPE = useMemo(() => [
+    {
+      id: "ordini", etichetta: "Ordini", etichettaProduzione: "Da preparare",
+      icona: <ClipboardList size={18} />, ancheProduzione: true, contatore: 0,
+    },
+    {
+      id: "preparati", etichetta: "Preparati", etichettaProduzione: "Pronti",
+      icona: <CheckCircle2 size={18} />, ancheProduzione: true,
+      contatore: preparedOrders.length, tipoBadge: "success",
+    },
+    {
+      id: "spediti", etichetta: "Spediti",
+      icona: <span style={{ fontSize: 16 }}>🚚</span>,
+      contatore: speditiOrders.length, tipoBadge: "success",
+    },
+    {
+      id: "archivio", etichetta: "Archivio", icona: <Archive size={18} />, contatore: 0,
+    },
+  ], [preparedOrders.length, speditiOrders.length]);
 
   const selectedOrder =
     activeOrders.find((order) => String(order.id) === String(selectedOrderId)) ||
@@ -7258,245 +7365,106 @@ ${isConferma
                 flex: "1 1 auto",
               }}
             >
-              <button
-                style={{
-                  ...btnStyle(page === "ordini" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
-                }}
-                onClick={() => setPage("ordini")}
-              >
-                <ClipboardList size={18} /> {isProduzione ? "Da preparare" : "Ordini"}
-              </button>
+              {/* LE TAPPE. L'ordine passa di qui in sequenza: arriva, si
+                  prepara, parte, si archivia. Restano quattro pastiglie in
+                  vista perche' sono il lavoro di tutti i giorni.
+                  Tutto il resto sta nei menu qui accanto: prima erano 16 voci
+                  tutte allo stesso peso, quindi niente era in evidenza. */}
+              {TAPPE.filter((t) => !t.soloAdmin || isAdmin)
+                    .filter((t) => !isProduzione || t.ancheProduzione)
+                    .map((t) => (
+                <button
+                  key={t.id}
+                  style={{
+                    ...btnStyle(page === t.id ? "primary" : "soft"),
+                    borderRadius: 999,
+                    minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
+                  }}
+                  onClick={() => setPage(t.id)}
+                >
+                  {t.icona} {isProduzione && t.etichettaProduzione ? t.etichettaProduzione : t.etichetta}
+                  {t.contatore > 0 ? (
+                    <span style={{ ...badgeStyle(t.tipoBadge || "warning"), marginLeft: 6 }}>
+                      {t.contatore}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
 
+              {/* Le viste laterali: si consultano, non ci si lavora dentro
+                  tutto il giorno. Il badge sul bottone tiene visibile quello
+                  che chiede attenzione anche a menu chiuso. */}
+              <MenuScelte
+                titolo="Altro"
+                larghezza={280}
+                attivo={["ordini-app", "fermi", "ddt", "magazzino", "bollati", "prodotti", "foto-bolle"].includes(page)}
+                badge={(isProduzione ? 0 : ordiniApp.length) + stoppedCount}
+                voci={[
+                  !isProduzione && {
+                    label: "Ordini da APP", icona: <Smartphone size={16} />,
+                    attivo: page === "ordini-app", badge: ordiniApp.length, badgeTipo: "danger",
+                    onClick: () => { setPage("ordini-app"); loadOrdiniApp(); },
+                  },
+                  {
+                    label: "Ordini fermi", icona: <AlertTriangle size={16} />,
+                    attivo: page === "fermi", badge: stoppedCount,
+                    onClick: () => setPage("fermi"),
+                  },
+                  !isProduzione && {
+                    label: "Registro DDT", icona: <span style={{ fontSize: 15 }}>📄</span>,
+                    attivo: page === "ddt", separatoreSopra: true,
+                    onClick: () => setPage("ddt"),
+                  },
+                  {
+                    label: "Magazzino", icona: <Boxes size={16} />,
+                    attivo: page === "magazzino",
+                    onClick: () => setPage("magazzino"),
+                  },
+                  {
+                    label: "Bollati", icona: <span style={{ fontSize: 15 }}>🏷️</span>,
+                    attivo: page === "bollati", badge: bollatiTotali.lotti,
+                    badgeTipo: bollatiTotali.scaduti > 0 ? "danger" : "warning",
+                    onClick: () => setPage("bollati"),
+                  },
+                  !isProduzione && {
+                    label: "Prodotti", icona: <Package size={16} />,
+                    attivo: page === "prodotti",
+                    onClick: () => setPage("prodotti"),
+                  },
+                  isAdmin && {
+                    label: "Foto bolle", icona: <Camera size={16} />,
+                    attivo: page === "foto-bolle", separatoreSopra: true,
+                    onClick: () => setPage("foto-bolle"),
+                  },
+                ]}
+              />
+
+              {/* Tutto quello che CREA qualcosa, in un posto solo. */}
               {!isProduzione && (
-              <button
-                style={{
-                  ...btnStyle(page === "ordini-app" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
-                  position: "relative",
-                }}
-                onClick={() => { setPage("ordini-app"); loadOrdiniApp(); }}
-              >
-                <Smartphone size={18} /> Ordini da APP
-                {ordiniApp.length > 0 && (
-                  <span
-                    style={{
-                      marginLeft: 6, background: "#dc2626", color: "#fff",
-                      borderRadius: 999, fontSize: 12, fontWeight: 800,
-                      minWidth: 20, height: 20, display: "inline-flex",
-                      alignItems: "center", justifyContent: "center", padding: "0 5px",
-                    }}
-                  >
-                    {ordiniApp.length}
-                  </span>
-                )}
-              </button>
-              )}
-
-              {!isProduzione && (
-              <button
-                style={{
-                  ...btnStyle(page === "prodotti" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
-                }}
-                onClick={() => setPage("prodotti")}
-              >
-                <Package size={18} /> Prodotti
-              </button>
-              )}
-
-              {/* Visibile anche alla PRODUZIONE: e' lei che produce le commesse
-                  ad hoc per cui l'ordine e' fermo, quindi deve leggere il motivo. */}
-              <button
-                style={{
-                  ...btnStyle(page === "fermi" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 138,
-                  position: "relative",
-                }}
-                onClick={() => setPage("fermi")}
-              >
-                <AlertTriangle size={18} /> Ordini fermi
-                {stoppedCount > 0 ? (
-                  <span
-                    style={{
-                      marginLeft: 6,
-                      background: "#f59e0b",
-                      color: "#fff",
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: 900,
-                      minWidth: 20,
-                      height: 20,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: "0 5px",
-                    }}
-                  >
-                    {stoppedCount}
-                  </span>
-                ) : null}
-              </button>
-
-              <button
-                style={{
-                  ...btnStyle(page === "preparati" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
-                }}
-                onClick={() => setPage("preparati")}
-              >
-                <CheckCircle2 size={18} /> {isProduzione ? "Pronti" : "Preparati"}
-              </button>
-
-              {!isProduzione && (
-              <button
-                style={{
-                  ...btnStyle(page === "spediti" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
-                }}
-                onClick={() => setPage("spediti")}
-              >
-                🚚 Spediti
-                {speditiOrders.length > 0 ? (
-                  <span
-                    style={{
-                      background: "#16a34a",
-                      color: "#fff",
-                      borderRadius: 999,
-                      padding: "2px 8px",
-                      fontSize: 12,
-                      fontWeight: 900,
-                    }}
-                  >
-                    {speditiOrders.length}
-                  </span>
-                ) : null}
-              </button>
-              )}
-
-              {!isProduzione && (
-              <button
-                style={{
-                  ...btnStyle(page === "archivio" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
-                }}
-                onClick={() => setPage("archivio")}
-              >
-                <Archive size={18} /> Archivio
-              </button>
-              )}
-
-              {/* Registro DDT: la vista dell'amministrazione sui documenti di
-                  trasporto emessi, per numero, cliente o data. */}
-              {!isProduzione && (
-              <button
-                style={{
-                  ...btnStyle(page === "ddt" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
-                }}
-                onClick={() => setPage("ddt")}
-              >
-                📄 DDT
-              </button>
-              )}
-
-              <button
-                style={{
-                  ...btnStyle(page === "magazzino" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 158,
-                }}
-                onClick={() => setPage("magazzino")}
-              >
-                <Boxes size={18} /> Magazzino
-              </button>
-
-              {/* Riga bollati: cosa sta scadendo (< 30 gg) e si regala. */}
-              <button
-                style={{
-                  ...btnStyle(page === "bollati" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 148,
-                }}
-                onClick={() => setPage("bollati")}
-              >
-                🏷️ Bollati
-                {bollatiTotali.lotti > 0 && (
-                  <span style={{ ...badgeStyle(bollatiTotali.scaduti > 0 ? "danger" : "warning"), marginLeft: 6 }}>
-                    {bollatiTotali.lotti}
-                  </span>
-                )}
-              </button>
-
-              {isProduzione && (
-              <button
-                style={{
-                  ...btnStyle(page === "foto-bolle" ? "primary" : "soft"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 148,
-                }}
-                onClick={() => setPage("foto-bolle")}
-              >
-                <Camera size={18} /> Foto bolle
-              </button>
-              )}
-
-              {!isProduzione && (
-              <button
-                style={{
-                  ...btnStyle("primary"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "100%" : 154,
-                }}
-                onClick={() => setOrderDialogOpen(true)}
-              >
-                <Plus size={18} /> Nuovo ordine
-              </button>
-              )}
-
-              {isAdmin && (
-                <>
-                  <button
-                    style={{
-                      ...btnStyle("soft"),
-                      borderRadius: 999,
-                      minWidth: isSmallLayout ? "calc(50% - 5px)" : 158,
-                    }}
-                    onClick={() => setProductDialogOpen(true)}
-                  >
-                    <Plus size={18} /> Nuovo prodotto
-                  </button>
-
-                  <button
-                    style={{
-                      ...btnStyle("soft"),
-                      borderRadius: 999,
-                      minWidth: isSmallLayout ? "calc(50% - 5px)" : 142,
-                    }}
-                    onClick={() => setLotDialogOpen(true)}
-                  >
-                    <Boxes size={18} /> Carica lotto
-                  </button>
-
-                  <button
-                    style={{
-                      ...btnStyle("soft"),
-                      borderRadius: 999,
-                      minWidth: isSmallLayout ? "calc(50% - 5px)" : 142,
-                    }}
-                    onClick={() => { startNewClient(); setClientSearch(""); setClientDialogOpen(true); }}
-                  >
-                    <Users size={18} /> Clienti
-                  </button>
-                </>
+                <MenuScelte
+                  titolo="Nuovo"
+                  variante="primary"
+                  icona={<Plus size={18} />}
+                  larghezza={240}
+                  voci={[
+                    {
+                      label: "Ordine", icona: <ClipboardList size={16} />,
+                      onClick: () => setOrderDialogOpen(true),
+                    },
+                    isAdmin && {
+                      label: "Prodotto", icona: <Package size={16} />,
+                      onClick: () => setProductDialogOpen(true),
+                    },
+                    isAdmin && {
+                      label: "Lotto", icona: <Boxes size={16} />,
+                      onClick: () => setLotDialogOpen(true),
+                    },
+                    isAdmin && {
+                      label: "Cliente", icona: <Users size={16} />, separatoreSopra: true,
+                      onClick: () => { startNewClient(); setClientSearch(""); setClientDialogOpen(true); },
+                    },
+                  ]}
+                />
               )}
             </div>
 
@@ -7509,6 +7477,9 @@ ${isConferma
                 flex: isSmallLayout ? "1 1 100%" : "0 0 auto",
               }}
             >
+              {/* Aggiorna resta un bottone suo: si usa spesso e deve stare
+                  a un clic. Il resto (admin) e' roba che si tocca due volte al
+                  giorno e sta bene dentro il menu. */}
               <button
                 style={{
                   ...btnStyle("outline"),
@@ -7516,33 +7487,27 @@ ${isConferma
                   minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
                 }}
                 onClick={loadDataFromSheets}
+                title="Ricarica i dati"
               >
                 <RefreshCw size={18} /> Aggiorna
               </button>
 
-              {!isAdmin && !isProduzione ? (
-                <button
-                  style={{
-                    ...btnStyle("outline"),
-                    borderRadius: 999,
-                    minWidth: isSmallLayout ? "calc(50% - 5px)" : 112,
-                  }}
-                  onClick={() => setAdminDialogOpen(true)}
-                >
-                  <Lock size={18} /> Admin
-                </button>
-              ) : isAdmin ? (
-                <button
-                  style={{
-                    ...btnStyle("outline"),
-                    borderRadius: 999,
-                    minWidth: isSmallLayout ? "calc(50% - 5px)" : 132,
-                  }}
-                  onClick={exitAdminMode}
-                >
-                  <Lock size={18} /> Esci admin
-                </button>
-              ) : null}
+              <MenuScelte
+                titolo=""
+                variante="outline"
+                icona={<MoreHorizontal size={18} />}
+                larghezza={220}
+                voci={[
+                  !isAdmin && !isProduzione && {
+                    label: "Entra in modalita' Admin", icona: <Lock size={16} />,
+                    onClick: () => setAdminDialogOpen(true),
+                  },
+                  isAdmin && {
+                    label: "Esci da Admin", icona: <Lock size={16} />,
+                    onClick: exitAdminMode,
+                  },
+                ]}
+              />
             </div>
           </div>
         </div>
@@ -7741,12 +7706,43 @@ ${isConferma
                               👤 {selectedOrder.agenteNome}
                             </span>
                           ) : null}
-                          <span
-                            style={badgeStyle(paymentBadgeFor(selectedOrder, gestionale).kind)}
-                            title={paymentBadgeFor(selectedOrder, gestionale).auto ? "Calcolato in automatico dallo scaduto TeamSystem. I bottoni OK/KO lo sovrascrivono; ri-cliccando il bottone attivo si torna all'automatico." : undefined}
-                          >
-                            {paymentBadgeFor(selectedOrder, gestionale).label}
-                          </span>
+                          {/* Il badge del pagamento E' il comando: dice lo stato
+                              (compreso lo scaduto calcolato dal Cashflow) e si
+                              apre per cambiarlo. Prima erano tre cose separate,
+                              il badge piu' due bottoni OK/KO, che dicevano la
+                              stessa cosa in due posti. */}
+                          {(() => {
+                            const info = paymentBadgeFor(selectedOrder, gestionale);
+                            const busy = savingPaymentOrderId === String(selectedOrder.id);
+                            if (!isAdmin) {
+                              return <span style={badgeStyle(info.kind)}>{info.label}</span>;
+                            }
+                            return (
+                              <MenuScelte
+                                titolo={info.label}
+                                variante={info.kind === "success" ? "success" : info.kind === "danger" ? "danger" : "outline"}
+                                larghezza={250}
+                                voci={[
+                                  {
+                                    label: "Pagamento ricevuto", icona: <ThumbsUp size={16} />,
+                                    attivo: selectedOrder.paymentStatus === "ok",
+                                    onClick: () => { if (!busy) setOrderPayment(selectedOrder.id, "ok"); },
+                                  },
+                                  {
+                                    label: "Pagamento NON ricevuto", icona: <ThumbsDown size={16} />,
+                                    attivo: selectedOrder.paymentStatus === "ko", pericolo: true,
+                                    onClick: () => { if (!busy) setOrderPayment(selectedOrder.id, "ko"); },
+                                  },
+                                  info.auto && {
+                                    label: "Lascia decidere al Cashflow", icona: <RefreshCw size={16} />,
+                                    separatoreSopra: true,
+                                    attivo: !selectedOrder.paymentStatus,
+                                    onClick: () => { if (!busy) setOrderPayment(selectedOrder.id, selectedOrder.paymentStatus || "ok"); },
+                                  },
+                                ]}
+                              />
+                            );
+                          })()}
                           {(() => {
                             const a = anagraficaFor(selectedOrder);
                             // Sempre cliccabile: l'anagrafica si deve poter
@@ -7776,71 +7772,30 @@ ${isConferma
                               </button>
                             );
                           })()}
+                          {/* Tipologia e pagamento erano SETTE bottoni per due
+                              sole informazioni, e sono cose che si mettono una
+                              volta sola. Adesso ognuna e' un menu che mostra
+                              il valore attuale: si legge a colpo d'occhio e si
+                              cambia in due clic. (Luca 03/08/2026) */}
                           {(() => {
                             const t = tipologiaFor(selectedOrder);
                             const chiave = clientKeyFor(selectedOrder);
                             const busy = savingOverride === chiave;
-                            if (t) {
-                              return (
-                                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                                  <span style={badgeStyle("dark")} title="Tipologia cliente">🏷️ {t}</span>
-                                  {TIPOLOGIE.filter((x) => x !== t).map((x) => (
-                                    <button
-                                      key={x}
-                                      style={compactBtnStyle("outline", busy)}
-                                      disabled={busy}
-                                      onClick={() => assignTipologia(selectedOrder, x)}
-                                      title={"Cambia in " + x}
-                                    >
-                                      {x}
-                                    </button>
-                                  ))}
-                                </span>
-                              );
-                            }
                             return (
-                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                                <span style={{ color: "#66758b", fontSize: 13, fontWeight: 700 }}>Tipologia:</span>
-                                {TIPOLOGIE.map((x) => (
-                                  <button
-                                    key={x}
-                                    style={compactBtnStyle("dark", busy)}
-                                    disabled={busy}
-                                    onClick={() => assignTipologia(selectedOrder, x)}
-                                    title={"Assegna " + x}
-                                  >
-                                    {x}
-                                  </button>
-                                ))}
-                              </span>
+                              <MenuScelte
+                                titolo={t ? `🏷️ ${t}` : "🏷️ Tipologia?"}
+                                variante={t ? "dark" : "warning"}
+                                larghezza={200}
+                                voci={TIPOLOGIE.map((x) => ({
+                                  label: x,
+                                  attivo: x === t,
+                                  onClick: () => { if (!busy) assignTipologia(selectedOrder, x); },
+                                }))}
+                              />
                             );
                           })()}
-                          {isAdmin ? (
-                            <div style={{ display: "flex", gap: 8 }}>
-                              <button
-                                style={compactBtnStyle(
-                                  selectedOrder.paymentStatus === "ok" ? "success" : "outline",
-                                  savingPaymentOrderId === String(selectedOrder.id)
-                                )}
-                                disabled={savingPaymentOrderId === String(selectedOrder.id)}
-                                onClick={() => setOrderPayment(selectedOrder.id, "ok")}
-                                title="Segna pagamento OK"
-                              >
-                                <ThumbsUp size={16} /> OK
-                              </button>
-                              <button
-                                style={compactBtnStyle(
-                                  selectedOrder.paymentStatus === "ko" ? "danger" : "outline",
-                                  savingPaymentOrderId === String(selectedOrder.id)
-                                )}
-                                disabled={savingPaymentOrderId === String(selectedOrder.id)}
-                                onClick={() => setOrderPayment(selectedOrder.id, "ko")}
-                                title="Segna pagamento non ricevuto"
-                              >
-                                <ThumbsDown size={16} /> KO
-                              </button>
-                            </div>
-                          ) : null}
+
+
                         </div>
 
                         {/* Stesso cliente con un altro ordine in uscita oggi:
@@ -8077,18 +8032,17 @@ ${isConferma
                         </div>
                       </div>
 
+                      {/* UNA azione in vista, il resto nel menu. Aggiungere una
+                          riga e' quello che si fa cento volte al giorno;
+                          modificare, fermare, stampare ed eliminare si fanno
+                          una volta ogni tanto. Prima erano tutti bottoni
+                          uguali in fila, quindi si cercava ogni volta quello
+                          giusto. (Luca 03/08/2026) */}
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         {isAdmin ? (
-                          <>
-                            <button style={btnStyle("outline")} onClick={openEditOrderDialog}>
-                              <Pencil size={16} /> Modifica
-                            </button>
-
-                            <button style={btnStyle("primary")} onClick={openAddLineDialog}>
-                              <Plus size={16} /> Riga
-                            </button>
-
-                          </>
+                          <button style={btnStyle("primary")} onClick={openAddLineDialog}>
+                            <Plus size={16} /> Riga
+                          </button>
                         ) : (
                           // Meglio un bottone che spiega di un bottone che sparisce.
                           <button
@@ -8100,30 +8054,31 @@ ${isConferma
                           </button>
                         )}
 
-                        {String(selectedOrder.status || "").trim().toLowerCase() !== "preparato" ? (
-                          <button style={btnStyle("warning")} onClick={markOrderStopped}>
-                            <AlertTriangle size={16} /> Fermo
-                          </button>
-                        ) : null}
-
-                        {/* Conferma d'ordine: quello che si manda al cliente
-                            PRIMA di spedire, per fargli controllare quantita' e
-                            prezzi. Non consuma nessun numero di DDT: non e' un
-                            documento fiscale. La produzione non la vede, come i
-                            prezzi. */}
-                        {!isProduzione ? (
-                          <button
-                            style={btnStyle("outline")}
-                            onClick={() => generaConfermaOrdine(selectedOrder)}
-                            title="Stampa la conferma d'ordine con prezzi, da mandare al cliente"
-                          >
-                            📄 Conferma d'ordine
-                          </button>
-                        ) : null}
-
-                        <button style={btnStyle("outline")} onClick={() => deleteOrder(selectedOrder.id)}>
-                          <Trash2 size={16} /> Elimina ordine
-                        </button>
+                        <MenuScelte
+                          titolo="Azioni"
+                          variante="outline"
+                          larghezza={250}
+                          voci={[
+                            isAdmin && {
+                              label: "Modifica ordine", icona: <Pencil size={16} />,
+                              onClick: openEditOrderDialog,
+                            },
+                            !isProduzione && {
+                              label: "Conferma d'ordine", icona: <span style={{ fontSize: 15 }}>📄</span>,
+                              onClick: () => generaConfermaOrdine(selectedOrder),
+                            },
+                            String(selectedOrder.status || "").trim().toLowerCase() !== "preparato" && {
+                              label: "Metti in fermo", icona: <AlertTriangle size={16} />,
+                              separatoreSopra: true,
+                              onClick: markOrderStopped,
+                            },
+                            {
+                              label: "Elimina ordine", icona: <Trash2 size={16} />,
+                              pericolo: true, separatoreSopra: true,
+                              onClick: () => deleteOrder(selectedOrder.id),
+                            },
+                          ]}
+                        />
                       </div>
                     </div>
                   </div>
