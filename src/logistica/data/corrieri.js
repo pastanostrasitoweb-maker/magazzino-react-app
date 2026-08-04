@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // Anagrafica corrieri DEMO dell'app logistica.
 // Confermata da Luca 2026-07-22.
 //
@@ -36,7 +41,11 @@ export const CORRIERI = [
     id: 'biotuscia',
     nome: 'Bio Tuscia Trasporti',
     servizio: 'fresh',
-    temperature: ['fresh'],
+    // Il surgelato viaggia col fresco dentro il poly box col ghiaccio secco:
+    // vale per tutti i refrigerati, quindi anche per Bio Tuscia. Ometterlo la
+    // escludeva dal frozen e sui Castelli Romani (dove passa ogni giorno ed e'
+    // la piu' economica) l'operatore non se la vedeva nemmeno proporre.
+    temperature: ['fresh', 'frozen-collo'],
     regionale: true,
     descrizione:
       'Refrigerato ATP regionale (VT, RM+Castelli, RI, TR, GR, fino a LT), già "Tacos". Servizio AxB: ritiro il giorno prima, consegna il giorno dopo al 90%. Contatto: Fabrizio Pompei +39 392 4436872.',

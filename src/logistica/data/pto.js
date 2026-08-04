@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // Listino PTO DEMO (Prezzi/Tempi Consegna) per corriere.
 //
 // STRUTTURA REALE: l'Excel di Luca arriva a grana CAP x corriere x scaglione
@@ -70,7 +75,11 @@ export const TARIFFE = {
 // poly box (stirolo) 7 EUR + ghiaccio secco >= 5 EUR per box.
 export const COSTI_FROZEN = {
   polyBox: 7.0,
-  ghiaccioSecco: 5.0
+  ghiaccioSecco: 5.0,
+  // Quanti kg di prodotto stanno in una scatola. Serve a stimare quante ne
+  // servono quando l'agente non l'ha dichiarato: l'imballo si paga a scatola,
+  // e un ordine da 40 kg non viaggia in una sola.
+  capacitaBoxKg: 12
 }
 
 // Costo consegna di un corriere per (cap, peso). null se il corriere non ha

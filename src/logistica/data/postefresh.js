@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // POSTE FRESH (MLK Fresh S.r.l. / postegofresh) — corriere refrigerato.
 // Dati reali dal contratto MLK Fresh firmato. Servizio a temperatura
 // controllata (-1 / +7 gradi), alimenti freschi e secchi. Tempi 24/48 ore.

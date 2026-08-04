@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // BIO TUSCIA TRASPORTI — corriere refrigerato ATP (fresh), REGIONALE.
 // Dati reali dall'accordo ricevuto 2026-03-12 (email + 4 listini allegati).
 // Contatto: Fabrizio Pompei +39 392 4436872 · biotusciatrasporti@gmail.com
@@ -93,8 +98,9 @@ export function zonaBiotuscia(cap) {
       return 'umbria'
     case '58': // Grosseto / Bassa Maremma
       return 'toscana'
-    case '04': // Latina, previo accordo
-      return 'latina'
+    // Latina (04): esclusa dalla proposta automatica. "Fino a Latina" era solo
+    // "previo accordo" e non viene realmente usata (es. Gaeta 04024). Va gestita
+    // a mano se mai serve. Correzione Luca 2026-07-22.
     default:
       return null // fuori copertura Biotuscia
   }

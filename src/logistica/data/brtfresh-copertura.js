@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // Copertura BRT Fresh: CAP serviti (localita raggiunte Luglio 2026).
 // Fonte: BRT-fresh_Localita_Luglio-2026.xlsx (857 CAP, 36 province).
 // Se il CAP destinazione non e' qui, BRT Fresh non consegna: il preventivo lo esclude.

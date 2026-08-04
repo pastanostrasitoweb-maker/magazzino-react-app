@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // Mappa CAP (prime 2 cifre) -> REGIONE italiana.
 // Usata dai listini per regione: Stef (griglia tariffaria) e Poste Fresh (zone).
 // I nomi regione combaciano con le chiavi della griglia Stef.

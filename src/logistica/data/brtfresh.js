@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // BRT FRESH (brt@smart fresh) — corriere refrigerato NAZIONALE.
 // Dati reali dal contratto tariffario firmato (BRT S.p.A. / GEOPOST).
 // Filiale Roma Aurelio · rif. Dario Valla dario.valla@brt.it.

@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // STEF Italia S.p.A. — corriere refrigerato NAZIONALE (offerta tariffaria trasporti nazionali).
 // Dati reali dal contratto "OFFERTA TARIFFARIA TRASPORTI NAZIONALI" (dal 01/12/2023).
 // Cliente spedisce da ROMA (RM). Servizio fresco (categoria froid FR).

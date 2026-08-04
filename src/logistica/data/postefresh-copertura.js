@@ -1,3 +1,8 @@
+// COPIA GENERATA — non modificare qui.
+// Il file buono sta in app-logistica; questa copia si aggiorna con
+//   node scripts/sync-motore.mjs --scrivi
+// Modificarlo a mano fa tornare i due applicativi a dire prezzi diversi.
+
 // Copertura Poste Fresh (MLK Fresh / postegofresh): CAP serviti.
 // Fonte: POSTE FRESH 19 06.xlsx. Se il CAP non e' qui, Poste Fresh non consegna.
 
