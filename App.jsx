@@ -392,6 +392,35 @@ const MOTIVI_FERMO = [
 // Per tornare a bloccare basta rimettere true (nessun'altra modifica serve).
 const ANAGRAFICA_BLOCCA = false;
 
+// Spunta "prezzi sul DDT". La preferenza sta sul CLIENTE, non sul documento:
+// si spunta una volta e vale per tutti i suoi documenti, anche quelli futuri.
+// Certi clienti li vogliono vedere, altri non devono vederli affatto (tipico
+// quando a ricevere e' un magazzino terzo). Richiesta di Luca, 03/08/2026.
+function SpuntaPrezziDDT({ attivo, onCambia, compatto = false }) {
+  return (
+    <label
+      title="Vale per questo cliente su tutti i suoi documenti, non solo su questo"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer",
+        fontSize: compatto ? 11.5 : 12.5, fontWeight: 700,
+        color: attivo ? "#15803d" : "#66758b",
+        border: "1px solid " + (attivo ? "#86efac" : "#dbe2ea"),
+        background: attivo ? "#f0fdf4" : "#fff",
+        borderRadius: 8, padding: compatto ? "4px 8px" : "6px 10px",
+        whiteSpace: "nowrap", userSelect: "none",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={!!attivo}
+        onChange={(e) => onCambia(e.target.checked)}
+        style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#15803d" }}
+      />
+      Prezzi sul DDT
+    </label>
+  );
+}
+
 // Peso dell'ordine, sempre correggibile a mano. Il calcolo somma solo le righe
 // di magazzino con peso noto: un articolo fuori magazzino pesa 0 e l'ordine
 // risulta piu' leggero di com'e'. Chi spedisce ha la bilancia davanti.
@@ -2640,6 +2669,10 @@ export default function App() {
     if (righe.length === 0) bloccanti.push("Nessuna riga");
     else if (aZero === righe.length) daCompletare.push(`Tutte le ${righe.length} righe senza prezzo`);
     else if (aZero > 0) daCompletare.push(`${aZero} righe su ${righe.length} senza prezzo`);
+    // Aliquota mancante: va detto, non lasciato al valore di ripiego. Sul
+    // documento diventerebbe 4% in silenzio, e su un ravioli sarebbe 10%.
+    const senzaIva = righe.filter((l) => l.prezzoUnitario > 0 && l.ivaPct == null).length;
+    if (senzaIva > 0) daCompletare.push(`${senzaIva} righe senza aliquota IVA`);
 
     return { bloccanti, daCompletare, totale: bloccanti.length + daCompletare.length };
   };
@@ -4567,6 +4600,40 @@ export default function App() {
     }
   };
 
+  // Prezzi sul DDT, si' o no. E' una preferenza DEL CLIENTE, non della singola
+  // stampa: certi vogliono vedere gli importi sul documento di trasporto, altri
+  // non devono vederli affatto (tipico quando a ricevere e' un magazzino terzo
+  // o un punto vendita che non tratta i prezzi). Si spunta una volta e vale per
+  // tutti i suoi documenti, anche quelli futuri. Richiesta di Luca, 03/08/2026.
+  const setDdtConPrezzi = async (order, attivo) => {
+    const chiave = clientKeyFor(order);
+    if (!chiave) {
+      alert(
+        "Non riesco a identificare il cliente (manca sia la P.IVA sia la ragione sociale), " +
+          "quindi non so a chi attaccare la preferenza."
+      );
+      return;
+    }
+    const prima = clientiOverride;
+    setClientiOverride((p) => ({
+      ...p,
+      [chiave]: { ...(p[chiave] || {}), chiave, ddt_con_prezzi: !!attivo },
+    }));
+    try {
+      const r = await callSheetsApi({
+        action: "saveClienteOverride",
+        payload: JSON.stringify({ chiave, ddt_con_prezzi: !!attivo, operatore: authUser?.user || "" }),
+      });
+      if (!r || !r.success) {
+        setClientiOverride(prima);
+        alert("Errore nel salvare la preferenza: " + ((r && r.error) || "sconosciuto"));
+      }
+    } catch (e) {
+      setClientiOverride(prima);
+      alert("Errore di collegamento nel salvare la preferenza.");
+    }
+  };
+
   const setOrderCourier = async (orderId, corriere) => {
     if (!orderId) return;
     const previousOrders = orders;
@@ -4720,11 +4787,27 @@ export default function App() {
     };
     const corriere =
       order.courier || order.courierSpedizione || order.transport?.consigliato?.corriere || "";
-    const oggi = new Date().toLocaleDateString("it-IT");
+    // La data del DOCUMENTO, non quella di oggi. Sembra un dettaglio e non lo
+    // e': ristampare un DDT il giorno dopo ne cambiava la data, e un documento
+    // fiscale con due date diverse a seconda di quando lo stampi non sta in
+    // piedi. Vale il giorno in cui la merce e' uscita.
+    const dataDoc = order.dataPrepared || order.date || null;
+    const oggi = dataDoc
+      ? new Date(dataDoc).toLocaleDateString("it-IT")
+      : new Date().toLocaleDateString("it-IT");
     // Mappa lotto: codice + scadenza, per riportarli nella descrizione riga.
     const lotById = Object.fromEntries(
       lots.map((l) => [String(l.id), { code: l.lot || "", expiry: l.expiry || "" }])
     );
+    // Prezzi sul documento: e' una preferenza del CLIENTE (ddt_con_prezzi
+    // sull'override), non della singola stampa. Certi li vogliono vedere, altri
+    // non devono vederli: dipende da chi riceve la merce.
+    const conPrezzi = !!(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi;
+    const eur = (n) =>
+      Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    let imponibile = 0;
+    const perAliquota = {};
     const righeHtml = (order.lines || [])
       .map((line) => {
         // Codice interno REALE del prodotto (dal catalogo), non l'id/riga.
@@ -4746,16 +4829,61 @@ export default function App() {
           .filter(Boolean);
         const lottoStr = lottiParts.join(" · ");
         const descr = esc(line.productName || "") + (lottoStr ? ` — Lotto: ${esc(lottoStr)}` : "");
-        return `<tr><td>${esc(codice)}</td><td>${descr}</td><td style="text-align:right">${line.qtyOrdered}</td></tr>`;
+        const base = `<td>${esc(codice)}</td><td>${descr}</td><td style="text-align:right">${line.qtyOrdered}</td>`;
+        if (!conPrezzi) return `<tr>${base}</tr>`;
+
+        const prezzo = Number(line.prezzoUnitario || 0);
+        const sconto = Number(line.scontoPct || 0);
+        const totale = Number(line.qtyOrdered || 0) * prezzo * (1 - sconto / 100);
+        imponibile += totale;
+        const aliq = Number(line.ivaPct ?? 4);
+        perAliquota[aliq] = (perAliquota[aliq] || 0) + totale;
+        // Prezzo mancante: si scrive "da definire", non zero. Uno zero su un
+        // documento consegnato al cliente sembra merce regalata.
+        const cellaPrezzo = prezzo > 0 ? eur(prezzo) : "da definire";
+        const cellaTotale = prezzo > 0 ? eur(totale) : "—";
+        return (
+          `<tr>${base}` +
+          `<td style="text-align:right">${cellaPrezzo}</td>` +
+          `<td style="text-align:right">${sconto > 0 ? eur(sconto) + "%" : ""}</td>` +
+          `<td style="text-align:right">${cellaTotale}</td></tr>`
+        );
       })
       .join("");
-    const anagRows = [
-      dest.insegna ? `<b>Insegna:</b> ${esc(dest.insegna)}` : "",
-      dest.pagamento ? `<b>Pagamento:</b> ${esc(dest.pagamento)}` : "",
-      dest.codiceUnivoco ? `<b>Codice SdI:</b> ${esc(dest.codiceUnivoco)}` : "",
-      dest.pec ? `<b>PEC:</b> ${esc(dest.pec)}` : "",
-      dest.email ? `<b>Email:</b> ${esc(dest.email)}` : "",
-    ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+
+    const iva = Object.entries(perAliquota).reduce(
+      (s, [a, imp]) => s + imp * (Number(a) / 100),
+      0
+    );
+    const intestazionePrezzi = conPrezzi
+      ? `<th style="text-align:right">Prezzo</th><th style="text-align:right">Sconto</th><th style="text-align:right">Totale</th>`
+      : "";
+    const riepilogoPrezzi = conPrezzi
+      ? `<div class="riepilogo">
+           <div><span>Imponibile</span><b>${eur(imponibile)} €</b></div>
+           <div><span>IVA</span><b>${eur(iva)} €</b></div>
+           <div class="grande"><span>Totale documento</span><b>${eur(imponibile + iva)} €</b></div>
+         </div>`
+      : "";
+    // Anagrafica del destinatario: ogni dato con la sua etichetta, su righe
+    // separate. Prima era una frase unica di seguito ("Insegna: X · Pagamento:
+    // Y · Codice SdI: Z...") e chi doveva leggere un dato preciso doveva
+    // cercarlo dentro la riga. Su un documento che si consegna a mano non va.
+    const riga = (etichetta, valore) =>
+      valore ? `<div><span>${esc(etichetta)}</span><b>${esc(valore)}</b></div>` : "";
+    const datiFiscali = [
+      riga("Ragione sociale", dest.ragione),
+      riga("Insegna", dest.insegna && dest.insegna !== dest.ragione ? dest.insegna : ""),
+      riga("Partita IVA", dest.piva),
+      riga("Codice SdI", dest.codiceUnivoco),
+      riga("PEC", dest.pec),
+      riga("Email", dest.email),
+      riga("Pagamento", dest.pagamento),
+    ].filter(Boolean).join("");
+    const localita = [
+      esc(dest.cap),
+      esc(dest.citta) + (dest.provincia ? ` (${esc(dest.provincia)})` : ""),
+    ].filter((x) => x.trim()).join(" ");
     // Orario di scarico, giorno di chiusura e telefono vanno GRANDI, in un
     // riquadro tutto loro (richiesta di Luca, 03/08/2026): sono le tre cose che
     // l'autista deve leggere al volo dal furgone. Sepolte nella riga
@@ -4781,16 +4909,44 @@ table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid 
 th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 .firma{display:flex;gap:40px;margin-top:40px}.firma div{flex:1;border-top:1px solid #111;padding-top:6px;font-size:12px}
 .consegna{display:flex;gap:10px;margin-bottom:12px}
-.consegna>div{flex:1;border:2px solid #111;border-radius:6px;padding:8px 12px;text-align:center}
-.consegna span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#444}
-.consegna strong{display:block;font-size:26px;line-height:1.15;margin-top:2px}
+.consegna>div{flex:1;border:2.5px solid #111;border-radius:6px;padding:10px 12px;text-align:center}
+.consegna span{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#333;font-weight:bold}
+.consegna strong{display:block;font-size:34px;line-height:1.1;margin-top:4px;letter-spacing:-.01em}
+/* Anagrafica in due colonne: a sinistra chi e', a destra dove va. Ogni dato
+   con la sua etichetta, cosi' si trova a colpo d'occhio. */
+.anagrafica{display:flex;gap:12px;margin-bottom:12px;align-items:stretch}
+.anagrafica .riquadro{flex:1;border:1px solid #999;border-radius:6px;padding:10px 12px}
+.anagrafica h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#555;
+  margin:0 0 6px;padding-bottom:4px;border-bottom:1px solid #ddd}
+.campi>div{display:flex;gap:10px;padding:2px 0;font-size:13px;line-height:1.35}
+.campi span{flex:0 0 108px;color:#555}
+.campi b{flex:1;word-break:break-word}
+.anagrafica .luogo{font-size:15px;line-height:1.4;font-weight:bold}
+.anagrafica .secondaria{font-weight:normal;color:#444;font-size:13px}
+.anagrafica .nota{margin-top:8px;font-size:11.5px;color:#777;font-style:italic}
+.riepilogo{margin-top:10px;margin-left:auto;width:280px;font-size:13px}
+.riepilogo>div{display:flex;justify-content:space-between;padding:3px 0}
+.riepilogo .grande{border-top:1.5px solid #111;margin-top:4px;padding-top:6px;font-size:16px}
 @media print{.noprint{display:none}}</style></head><body>
 <div class="top"><div><h1>GLUTEN FREE EXPERIENCE SRL</h1><div style="font-size:12px">Documento di Trasporto (D.d.T.) — D.P.R. 472/96</div></div>
 <div style="text-align:right"><div style="font-size:18px;font-weight:bold">${numero}</div><div>Data: ${oggi}</div></div></div>
-<div class="box"><b>Destinatario</b><br>${esc(dest.ragione)}<br>${esc(dest.indirizzo)}<br>${esc(dest.cap)} ${esc(dest.citta)}${dest.provincia ? " (" + esc(dest.provincia) + ")" : ""}${sedeDiversa ? "<br><span style='color:#555'>Sede legale: " + esc(dest.sedeLegale) + "</span>" : ""}<br>${dest.piva ? "P.IVA: " + esc(dest.piva) : ""}${anagRows ? "<br>" + anagRows : ""}</div>
+<div class="anagrafica">
+  <div class="riquadro">
+    <h2>Destinatario</h2>
+    <div class="campi">${datiFiscali}</div>
+  </div>
+  <div class="riquadro">
+    <h2>Sede di consegna</h2>
+    <div class="luogo">${esc(dest.indirizzo) || "&mdash;"}<br>${localita || "&mdash;"}</div>
+    ${sedeDiversa
+      ? `<h2 style="margin-top:10px">Sede legale</h2><div class="luogo secondaria">${esc(dest.sedeLegale)}</div>`
+      : `<div class="nota">La sede legale coincide con quella di consegna.</div>`}
+  </div>
+</div>
 ${consegnaHtml}
 <div class="box"><b>Trasporto a mezzo:</b> ${esc(corriere) || "vettore"} · <b>Causale:</b> Vendita · <b>Porto:</b> franco · <b>Ordine:</b> ${esc(order.id)}${dest.pagamento ? " · <b>Pagamento:</b> " + esc(dest.pagamento) : ""}</div>
-<table><thead><tr><th>Codice</th><th>Descrizione (lotto e scadenza)</th><th style="text-align:right">Qta</th></tr></thead><tbody>${righeHtml}</tbody></table>
+<table><thead><tr><th>Codice</th><th>Descrizione (lotto e scadenza)</th><th style="text-align:right">Qta</th>${intestazionePrezzi}</tr></thead><tbody>${righeHtml}</tbody></table>
+${riepilogoPrezzi}
 <div class="tot"><span>Colli: ${order.colli ?? ""}</span><span>Peso lordo: ${fmtKg(order.pesoTotale)} kg</span></div>
 <div class="firma"><div>Firma conducente</div><div>Firma destinatario</div></div>
 <button class="noprint" onclick="window.print()" style="margin-top:24px;padding:10px 18px;font-size:14px">Stampa</button>
@@ -8584,6 +8740,11 @@ ${consegnaHtml}
                             </button>
                           ) : null}
 
+                          <SpuntaPrezziDDT
+                            attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
+                            onCambia={(v) => setDdtConPrezzi(order, v)}
+                            compatto
+                          />
                           <button
                             style={btnStyle("outline")}
                             onClick={() => generaDDT(order)}
@@ -8882,6 +9043,10 @@ ${consegnaHtml}
                           emesso. Correggere resta possibile (prezzi, colli, peso,
                           anagrafica): quello che non si puo' e' far finta che il
                           documento non sia uscito. */}
+                      <SpuntaPrezziDDT
+                        attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
+                        onCambia={(v) => setDdtConPrezzi(order, v)}
+                      />
                       <button
                         style={btnStyle("outline")}
                         onClick={() => generaDDT(order)}
@@ -9218,12 +9383,19 @@ ${consegnaHtml}
                         )}
                       </div>
                     </div>
-                    <button
-                      style={{ ...btnStyle("outline"), whiteSpace: "nowrap" }}
-                      onClick={() => generaDDT(order)}
-                    >
-                      📄 Vedi DDT
-                    </button>
+                    <div style={{ display: "grid", gap: 6, justifyItems: "stretch" }}>
+                      <button
+                        style={{ ...btnStyle("outline"), whiteSpace: "nowrap" }}
+                        onClick={() => generaDDT(order)}
+                      >
+                        📄 Vedi DDT
+                      </button>
+                      <SpuntaPrezziDDT
+                        attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
+                        onCambia={(v) => setDdtConPrezzi(order, v)}
+                        compatto
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -9438,6 +9610,11 @@ ${consegnaHtml}
                               >
                                 📄 {order.ddtNumero ? "Vedi DDT" : "Genera DDT"}
                               </button>
+                              <SpuntaPrezziDDT
+                                attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
+                                onCambia={(v) => setDdtConPrezzi(order, v)}
+                                compatto
+                              />
                               {/* Niente Disarchivia. Un ordine archiviato ha il DDT
                                   emesso: e' un documento fiscale, non si annulla
                                   facendolo sparire (regola di Luca 03/08/2026, deroga

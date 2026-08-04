@@ -1071,6 +1071,10 @@ async function saveClienteOverride(params) {
   for (const f of OVERRIDE_CLIENTE_FIELDS) {
     if (p[f] !== undefined) row[f] = p[f] === null ? null : String(p[f]);
   }
+  // Fuori dal ciclo perche' e' un booleano: passato da String() diventerebbe
+  // "false", che in JavaScript e' vero. Un cliente si ritroverebbe i prezzi
+  // sul documento proprio dopo averli tolti.
+  if (p.ddt_con_prezzi !== undefined) row.ddt_con_prezzi = !!p.ddt_con_prezzi;
   row.operatore = p.operatore || "";
   row.aggiornato_il = new Date().toISOString();
   const { data, error } = await supabase
@@ -1705,8 +1709,36 @@ async function addOrderLine(params) {
     .select()
     .maybeSingle();
   if (error) return failure(error);
+
+  // Prezzo, sconto e IVA li mette il database, pescando dallo storico del
+  // cliente e poi dai listini (sql/valorizza_ordine.sql). Regola di Luca
+  // (03/08/2026): "non si puo' mettere tutto a mano, e anche l'IVA".
+  // Non tocca le righe gia' valorizzate, quindi il prezzo passato qui sopra
+  // resta quello. Se fallisce la riga si salva lo stesso: meglio una riga da
+  // valorizzare che una riga persa.
+  let valorizzazione = null;
+  try {
+    const { data: v } = await supabase.rpc("valorizza_ordine", {
+      p_id_ordine: String(idOrdine),
+      p_forza: false,
+    });
+    valorizzazione = Array.isArray(v) ? v[0] : v;
+  } catch (_) {}
+
   await ricalcolaImponibile(idOrdine);
-  return { success: true, lineId: String(idRiga), riga: data };
+  // Rilegge la riga: l'RPC potrebbe averle appena messo prezzo e IVA, e chi
+  // chiama deve vedere i valori veri, non quelli di un istante prima.
+  const { data: aggiornata } = await supabase
+    .from("righe_ordine")
+    .select("*")
+    .eq("id_riga", String(idRiga))
+    .maybeSingle();
+  return {
+    success: true,
+    lineId: String(idRiga),
+    riga: aggiornata || data,
+    valorizzazione,
+  };
 }
 
 async function updateOrderLine(params) {
