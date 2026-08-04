@@ -1,4 +1,4 @@
--- Il documento di trasporto nasce con la spedizione, e da li' non si torna.
+-- Il documento di trasporto nasce con l'ARCHIVIAZIONE, e da li' non si torna.
 --
 -- REGOLE DI LUCA (03/08, corrette il 04/08/2026):
 --   1. Il DDT nasce con l'ARCHIVIAZIONE, non con la spedizione.
@@ -18,15 +18,18 @@
 -- app sullo stesso database). Un DDT emesso e' un documento fiscale: la
 -- garanzia deve stare dove stanno i dati.
 --
--- NOTA sulla regola precedente. Fino a oggi valeva "ogni azione reversibile,
+-- NOTA sulla regola precedente. Fino al 02/08 valeva "ogni azione reversibile,
 -- il torna-indietro sempre disponibile": e' il motivo per cui esisteva
 -- Disarchivia senza PIN. Questa e' una deroga voluta e circoscritta, e vale
--- SOLO per il passaggio a Spedito e per l'archiviazione. Tutto il resto
--- resta reversibile.
+-- SOLO per l'archiviazione. Tutto il resto resta reversibile, Spedito compreso.
 
 -- ============================================================
--- 1. Il numero DDT si stacca da solo quando l'ordine parte
+-- 1. Il numero DDT si stacca all'archiviazione
 -- ============================================================
+-- Rete di sicurezza, non la strada normale: di solito il numero se lo prende
+-- chi STAMPA il DDT (assegna_numero_ddt, sql/numero_ddt.sql) perche' lo
+-- consegna all'autista. Questo serve al caso in cui nessuno l'abbia stampato:
+-- in archivio non deve finire niente senza documento.
 -- Non chiama assegna_numero_ddt(): quella fa una UPDATE su ordini e da dentro
 -- un trigger su ordini si rientrerebbe. Qui si scrive direttamente su NEW,
 -- sotto lo STESSO lock, cosi' le due strade non possono darsi lo stesso numero.
@@ -34,9 +37,7 @@ CREATE OR REPLACE FUNCTION ddt_alla_spedizione() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE v_nuovo int;
 BEGIN
-  IF lower(COALESCE(NEW.stato, '')) <> 'spedito' THEN
-    RETURN NEW;
-  END IF;
+  IF NEW.archiviato IS NOT TRUE THEN RETURN NEW; END IF;
   IF COALESCE(TRIM(NEW.ddt_numero), '') <> '' THEN
     RETURN NEW;   -- ce l'ha gia': non se ne consuma un altro
   END IF;
@@ -51,40 +52,44 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_ddt_alla_spedizione ON ordini;
 CREATE TRIGGER trg_ddt_alla_spedizione
-  BEFORE INSERT OR UPDATE OF stato ON ordini
+  BEFORE INSERT OR UPDATE OF archiviato ON ordini
   FOR EACH ROW EXECUTE FUNCTION ddt_alla_spedizione();
 
 -- ============================================================
--- 2. Spedito e Archiviato sono a senso unico
+-- 2. Solo l'archiviazione e' a senso unico
 -- ============================================================
--- Blocca SOLO il passo indietro. Tutto il resto di un ordine spedito resta
--- modificabile: prezzi, colli, peso, anagrafica. Serve proprio perche' fra la
--- spedizione e l'invio a Sibill (mezzanotte del giorno dopo) c'e' la finestra
--- per correggere quello che ci si e' dimenticati.
+-- Da Spedito si torna indietro: e' ancora una fase di lavoro. Blocca SOLO il
+-- disarchivia. Tutto il resto di un ordine archiviato resta modificabile:
+-- prezzi, colli, peso, anagrafica. Serve proprio perche' fra l'archiviazione e
+-- l'invio a Sibill (mezzanotte del giorno dopo) c'e' la finestra per
+-- correggere quello che ci si e' dimenticati.
 CREATE OR REPLACE FUNCTION spedito_non_torna_indietro() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF lower(COALESCE(OLD.stato, '')) = 'spedito'
-     AND lower(COALESCE(NEW.stato, '')) <> 'spedito' THEN
-    RAISE EXCEPTION
-      'Ordine % gia'' spedito con DDT %: non si puo'' riportare a "%". Il documento di trasporto e'' gia'' emesso.',
-      OLD.id_ordine, COALESCE(NULLIF(OLD.ddt_numero, ''), 'assente'), NEW.stato;
-  END IF;
-
   IF COALESCE(OLD.archiviato, false) AND NOT COALESCE(NEW.archiviato, false) THEN
     RAISE EXCEPTION
-      'Ordine % gia'' archiviato con DDT %: non si disarchivia.',
+      'Ordine % archiviato con DDT %: non si disarchivia. Il documento e'' gia'' emesso.',
       OLD.id_ordine, COALESCE(NULLIF(OLD.ddt_numero, ''), 'assente');
   END IF;
-
   RETURN NEW;
 END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_spedito_non_torna_indietro ON ordini;
 CREATE TRIGGER trg_spedito_non_torna_indietro
-  BEFORE UPDATE OF stato, archiviato ON ordini
+  BEFORE UPDATE OF archiviato ON ordini
   FOR EACH ROW EXECUTE FUNCTION spedito_non_torna_indietro();
+
+-- ============================================================
+-- 2b. Il trigger del Cashflow deve poter scrivere
+-- ============================================================
+-- Girava con i permessi di CHI archivia (anon), e cf_fatture_attese ha RLS
+-- accesa senza policy, cioe' e' chiusa a tutti: archiviare falliva, con un
+-- errore che parlava di una tabella del Cashflow e non era interpretabile.
+-- Non se ne erano accorti perche' il trigger esce prima se il cliente non e'
+-- mappato nel Cashflow: falliva SOLO sui clienti che il Cashflow conosce.
+ALTER FUNCTION cf_scadenza_da_magazzino() SECURITY DEFINER;
+ALTER FUNCTION cf_scadenza_da_magazzino() SET search_path = public;
 
 -- ============================================================
 -- 3. A Sibill si manda a mezzanotte del giorno DOPO
