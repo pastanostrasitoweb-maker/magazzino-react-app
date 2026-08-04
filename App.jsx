@@ -894,6 +894,8 @@ function normalizeOrders(rows) {
       courierSpedizione: String(
         getField(row, ["Corriere_Spedizione", "corriere_spedizione"]) || ""
       ).trim(),
+      // Dove va la merce: quale delle destinazioni del cliente.
+      idDestinazione: String(getField(row, ["Id_Destinazione", "id_destinazione"]) || "").trim(),
       ddtNumero: String(getField(row, ["DDT_Numero", "ddt_numero"]) || "").trim(),
       regimeIva: String(getField(row, ["Regime_Iva", "regime_iva"]) || "").trim(),
       agenteId: String(getField(row, ["Agente_Id", "agente_id"]) || "").trim(),
@@ -2493,6 +2495,9 @@ export default function App() {
   const [soloIncompleti, setSoloIncompleti] = useState(false);
   // Registro DDT (amministrazione): ricerca per numero, cliente o ordine.
   const [ddtSearch, setDdtSearch] = useState("");
+  // Destinazioni merci per codice cliente. Un cliente puo' avere piu' punti
+  // di consegna (3-4 negozi) e chi spedisce sceglie dove mandare la merce.
+  const [destinazioni, setDestinazioni] = useState({});
 
   // Canali suggeriti + quelli realmente presenti nei clienti.
   const SUGGESTED_CHANNELS = ["GDO", "Farmacia", "Horeca", "Export", "Ingrosso", "B2C", "Altro"];
@@ -2976,6 +2981,7 @@ export default function App() {
       setAgenti(raw.agenti || []);
       setAppAnagrafiche(raw.anagraficheApp || {});
       setClientiOverride(raw.overridesClienti || {});
+      setDestinazioni(raw.destinazioni || {});
       setAssignments(normalizedAssignments);
       // Il reload riporta lo stato agli ordini ATTIVI: l'archivio si ricaricherà
       // a richiesta quando si riapre la pagina Archivio.
@@ -4634,6 +4640,38 @@ export default function App() {
     }
   };
 
+  // Le destinazioni di un cliente, e quella scelta per questo ordine.
+  // Se non e' stata scelta vale la predefinita: la merce parte comunque, e
+  // parte dove e' sempre andata.
+  const destinazioniDi = (order) => destinazioni[String(order?.clientId || "")] || [];
+  const destinazioneDi = (order) => {
+    const lista = destinazioniDi(order);
+    if (!lista.length) return null;
+    const scelta = String(order?.idDestinazione || "");
+    return lista.find((d) => String(d.id) === scelta) || lista.find((d) => d.predefinita) || lista[0];
+  };
+
+  const setOrderDestinazione = async (orderId, idDest) => {
+    if (!orderId) return;
+    const prima = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(orderId) ? { ...o, idDestinazione: idDest || "" } : o))
+    );
+    try {
+      const r = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId, id_destinazione: idDest || "" }),
+      });
+      if (!r || !r.success) {
+        setOrders(prima);
+        alert("Errore nel salvare la destinazione: " + ((r && r.error) || "sconosciuto"));
+      }
+    } catch (e) {
+      setOrders(prima);
+      alert("Errore di collegamento nel salvare la destinazione.");
+    }
+  };
+
   const setOrderCourier = async (orderId, corriere) => {
     if (!orderId) return;
     const previousOrders = orders;
@@ -4768,21 +4806,40 @@ export default function App() {
     const app = effectiveCliente(order).merged || {};
     const cli = clientsById[String(order.clientId)] || {};
     const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    // DOVE va la merce: la destinazione scelta per questo ordine, o la
+    // predefinita del cliente. Ha via e civico separati, e i suoi orari: un
+    // cliente con tre negozi ha tre orari di scarico diversi, e quello che
+    // conta e' l'orario del negozio dove il camion sta andando.
+    const dst = destinazioneDi(order);
+    const rigaVia = dst
+      ? [dst.via, dst.civico].filter(Boolean).join(" ")
+      : (app.indirizzo_spedizione || app.sede_legale || app.indirizzo || cli.indirizzo || "");
+    // Sede legale spezzata dall'importazione; se non c'e', il vecchio campo unico.
+    const sedeLegaleRiga = [
+      [app.sede_via, app.sede_civico].filter(Boolean).join(" "),
+      [app.sede_cap, app.sede_localita].filter(Boolean).join(" ") +
+        (app.sede_provincia ? ` (${app.sede_provincia})` : ""),
+    ].filter((x) => String(x).trim()).join(" · ") || app.sede_legale || cli.indirizzo || "";
+
     const dest = {
       ragione: app.ragione_sociale || cli.name || order.customer || "",
       piva: app.partita_iva || cli.piva || "",
-      sedeLegale: app.sede_legale || cli.indirizzo || "",
-      indirizzo: app.indirizzo_spedizione || app.sede_legale || app.indirizzo || cli.indirizzo || "",
-      cap: app.cap || cli.cap || order.cap || "",
-      citta: app.citta || cli.citta || "",
-      provincia: app.provincia || cli.provincia || "",
-      insegna: app.insegna || "",
-      telefono: app.telefono || cli.telefono || "",
+      sedeLegale: sedeLegaleRiga,
+      indirizzo: rigaVia,
+      cap: (dst && dst.cap) || app.cap || cli.cap || order.cap || "",
+      citta: (dst && dst.localita) || app.citta || cli.citta || "",
+      provincia: (dst && dst.provincia) || app.provincia || cli.provincia || "",
+      insegna: (dst && dst.insegna) || app.insegna || "",
+      etichettaDest: dst ? dst.etichetta : "",
+      quanteDest: dst ? dst.quante_per_cliente : 0,
+      // Telefono e orari del PUNTO di consegna, se li ha; altrimenti quelli
+      // generali del cliente.
+      telefono: (dst && dst.telefono) || app.telefono || cli.telefono || "",
       email: app.email || cli.email || "",
       pec: app.pec || "",
       codiceUnivoco: app.codice_univoco || "",
-      giornoChiusura: app.giorno_chiusura || "",
-      orari: app.orari_consegna || app.orario_scarico || "",
+      giornoChiusura: (dst && dst.giorno_chiusura) || app.giorno_chiusura || "",
+      orari: (dst && dst.orari_consegna) || app.orari_consegna || app.orario_scarico || "",
       pagamento: app.metodo_pagamento || "",
     };
     const corriere =
@@ -4936,7 +4993,9 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
     <div class="campi">${datiFiscali}</div>
   </div>
   <div class="riquadro">
-    <h2>Sede di consegna</h2>
+    <h2>Sede di consegna${dest.etichettaDest && dest.quanteDest > 1 ? " &mdash; " + esc(dest.etichettaDest) : ""}</h2>
+    ${dest.insegna && dest.insegna !== dest.ragione
+      ? `<div class="luogo" style="font-size:17px">${esc(dest.insegna)}</div>` : ""}
     <div class="luogo">${esc(dest.indirizzo) || "&mdash;"}<br>${localita || "&mdash;"}</div>
     ${sedeDiversa
       ? `<h2 style="margin-top:10px">Sede legale</h2><div class="luogo secondaria">${esc(dest.sedeLegale)}</div>`
@@ -7836,6 +7895,34 @@ ${riepilogoPrezzi}
                             </span>
                           ) : null}
                         </div>
+
+                        {/* Dove va la merce. Compare SOLO se il cliente ha piu'
+                            di un punto di consegna: con una destinazione sola
+                            sarebbe una tendina con dentro una scelta, cioe'
+                            rumore. */}
+                        {destinazioniDi(selectedOrder).length > 1 ? (
+                          <div style={{
+                            marginTop: 12, padding: "10px 12px", borderRadius: 14,
+                            border: "1px solid #dbe2ea", background: "#fff",
+                            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                          }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a" }}>
+                              📍 Spedire a
+                            </div>
+                            <select
+                              style={{ ...inputStyle(), height: 40, flex: 1, minWidth: 240 }}
+                              value={destinazioneDi(selectedOrder)?.id || ""}
+                              onChange={(e) => setOrderDestinazione(selectedOrder.id, e.target.value)}
+                            >
+                              {destinazioniDi(selectedOrder).map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.etichetta}
+                                  {d.predefinita ? " (predefinita)" : ""} — {d.riga_via}, {d.riga_localita}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : null}
 
                         {selectedOrder.notes ? (
                           <div

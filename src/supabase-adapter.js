@@ -95,6 +95,7 @@ const mapOrdineRow = (row) => ({
   // ordini del 03/08 il primo era pieno e il secondo vuoto, e il DDT usciva
   // senza vettore perche' l'app questa colonna non la leggeva proprio.
   Corriere_Spedizione: row.corriere_spedizione ?? "",
+  Id_Destinazione: row.id_destinazione ?? "",
   // Peso scritto a mano: vince sulla somma dei pesi delle righe. Serve perche'
   // il calcolo somma solo i prodotti a catalogo con peso noto, e chi spedisce
   // ha la bilancia davanti (Luca 03/08/2026).
@@ -398,7 +399,42 @@ async function bulkLoad() {
     // tabella non ancora creata: nessun override
   }
 
-  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti, agenti, anagraficheApp, overridesClienti };
+  // Destinazioni merci: un cliente puo' avere piu' punti di consegna (3-4
+  // negozi), e chi spedisce deve poter scegliere dove mandare la merce
+  // (regola di Luca 03/08/2026). Solo quelle attive, gia' con le righe
+  // composte pronte da stampare sul DDT.
+  const destinazioni = {};
+  try {
+    // A PAGINE. PostgREST taglia a 1000 righe senza dire niente: le
+    // destinazioni sono gia' 1.519, e senza paginare i clienti oltre il
+    // millesimo restavano senza indirizzo di consegna. Il taglio e' silenzioso,
+    // quindi non si vede finche' qualcuno non se ne accorge sul campo.
+    const PAGINA = 1000;
+    for (let da = 0; ; da += PAGINA) {
+      const { data, error: errDest } = await supabase
+        .from("v_destinazioni")
+        .select("*")
+        .order("codice_cliente")
+        .order("predefinita", { ascending: false })
+        .order("etichetta")
+        .range(da, da + PAGINA - 1);
+      if (errDest) {
+        console.warn("v_destinazioni:", errDest.message, errDest.hint || "");
+        break;
+      }
+      for (const d of data || []) {
+        const k = String(d.codice_cliente || "");
+        if (!k) continue;
+        (destinazioni[k] = destinazioni[k] || []).push(d);
+      }
+      if (!data || data.length < PAGINA) break;
+    }
+  } catch (e) {
+    // vista non ancora creata: si va avanti con l'indirizzo unico di prima
+    console.warn("destinazioni non caricate:", e);
+  }
+
+  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti, agenti, anagraficheApp, overridesClienti, destinazioni };
 }
 
 // ---------- action handlers ----------
@@ -592,6 +628,9 @@ async function updateOrder(params) {
   if (p.colli !== undefined) {
     // colli "" significa "ripristina default" (campo nullable).
     patch.colli = p.colli === "" || p.colli === null ? null : Number(p.colli);
+  }
+  if (p.id_destinazione !== undefined) {
+    patch.id_destinazione = p.id_destinazione ? String(p.id_destinazione) : null;
   }
   if (p.peso_manuale !== undefined) {
     // Come i colli: "" vuol dire "torna a calcolarlo tu".
