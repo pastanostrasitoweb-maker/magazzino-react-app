@@ -876,6 +876,9 @@ const ANAG_FIELDS = [
   // e non sull'ordine perche' e' un dato del cliente: si sceglie una volta e
   // vale per tutti i suoi ordini futuri.
   { key: "agente_nome", label: "Agente" },
+  // Finisce STAMPATA sul DDT e sulla conferma d'ordine: il nome del campo lo
+  // dice, cosi' nessuno ci scrive dentro cose interne (Luca 05/08/2026).
+  { key: "note", label: "Note da stampare sui documenti" },
 ];
 
 // Normalizza un canale/settore grezzo verso una delle tipologie standard.
@@ -2973,7 +2976,9 @@ export default function App() {
     const merged = { ...base };
     if (ov) {
       for (const k of Object.keys(ov)) {
-        if (["chiave", "tipologia", "operatore", "aggiornato_il", "id", "note"].includes(k)) continue;
+        // "note" NON e' piu' esclusa: ora e' la nota che si stampa sui
+        // documenti, quindi deve arrivare fino al DDT.
+        if (["chiave", "tipologia", "operatore", "aggiornato_il", "id"].includes(k)) continue;
         if (String(ov[k] ?? "").trim() !== "") merged[k] = ov[k];
       }
     }
@@ -5465,6 +5470,7 @@ export default function App() {
       giornoChiusura: (dst && dst.giorno_chiusura) || app.giorno_chiusura || "",
       orari: (dst && dst.orari_consegna) || app.orari_consegna || app.orario_scarico || "",
       pagamento: app.metodo_pagamento || "",
+      note: String(app.note || "").trim(),
     };
     const corriere =
       order.courier || order.courierSpedizione || order.transport?.consigliato?.corriere || "";
@@ -5611,7 +5617,22 @@ export default function App() {
     const sedeDiversa =
       dest.sedeLegale && dest.sedeLegale.trim() && dest.sedeLegale.trim() !== dest.indirizzo.trim();
     const html = `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${isConferma ? "Conferma ordine " : ""}${esc(numero)}</title>
-<style>body{font-family:Arial,sans-serif;margin:32px;color:#111}h1{font-size:20px;margin:0}
+<style>
+/* Un FOGLIO A4, non una pagina larga quanto lo schermo (Luca 05/08/2026).
+   @page da' i margini alla stampa; il .foglio con larghezza fissa fa vedere
+   a schermo la stessa cosa che uscira' dalla stampante, cosi' non ci sono
+   sorprese fra quello che si guarda e quello che si firma. */
+@page { size: A4 portrait; margin: 12mm; }
+html{background:#e8ebf0}
+body{font-family:Arial,sans-serif;margin:0;padding:18px;color:#111}
+.foglio{width:186mm;min-height:262mm;margin:0 auto;background:#fff;padding:10mm 12mm;
+  box-shadow:0 6px 24px rgba(0,0,0,.14);box-sizing:border-box}
+@media print{
+  html,body{background:#fff}
+  body{padding:0}
+  .foglio{width:auto;min-height:0;margin:0;padding:0;box-shadow:none}
+}
+h1{font-size:20px;margin:0}
 .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:12px;margin-bottom:16px}
 .box{border:1px solid #999;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.5}
 table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #999;padding:6px 8px;font-size:13px;text-align:left}
@@ -5636,9 +5657,14 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 .riepilogo{margin-top:10px;margin-left:auto;width:300px;font-size:13px}
 .riepilogo>div{display:flex;justify-content:space-between;padding:3px 0}
 .riepilogo .grande{border-top:1.5px solid #111;margin-top:4px;padding-top:6px;font-size:16px}
+.nota-cliente{margin-top:12px;border:1px solid #999;border-radius:6px;padding:8px 12px;
+  font-size:13px;line-height:1.45;white-space:pre-wrap}
+.nota-cliente span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+  color:#555;margin-bottom:3px}
 .nota-conferma{margin-top:16px;padding:10px 12px;border:1px solid #999;border-radius:6px;
   font-size:12px;line-height:1.45;color:#333;background:#fafafa}
 @media print{.noprint{display:none}}</style></head><body>
+<div class="foglio">
 <div class="top"><div><h1>GLUTEN FREE EXPERIENCE SRL</h1><div style="font-size:12px">${
   isConferma ? "Conferma d&rsquo;ordine" : "Documento di Trasporto (D.d.T.) — D.P.R. 472/96"
 }</div></div>
@@ -5663,11 +5689,15 @@ ${consegnaHtml}
 <table><thead><tr><th>Codice</th><th>Descrizione (lotto e scadenza)</th><th style="text-align:right">Qta</th>${intestazionePrezzi}</tr></thead><tbody>${righeHtml}</tbody></table>
 ${riepilogoPrezzi}
 <div class="tot"><span>Colli: ${order.colli ?? ""}</span><span>Peso lordo: ${fmtKg(order.pesoTotale)} kg</span></div>
+${dest.note
+  ? `<div class="nota-cliente"><span>Note</span>${esc(dest.note)}</div>`
+  : ""}
 ${isConferma
   ? `<div class="nota-conferma">Documento di conferma, non vale come documento di trasporto n&eacute; come fattura. Verificare quantit&agrave;, prezzi e indirizzo di consegna e segnalare eventuali differenze prima della spedizione.</div>
      <div class="firma"><div>Per accettazione</div></div>`
   : `<div class="firma"><div>Firma conducente</div><div>Firma destinatario</div></div>`}
-<button class="noprint" onclick="window.print()" style="margin-top:24px;padding:10px 18px;font-size:14px">Stampa</button>
+</div>
+<button class="noprint" onclick="window.print()" style="display:block;margin:18px auto;padding:10px 22px;font-size:14px;border-radius:8px;border:1px solid #888;background:#fff;cursor:pointer">Stampa</button>
 </body></html>`;
     const w = window.open("", "_blank");
     if (!w) {
