@@ -475,6 +475,165 @@ function MenuScelte({ titolo, icona, voci, variante = "soft", attivo = false, la
   );
 }
 
+
+// Le sedi di CONSEGNA di un cliente. Una ragione sociale puo' avere piu'
+// negozi, e chi spedisce sceglie dove mandare la merce (Luca 04-05/08/2026).
+//
+// Qui sta l'UNICA verita' sull'indirizzo di consegna. Prima c'era anche un
+// campo "Indirizzo di spedizione" nell'anagrafica, e il DDT leggeva la
+// destinazione: due posti per lo stesso dato, quindi su GIOIA S.R.L. il
+// documento e' uscito con la sede legale invece che col negozio.
+function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva }) {
+  const [apertaId, setApertaId] = useState("");
+  const [bozza, setBozza] = useState(null);
+  const [salvando, setSalvando] = useState(false);
+
+  const vuota = () => ({
+    id: "", codice_cliente: codiceCliente, etichetta: "", insegna: "",
+    via: "", civico: "", cap: "", localita: "", provincia: "",
+    telefono: "", orari_consegna: "", giorno_chiusura: "",
+    predefinita: (sedi || []).length === 0,
+  });
+
+  const apri = (d) => {
+    setApertaId(d ? String(d.id) : "nuova");
+    setBozza(d ? { ...d, codice_cliente: codiceCliente } : vuota());
+  };
+
+  const salva = async () => {
+    if (!String(bozza.via || "").trim()) {
+      alert("Serve almeno la via: senza, il documento non dice dove va la merce.");
+      return;
+    }
+    setSalvando(true);
+    try {
+      await onSalva(bozza);
+      setApertaId(""); setBozza(null);
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const campo = (chiave, etichetta, larghezza) => (
+    <div style={{ flex: larghezza || 1, minWidth: 90 }}>
+      <label style={{ ...labelStyle(), fontSize: 11 }}>{etichetta}</label>
+      <input
+        style={{ ...inputStyle(), height: 38 }}
+        value={bozza[chiave] ?? ""}
+        onChange={(e) => setBozza((p) => ({ ...p, [chiave]: e.target.value }))}
+      />
+    </div>
+  );
+
+  if (!codiceCliente) {
+    return (
+      <div style={{ fontSize: 12, color: "#8a94a6" }}>
+        Il cliente non ha ancora un codice: le sedi di consegna si aggiungono dopo averlo registrato.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      {(sedi || []).map((d) => (
+        <div key={d.id} style={{
+          border: "1px solid " + (d.predefinita ? "#bbf7d0" : "#e5edf6"),
+          background: d.predefinita ? "#f0fdf4" : "#fff",
+          borderRadius: 10, padding: "8px 10px",
+          display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+        }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#07153a" }}>
+              {d.etichetta || "Sede"}
+              {d.predefinita ? (
+                <span style={{ ...badgeStyle("success"), marginLeft: 6 }}>predefinita</span>
+              ) : null}
+            </div>
+            <div style={{ fontSize: 12, color: "#40516a" }}>
+              {[d.via, d.civico].filter(Boolean).join(" ")}
+              {d.cap || d.localita ? ` · ${[d.cap, d.localita].filter(Boolean).join(" ")}` : ""}
+              {d.provincia ? ` (${d.provincia})` : ""}
+            </div>
+            {d.orari_consegna || d.giorno_chiusura || d.telefono ? (
+              <div style={{ fontSize: 11, color: "#8a94a6", marginTop: 2 }}>
+                {[d.orari_consegna && `orario ${d.orari_consegna}`,
+                  d.giorno_chiusura && `chiuso ${d.giorno_chiusura}`,
+                  d.telefono && `tel ${d.telefono}`].filter(Boolean).join(" · ")}
+              </div>
+            ) : null}
+          </div>
+          <button style={compactBtnStyle("outline")} onClick={() => apri(d)}>Modifica</button>
+          {!d.predefinita ? (
+            <button
+              style={compactBtnStyle("outline")}
+              onClick={() => onSalva({ ...d, codice_cliente: codiceCliente, predefinita: true })}
+              title="Diventa quella proposta sui nuovi ordini"
+            >
+              Rendi predefinita
+            </button>
+          ) : null}
+          {(sedi || []).length > 1 && !d.predefinita ? (
+            <button
+              style={{ ...compactBtnStyle("outline"), color: "#b91c1c" }}
+              onClick={() => {
+                if (window.confirm(`Togliere la sede "${d.etichetta || "Sede"}"?\n\nResta sui documenti gia' emessi, sparisce solo dalle scelte future.`)) {
+                  onDisattiva(d.id);
+                }
+              }}
+            >
+              Togli
+            </button>
+          ) : null}
+        </div>
+      ))}
+
+      {apertaId ? (
+        <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 10, background: "#f8fafc" }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {campo("etichetta", "Come la chiami (es. Negozio Centro)", 2)}
+            {campo("insegna", "Insegna, se diversa", 2)}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            {campo("via", "Indirizzo", 3)}
+            {campo("civico", "Civico", 1)}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            {campo("cap", "CAP", 1)}
+            {campo("localita", "Località", 2)}
+            {campo("provincia", "Prov.", 1)}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            {campo("orari_consegna", "Orario di scarico", 2)}
+            {campo("giorno_chiusura", "Giorno di chiusura", 1)}
+            {campo("telefono", "Telefono del punto", 1)}
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!!bozza.predefinita}
+                onChange={(e) => setBozza((p) => ({ ...p, predefinita: e.target.checked }))}
+                style={{ width: 15, height: 15, accentColor: "#15803d" }}
+              />
+              È la sede predefinita
+            </label>
+            <button style={{ ...compactBtnStyle("primary"), marginLeft: "auto" }} disabled={salvando} onClick={salva}>
+              {salvando ? "Salvo…" : "Salva sede"}
+            </button>
+            <button style={compactBtnStyle("outline")} onClick={() => { setApertaId(""); setBozza(null); }}>
+              Annulla
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button style={compactBtnStyle("outline")} onClick={() => apri(null)}>
+          <Plus size={15} /> Aggiungi una sede di consegna
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Spunta "prezzi sul DDT". La preferenza sta sul CLIENTE, non sul documento:
 // si spunta una volta e vale per tutti i suoi documenti, anche quelli futuri.
 // Certi clienti li vogliono vedere, altri non devono vederli affatto (tipico
@@ -624,7 +783,6 @@ const ANAG_FIELDS = [
   { key: "partita_iva", label: "Partita IVA" },
   { key: "sede_legale", label: "Sede legale" },
   { key: "cap", label: "CAP" },
-  { key: "indirizzo_spedizione", label: "Indirizzo di spedizione" },
   { key: "insegna", label: "Insegna (se diversa)" },
   { key: "orari_consegna", label: "Orario di scarico (finestra min 3 ore)" },
   { key: "giorno_chiusura", label: "Giorno di chiusura" },
@@ -4658,6 +4816,36 @@ export default function App() {
     } catch (e) {
       alert("Errore di collegamento: " + String(e));
     }
+  };
+
+  // Sedi di consegna: si salvano sul cliente, non sull'ordine.
+  const salvaDestinazione = async (dest) => {
+    const r = await callSheetsApi({
+      action: "salvaDestinazione",
+      payload: JSON.stringify(dest),
+    });
+    if (!r || !r.success) {
+      alert("Errore nel salvare la sede: " + ((r && r.error) || "sconosciuto"));
+      return;
+    }
+    await ricaricaDestinazioni();
+  };
+
+  const disattivaDestinazione = async (id) => {
+    const r = await callSheetsApi({ action: "eliminaDestinazione", payload: JSON.stringify({ id }) });
+    if (!r || !r.success) {
+      alert("Errore: " + ((r && r.error) || "sconosciuto"));
+      return;
+    }
+    await ricaricaDestinazioni();
+  };
+
+  // Rilegge solo le destinazioni, senza rifare tutto il caricamento.
+  const ricaricaDestinazioni = async () => {
+    try {
+      const raw = await callSheetsApi();
+      setDestinazioni(raw.destinazioni || {});
+    } catch (_) {}
   };
 
   const cercaLotti = async (q) => {
@@ -12682,6 +12870,33 @@ ${isConferma
                     {a ? <span style={{ marginLeft: 8, ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline") }}>{a.label}</span> : null}
                   </div>
                 ) : null}
+
+                {/* LE SEDI DI CONSEGNA. Qui e non fra i campi liberi, perche'
+                    sono piu' di una: una ragione sociale puo' avere tre o
+                    quattro negozi, e ognuno ha i suoi orari. */}
+                {(() => {
+                  const ord = orders.find((o) => String(o.id) === String(anagOrderId));
+                  const cod = String(ord?.clientId || "");
+                  return (
+                    <div style={{
+                      border: "1px solid #dbe2ea", borderRadius: 12, padding: 12,
+                      marginBottom: 12, background: "#fff",
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a", marginBottom: 8 }}>
+                        📍 Sedi di consegna
+                        <span style={{ fontWeight: 600, color: "#8a94a6" }}>
+                          {" "}— dove va la merce. Quella predefinita si propone sui nuovi ordini.
+                        </span>
+                      </div>
+                      <SediConsegna
+                        codiceCliente={cod}
+                        sedi={destinazioni[cod] || []}
+                        onSalva={salvaDestinazione}
+                        onDisattiva={disattivaDestinazione}
+                      />
+                    </div>
+                  );
+                })()}
 
                 {/* COME si valorizza questo cliente. Sta qui e non sull'ordine
                     perche' e' una condizione commerciale del cliente, non della

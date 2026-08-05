@@ -2761,6 +2761,45 @@ export async function callSheetsApi(params = {}) {
         const r = Array.isArray(data) ? data[0] : data;
         return { success: true, ...r };
       }
+      case "salvaDestinazione": {
+        // Crea o aggiorna un punto di consegna. Se lo si marca predefinito,
+        // gli altri dello stesso cliente smettono di esserlo: un indice unico
+        // impedisce che ce ne siano due, e con due la merce puo' partire per
+        // il negozio sbagliato senza che nessuno abbia sbagliato.
+        const d = parsePayload(params);
+        const cod = String(d.codice_cliente || "").trim();
+        if (!cod) return { success: false, error: "codice cliente mancante" };
+        const id = String(d.id || "").trim() || `DEST-${cod}-${Date.now()}`;
+        if (d.predefinita) {
+          await supabase.from("clienti_destinazioni")
+            .update({ predefinita: false }).eq("codice_cliente", cod).neq("id", id);
+        }
+        const row = {
+          id, codice_cliente: cod,
+          etichetta: String(d.etichetta || "Sede").trim() || "Sede",
+          insegna: d.insegna || null, via: d.via || null, civico: d.civico || null,
+          cap: d.cap || null, localita: d.localita || null, provincia: d.provincia || null,
+          telefono: d.telefono || null, orari_consegna: d.orari_consegna || null,
+          giorno_chiusura: d.giorno_chiusura || null, note: d.note || null,
+          predefinita: !!d.predefinita, attiva: d.attiva === false ? false : true,
+          fonte: "manuale", aggiornato_il: new Date().toISOString(),
+        };
+        const { data, error } = await supabase
+          .from("clienti_destinazioni").upsert(row, { onConflict: "id" }).select().maybeSingle();
+        if (error) return failure(error);
+        return { success: true, destinazione: data || row };
+      }
+      case "eliminaDestinazione": {
+        const d = parsePayload(params);
+        const id = String(d.id || "").trim();
+        if (!id) return { success: false, error: "id mancante" };
+        // Non si cancella: si disattiva. I DDT gia' emessi la nominano, e un
+        // documento che rimanda a un indirizzo sparito non si legge piu'.
+        const { error } = await supabase
+          .from("clienti_destinazioni").update({ attiva: false }).eq("id", id);
+        if (error) return failure(error);
+        return { success: true };
+      }
       case "tracciaLotti": {
         // Dove e' finito un lotto. Si cerca per ARTICOLO (codice o nome) o
         // direttamente per lotto: chi ha in mano un cartone legge il lotto,
