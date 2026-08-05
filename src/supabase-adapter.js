@@ -2366,6 +2366,13 @@ async function spostaOrdineInOrdini(params) {
       // i prezzi (farmaceutico / horeca / gdo): serve a sapere su che base
       // e' stato valorizzato, senza confonderlo coi listini 1/8 del gestionale.
       listino: src.canale ? `app:${src.canale}` : "app",
+      // L'AGENTE che ha fatto l'ordine. Finiva solo dentro le note ("Da APP ·
+      // agente Ivan Silvestri · farmaceutico") e il campo restava vuoto: 33
+      // ordini importati senza agente, che poi qualcuno doveva rimettere a mano
+      // uno per uno. Se l'ordine arriva da un agente, l'agente e' quello.
+      // (Luca 05/08/2026)
+      agenteId: src.agente_id || "",
+      agenteNome: src.agente_nome || "",
       lines,
     }),
   });
