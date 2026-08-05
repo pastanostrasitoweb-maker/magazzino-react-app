@@ -89,3 +89,10 @@ button, input, select { font: inherit; }
   .metrics-grid, .metrics-grid.two-cols { grid-template-columns: 1fr; }
   .btn, .big-button { width: 100%; }
 }
+
+/* Il giro dell'icona sul pulsante Aggiorna: senza, non si capisce che sta
+   lavorando e uno lo preme tre volte (Luca 04/08/2026). */
+@keyframes girotondo {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

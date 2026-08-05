@@ -2641,6 +2641,8 @@ export default function App() {
   const [ddtAnnullati, setDdtAnnullati] = useState([]);
   // Quale ordine archiviato si sta correggendo, senza disarchiviarlo.
   const [correggiOrderId, setCorreggiOrderId] = useState("");
+  // Quando e' finito l'ultimo aggiornamento: serve a farlo VEDERE.
+  const [ultimoAggiornamento, setUltimoAggiornamento] = useState(0);
   // Destinazioni merci per codice cliente. Un cliente puo' avere piu' punti
   // di consegna (3-4 negozi) e chi spedisce sceglie dove mandare la merce.
   const [destinazioni, setDestinazioni] = useState({});
@@ -3161,11 +3163,29 @@ export default function App() {
       setClientiOverride(raw.overridesClienti || {});
       setDestinazioni(raw.destinazioni || {});
       setAssignments(normalizedAssignments);
-      // Il reload riporta lo stato agli ordini ATTIVI: l'archivio si ricaricherà
-      // a richiesta quando si riapre la pagina Archivio.
+      // L'archivio si ricarica subito dopo, qui sotto.
       setArchivedLoaded(false);
-      setSelectedOrderId(mergedOrders[0]?.id ?? "");
-      setSelectedLineId(mergedOrders[0]?.lines?.[0]?.lineId ?? "");
+      // RESTA sull'ordine che si stava guardando. Prima il refresh saltava
+      // sempre al primo della lista: uno premeva Aggiorna, si ritrovava su un
+      // altro ordine e pensava che non avesse funzionato. Si cambia solo se
+      // l'ordine non c'e' piu'.
+      setSelectedOrderId((prec) => {
+        const esiste = prec && mergedOrders.some((o) => String(o.id) === String(prec));
+        return esiste ? prec : (mergedOrders[0]?.id ?? "");
+      });
+      setSelectedLineId((precLinea) => {
+        const tutte = mergedOrders.flatMap((o) => o.lines || []);
+        const esiste = precLinea && tutte.some((l) => String(l.lineId) === String(precLinea));
+        return esiste ? precLinea : (mergedOrders[0]?.lines?.[0]?.lineId ?? "");
+      });
+      // Le liste che NON stanno nel caricamento principale vanno ricaricate
+      // a mano, altrimenti "Aggiorna" lascia indietro proprio i contatori che
+      // uno guarda per capire se e' cambiato qualcosa.
+      loadOrdiniApp().catch(() => {});
+      if (page === "archivio" || page === "ddt") {
+        await loadArchivedOrders();
+      }
+      setUltimoAggiornamento(Date.now());
     } catch (error) {
       setLoadError(
         "Non sono riuscito a leggere i dati dal Google Sheet. Per ora vedi una demo locale."
@@ -3203,8 +3223,14 @@ export default function App() {
       const merged = buildOrdersWithLines(normOrders, normLines);
       const normAssign = normalizeAssignments(res.assegnazioniLotti || [], normLines, lots);
       setOrders((prev) => {
-        const have = new Set(prev.map((o) => String(o.id)));
-        return [...prev, ...merged.filter((o) => !have.has(String(o.id)))];
+        // AGGIORNA, non solo aggiunge. Prima le righe gia' in memoria non
+        // venivano mai rimpiazzate: un ordine archiviato modificato (prezzo,
+        // colli, DDT) restava a video com'era prima, e sembrava che Aggiorna
+        // non funzionasse. (Luca 04/08/2026)
+        const freschi = new Map(merged.map((o) => [String(o.id), o]));
+        const uniti = prev.map((o) => freschi.get(String(o.id)) || o);
+        const gia = new Set(uniti.map((o) => String(o.id)));
+        return [...uniti, ...merged.filter((o) => !gia.has(String(o.id)))];
       });
       setAssignments((prev) => ({ ...prev, ...normAssign }));
       setAppAnagrafiche((prev) => ({ ...prev, ...(res.anagraficheApp || {}) }));
@@ -7745,17 +7771,30 @@ ${isConferma
               {/* Aggiorna resta un bottone suo: si usa spesso e deve stare
                   a un clic. Il resto (admin) e' roba che si tocca due volte al
                   giorno e sta bene dentro il menu. */}
-              <button
-                style={{
-                  ...btnStyle("outline"),
-                  borderRadius: 999,
-                  minWidth: isSmallLayout ? "calc(50% - 5px)" : 128,
-                }}
-                onClick={loadDataFromSheets}
-                title="Ricarica i dati"
-              >
-                <RefreshCw size={18} /> Aggiorna
-              </button>
+              {/* Il pulsante DEVE far vedere che sta lavorando e che ha
+                  finito: senza riscontro sembra sempre che non abbia fatto
+                  niente, e uno lo preme tre volte. (Luca 04/08/2026) */}
+              {(() => {
+                const appena = ultimoAggiornamento && Date.now() - ultimoAggiornamento < 3000;
+                return (
+                  <button
+                    style={{
+                      ...btnStyle(loadingData ? "soft" : appena ? "success" : "outline", loadingData),
+                      borderRadius: 999,
+                      minWidth: isSmallLayout ? "calc(50% - 5px)" : 140,
+                    }}
+                    disabled={loadingData}
+                    onClick={loadDataFromSheets}
+                    title="Ricarica tutto: ordini, righe, lotti, anagrafiche e archivio"
+                  >
+                    <RefreshCw
+                      size={18}
+                      style={loadingData ? { animation: "girotondo 900ms linear infinite" } : undefined}
+                    />
+                    {loadingData ? "Aggiorno…" : appena ? "Aggiornato" : "Aggiorna"}
+                  </button>
+                );
+              })()}
 
               <MenuScelte
                 titolo=""
