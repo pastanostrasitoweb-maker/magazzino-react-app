@@ -634,6 +634,87 @@ function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva }) {
   );
 }
 
+
+// IL bollino del corriere. Uno solo, uguale su Ordini, Preparati, Spediti e
+// Archivio (Luca 05/08/2026: "su alcune spedizioni non fa comparire il
+// corriere, il layout e i bottoni devono essere uguali per tutti").
+//
+// Prima ogni schermata aveva il suo, e nei Preparati compariva SOLO se il
+// preventivo si riusciva a calcolare: senza CAP o senza peso spariva del
+// tutto, quindi non si vedeva che il corriere mancava e non lo si poteva
+// nemmeno scegliere. Ora c'e' sempre, in uno di tre stati:
+//   scelto      -> nome del corriere, scuro
+//   suggerito   -> proposta del preventivo col costo, da confermare
+//   mancante    -> rosso, e cliccarlo apre le opzioni
+function BadgeCorriere({ order, onApri, compatto = false }) {
+  const scelto = String(order?.courier || order?.courierSpedizione || "").trim();
+  const suggerito = order?.transport && !order.transport.errore
+    ? order.transport.consigliato
+    : null;
+
+  const base = {
+    border: "1px solid #cfd8e6", cursor: onApri ? "pointer" : "default",
+    fontSize: compatto ? 11.5 : 12.5, whiteSpace: "nowrap",
+  };
+
+  if (scelto) {
+    return (
+      <button
+        style={{ ...badgeStyle("dark"), ...base }}
+        onClick={onApri}
+        title="Corriere scelto. Clicca per cambiarlo."
+      >
+        🚚 {scelto.toUpperCase()}
+      </button>
+    );
+  }
+  if (suggerito) {
+    return (
+      <button
+        style={{ ...badgeStyle("outline"), ...base }}
+        onClick={onApri}
+        title="Proposta del preventivo: va confermata, non e' ancora una scelta."
+      >
+        🚚 {suggerito.corriere} · {fmtEur(suggerito.totale)} € <b>da confermare</b>
+      </button>
+    );
+  }
+  return (
+    <button
+      style={{ ...badgeStyle("danger"), ...base }}
+      onClick={onApri}
+      title="Nessun corriere: clicca per sceglierlo o scriverlo a mano"
+    >
+      ⚠️ CORRIERE MANCANTE
+    </button>
+  );
+}
+
+// IL bollino dell'agente, con la stessa regola del corriere: c'e' SEMPRE.
+// L'agente e' obbligatorio per il DDT, quindi quando manca deve vedersi e
+// dev'essere cliccabile, non semplicemente assente (Luca 05/08/2026).
+// Vale quello scritto sull'ordine, altrimenti quello del cliente in anagrafica.
+function BadgeAgente({ nome, onApri, compatto = false }) {
+  const base = {
+    cursor: onApri ? "pointer" : "default", border: "1px solid #cfd8e6",
+    fontSize: compatto ? 11.5 : 12.5, whiteSpace: "nowrap",
+  };
+  if (String(nome || "").trim()) {
+    return (
+      <button style={{ ...badgeStyle("info"), ...base }} onClick={onApri}
+              title="Agente dell'ordine. Clicca per cambiarlo.">
+        👤 {nome}
+      </button>
+    );
+  }
+  return (
+    <button style={{ ...badgeStyle("danger"), ...base }} onClick={onApri}
+            title="Senza agente non si emette il DDT: clicca per sceglierlo">
+      ⚠️ AGENTE MANCANTE
+    </button>
+  );
+}
+
 // Spunta "prezzi sul DDT". La preferenza sta sul CLIENTE, non sul documento:
 // si spunta una volta e vale per tutti i suoi documenti, anche quelli futuri.
 // Certi clienti li vogliono vedere, altri non devono vederli affatto (tipico
@@ -8193,11 +8274,10 @@ ${isConferma
                         </div>
 
                         <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                          {selectedOrder.agenteNome ? (
-                            <span style={badgeStyle("info")} title="Agente che ha portato l'ordine">
-                              👤 {selectedOrder.agenteNome}
-                            </span>
-                          ) : null}
+                          <BadgeAgente
+                            nome={agenteDi(selectedOrder)}
+                            onApri={() => openCompletaAnagrafica(selectedOrder)}
+                          />
                           {/* Il badge del pagamento E' il comando: dice lo stato
                               (compreso lo scaduto calcolato dal Cashflow) e si
                               apre per cambiarlo. Prima erano tre cose separate,
@@ -8342,19 +8422,10 @@ ${isConferma
                         })()}
 
                         <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                          <button
-                            onClick={() => setTransportModalOrderId(String(selectedOrder.id))}
-                            style={{
-                              ...badgeStyle(transportBadgeInfo(selectedOrder.transport).kind),
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 6,
-                              cursor: "pointer",
-                            }}
-                            title="Vedi opzioni corriere, tempi e costi"
-                          >
-                            <Truck size={14} /> {transportBadgeInfo(selectedOrder.transport).label}
-                          </button>
+                          <BadgeCorriere
+                            order={selectedOrder}
+                            onApri={() => setTransportModalOrderId(String(selectedOrder.id))}
+                          />
                           {selectedOrder.transport && !selectedOrder.transport.errore ? (
                             <span style={{ color: "#8595a8", fontSize: 12 }}>
                               {temperaturaLabel(selectedOrder.temperatura)} · {selectedOrder.transport.consigliato.giorni} gg
@@ -9217,27 +9288,13 @@ ${isConferma
                               <span style={badgeStyle("success")}>Preparato</span>
                             )}
                             {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
-                            {order.agenteNome ? (
-                              <span style={badgeStyle("info")} title="Agente che ha portato l'ordine">
-                                👤 {order.agenteNome}
-                              </span>
-                            ) : null}
+                            <BadgeAgente nome={agenteDi(order)} onApri={() => openCompletaAnagrafica(order)} />
                             {order.daBollinare ? (
                               <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
                                 🏷️ DA BOLLINARE
                               </span>
                             ) : null}
-                            {order.transport && !order.transport.errore ? (
-                              <button
-                                style={{ ...badgeStyle(order.courier ? "dark" : "outline"), border: "1px solid #cfd8e6", cursor: "pointer" }}
-                                onClick={() => setTransportModalOrderId(order.id)}
-                                title="Opzioni trasporto: scegli il corriere"
-                              >
-                                {order.courier
-                                  ? `${order.courier} ✓`
-                                  : `${order.transport.consigliato.corriere} · ${fmtEur(order.transport.consigliato.totale)} €`}
-                              </button>
-                            ) : null}
+                            <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} />
                             {(() => {
                               const a = anagraficaFor(order);
                               return a.stato === "ko" ? (
@@ -9620,21 +9677,7 @@ ${isConferma
                             ci passa sopra senza accorgersene. Ora si legge anche
                             il corriere della spedizione, e se davvero non c'e'
                             lo si dice in rosso. */}
-                        {(() => {
-                          const c = order.courier || order.courierSpedizione || "";
-                          if (c) {
-                            return <span style={badgeStyle("dark")}>🚚 {c.toUpperCase()}</span>;
-                          }
-                          return (
-                            <span
-                              style={{ ...badgeStyle("danger"), cursor: "pointer" }}
-                              title="Nessun corriere assegnato: clicca per sceglierlo"
-                              onClick={() => setTransportModalOrderId(order.id)}
-                            >
-                              ⚠️ CORRIERE MANCANTE
-                            </span>
-                          );
-                        })()}
+                        <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} />
                         {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
                         {order.daBollinare ? (
                           <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
@@ -10291,6 +10334,10 @@ ${isConferma
                               ) : (
                                 <span style={badgeStyle("warning")}>DDT mai generato</span>
                               )}
+                              {/* Anche qui il corriere: in archivio non c'era
+                                  affatto, e su un documento gia' emesso e'
+                                  proprio il dato che si va a ricontrollare. */}
+                              <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} compatto />
                             </div>
 
                             {/* Cosa manca per fare il documento. In archivio si
