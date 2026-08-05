@@ -364,14 +364,21 @@ const METODI_PAGAMENTO = [
   "Contrassegno assegno",
   "Bonifico anticipato",
   "Bonifico alla consegna",
+  "Bonifico fine mese",
   "Bonifico 30 gg",
   "Bonifico 30 gg fine mese",
   "Bonifico 60 gg fine mese",
   "Bonifico 90 gg fine mese",
+  // "data fattura" scritto per esteso come "fine mese": sono due decorrenze
+  // diverse e su 60 giorni ballano settimane di incasso, quindi la sigla DF
+  // da sola e' troppo poco per chi sceglie dalla tendina. (Luca 05/08/2026)
+  "Ri.Ba. 30 gg data fattura",
+  "Ri.Ba. 60 gg data fattura",
   "Ri.Ba. 30 gg fine mese",
   "Ri.Ba. 60 gg fine mese",
   "Ri.Ba. 90 gg fine mese",
   "Assegno",
+  "Carta di credito",
   "Carta / POS",
   "Da concordare",
 ];
