@@ -1113,6 +1113,8 @@ const OVERRIDE_CLIENTE_FIELDS = [
   // L'agente e' un dato del cliente: si sceglie una volta e vale per tutti i
   // suoi ordini (Luca 04/08/2026).
   "agente_id", "agente_nome",
+  // Come si valorizza: storico o listino fisso (Luca 04/08/2026).
+  "listino_standard",
 ];
 
 async function saveClienteOverride(params) {
@@ -1127,6 +1129,10 @@ async function saveClienteOverride(params) {
   // "false", che in JavaScript e' vero. Un cliente si ritroverebbe i prezzi
   // sul documento proprio dopo averli tolti.
   if (p.ddt_con_prezzi !== undefined) row.ddt_con_prezzi = !!p.ddt_con_prezzi;
+  // Booleano anche questo: passato da String() diventerebbe "false", che
+  // in JavaScript e' vero, e il cliente si ritroverebbe lo storico acceso
+  // proprio dopo averlo spento.
+  if (p.usa_storico !== undefined) row.usa_storico = !!p.usa_storico;
   row.operatore = p.operatore || "";
   row.aggiornato_il = new Date().toISOString();
   const { data, error } = await supabase

@@ -2890,6 +2890,8 @@ export default function App() {
     const form = {};
     for (const f of ANAG_FIELDS) form[f.key] = String(merged[f.key] ?? "");
     form.agente_id = String(merged.agente_id ?? "");
+    form.usa_storico = merged.usa_storico === false ? false : true;
+    form.listino_standard = String(merged.listino_standard ?? "");
     // Se l'ordine porta gia' un agente, il form parte da quello.
     if (!form.agente_nome && order.agenteNome) form.agente_nome = String(order.agenteNome);
     if (!form.cap && order?.cap) form.cap = String(order.cap);
@@ -2912,6 +2914,8 @@ export default function App() {
       const payload = { chiave, operatore: authUser?.username || "" };
       for (const f of ANAG_FIELDS) payload[f.key] = anagForm[f.key] ?? "";
       payload.agente_id = anagForm.agente_id ?? "";
+      payload.usa_storico = anagForm.usa_storico !== false;
+      payload.listino_standard = anagForm.listino_standard ?? "";
       const res = await callSheetsApi({
         action: "saveClienteOverride",
         payload: JSON.stringify(payload),
@@ -12639,6 +12643,50 @@ ${isConferma
                     {a ? <span style={{ marginLeft: 8, ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline") }}>{a.label}</span> : null}
                   </div>
                 ) : null}
+
+                {/* COME si valorizza questo cliente. Sta qui e non sull'ordine
+                    perche' e' una condizione commerciale del cliente, non della
+                    singola vendita (Luca 04/08/2026). */}
+                <div style={{
+                  border: "1px solid #dbe2ea", borderRadius: 12, padding: 12, marginBottom: 12,
+                  background: "#f8fafc",
+                }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a", marginBottom: 8 }}>
+                    Da dove arrivano i prezzi
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={anagForm.usa_storico !== false}
+                      onChange={(e) => setAnagForm((prev) => ({ ...prev, usa_storico: e.target.checked }))}
+                      style={{ width: 16, height: 16, accentColor: "#15803d", cursor: "pointer" }}
+                    />
+                    <span>
+                      <b>Usa lo storico di questo cliente</b>
+                      <span style={{ color: "#66758b" }}> — quello che ha davvero pagato negli ultimi 12 mesi</span>
+                    </span>
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: anagForm.usa_storico !== false ? "#8a94a6" : "#40516a", fontWeight: 700 }}>
+                      Listino {anagForm.usa_storico !== false ? "di riserva" : "da usare"}
+                    </span>
+                    <select
+                      style={{ ...inputStyle(), width: 260, height: 40 }}
+                      value={anagForm.listino_standard ?? ""}
+                      onChange={(e) => setAnagForm((prev) => ({ ...prev, listino_standard: e.target.value }))}
+                    >
+                      <option value="">— quello assegnato dal gestionale —</option>
+                      <option value="1">Listino 1 · base (434 articoli)</option>
+                      <option value="8">Listino 8 · Ho.Re.Ca. (56 articoli)</option>
+                    </select>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 11.5, color: "#66758b", lineHeight: 1.45 }}>
+                    {anagForm.usa_storico !== false
+                      ? "Comanda lo storico. Il listino serve per gli articoli che questo cliente non ha mai comprato."
+                      : "Comanda il listino: lo storico non viene consultato, nemmeno se esiste."}
+                    {" "}Il listino 8 copre 56 articoli: sugli altri si ripiega sul listino 1.
+                  </div>
+                </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: isSmallLayout ? "1fr" : "1fr 1fr", gap: 12 }}>
                   {ANAG_FIELDS.map((f) => {

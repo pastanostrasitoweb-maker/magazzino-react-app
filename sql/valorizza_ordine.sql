@@ -28,15 +28,22 @@ AS $$
 DECLARE
   v_piva      text;
   v_listino   text;
+  v_usa_storico boolean := true;
+  v_listino_scelto text;
   v_tocc int := 0; v_sto int := 0; v_lcl int := 0; v_l1 int := 0; v_no int := 0;
   r record;
   v_prezzo numeric; v_sconto numeric; v_fonte text;
 BEGIN
   -- P.IVA del cliente: serve per pescare nello storico, che e' indicizzato
   -- per partita IVA e non per codice cliente.
+  -- Oltre alla P.IVA si legge COME va valorizzato questo cliente: con il suo
+  -- storico (default) o con un listino fisso. Il listino scelto a mano vince
+  -- su quello assegnato dal gestionale: se qualcuno l'ha messo, sapeva perche'.
   SELECT COALESCE(NULLIF(ov.partita_iva, ''), NULLIF(m.piva, ''), NULLIF(g.piva, '')),
-         NULLIF(cl.listino, '')
-    INTO v_piva, v_listino
+         COALESCE(NULLIF(ov.listino_standard, ''), NULLIF(cl.listino, '')),
+         COALESCE(ov.usa_storico, true),
+         NULLIF(ov.listino_standard, '')
+    INTO v_piva, v_listino, v_usa_storico, v_listino_scelto
     FROM ordini o
     LEFT JOIN clienti_master m ON m.codice = o.id_cliente
     LEFT JOIN clienti_gestionale g
@@ -51,16 +58,35 @@ BEGIN
   -- saltava quelle righe (il ciclo qui sotto guarda solo quelle a zero) e
   -- restava il 4% che l'interfaccia metteva di default: su 107 righe c'era 4%
   -- dove il prodotto dice 10%. Su un ravioli sono 6 punti di IVA sbagliati.
+  -- L'aliquota sta in due posti e dicono la stessa cosa (verificato su 77
+  -- articoli su 77): prodotti.iva_pct, ricavata dalle fatture emesse, e
+  -- listini_gestionale.iva, che arriva dal gestionale. Si prende la prima e in
+  -- mancanza la seconda, cosi' copre anche gli articoli non ancora a catalogo.
   UPDATE righe_ordine ri
-     SET iva_pct = p.iva_pct
+     SET iva_pct = COALESCE(p.iva_pct, (
+           SELECT l.iva FROM listini_gestionale l
+            WHERE upper(regexp_replace(COALESCE(l.codice_articolo,''), '[^A-Za-z0-9]', '', 'g'))
+                = upper(regexp_replace(COALESCE(p.codice_prodotto,''), '[^A-Za-z0-9]', '', 'g'))
+              AND COALESCE(l.iva,0) > 0
+            LIMIT 1))
     FROM prodotti p
    WHERE p.id_prodotto::text = ri.id_prodotto
      AND ri.id_ordine = p_id_ordine
-     AND p.iva_pct IS NOT NULL
+     AND COALESCE(p.iva_pct, (
+           SELECT l.iva FROM listini_gestionale l
+            WHERE upper(regexp_replace(COALESCE(l.codice_articolo,''), '[^A-Za-z0-9]', '', 'g'))
+                = upper(regexp_replace(COALESCE(p.codice_prodotto,''), '[^A-Za-z0-9]', '', 'g'))
+              AND COALESCE(l.iva,0) > 0
+            LIMIT 1)) IS NOT NULL
      -- Il regime estero azzera l'imposta per tutto il documento: li' lo zero
      -- e' voluto e non va sovrascritto con l'aliquota del prodotto.
      AND COALESCE(ri.natura_iva, '') = ''
-     AND ri.iva_pct IS DISTINCT FROM p.iva_pct;
+     AND ri.iva_pct IS DISTINCT FROM COALESCE(p.iva_pct, (
+           SELECT l.iva FROM listini_gestionale l
+            WHERE upper(regexp_replace(COALESCE(l.codice_articolo,''), '[^A-Za-z0-9]', '', 'g'))
+                = upper(regexp_replace(COALESCE(p.codice_prodotto,''), '[^A-Za-z0-9]', '', 'g'))
+              AND COALESCE(l.iva,0) > 0
+            LIMIT 1));
 
   FOR r IN
     SELECT ri.id_riga,
@@ -79,7 +105,7 @@ BEGIN
     v_prezzo := NULL; v_sconto := NULL; v_fonte := NULL;
 
     -- 1. Cosa ha pagato QUESTO cliente per QUESTO articolo.
-    IF v_piva IS NOT NULL AND r.cod <> '' THEN
+    IF v_usa_storico AND v_piva IS NOT NULL AND r.cod <> '' THEN
       SELECT s.ultimo_prezzo, s.ultimo_sconto INTO v_prezzo, v_sconto
         FROM storico_cliente_articolo s
        WHERE s.piva = v_piva
@@ -93,7 +119,7 @@ BEGIN
     -- Solo dentro lo storico di QUESTO cliente: due clienti diversi possono
     -- chiamare "Sfoglia" due cose diverse, ma lo stesso cliente che riordina
     -- "Sfoglia" intende quella di sempre.
-    IF v_fonte IS NULL AND v_piva IS NOT NULL AND r.descr <> '' THEN
+    IF v_usa_storico AND v_fonte IS NULL AND v_piva IS NOT NULL AND r.descr <> '' THEN
       SELECT s.ultimo_prezzo, s.ultimo_sconto INTO v_prezzo, v_sconto
         FROM storico_cliente_articolo s
        WHERE s.piva = v_piva
