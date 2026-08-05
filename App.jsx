@@ -1346,7 +1346,13 @@ function normalizeOrderLines(rows, products) {
         // Secondo sconto, IN CASCATA sul prezzo gia' scontato dal primo:
         // 100 con 30+10 fa 63,00, non 60,00 (Luca 04/08/2026).
         sconto2Pct: Number(getField(row, ["Sconto2_Pct", "sconto2_pct"]) || 0),
+        // Terzo sconto, ancora in cascata: 100 con 10+10+10 fa 72,90
+        // (Luca 05/08/2026).
+        sconto3Pct: Number(getField(row, ["Sconto3_Pct", "sconto3_pct"]) || 0),
         prezzoOrigine: String(getField(row, ["Prezzo_Origine", "prezzo_origine"]) || ""),
+        // Avviso quando il prezzo di listino e quello delle fatture non
+        // coincidono: si stampa in rosso accanto alla riga.
+        prezzoAvviso: String(getField(row, ["Prezzo_Avviso", "prezzo_avviso"]) || ""),
         naturaIva: String(getField(row, ["Natura_Iva", "natura_iva"]) || ""),
         ivaPct: (() => {
           const v = getField(row, ["Iva_Pct", "iva_pct"]);
@@ -1603,6 +1609,7 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
         prezzo: l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario),
         sconto: l.scontoPct ? String(l.scontoPct) : "",
         sconto2: l.sconto2Pct ? String(l.sconto2Pct) : "",
+        sconto3: l.sconto3Pct ? String(l.sconto3Pct) : "",
         // Il nostro prodotto sta al 4%: e' il caso normale, si cambia dove serve.
         iva: l.ivaPct === null || l.ivaPct === undefined ? "4" : String(l.ivaPct),
         natura: l.naturaIva || "",
@@ -1669,20 +1676,26 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
 
   const regimeCorrente = REGIMI_IVA.find((r) => r.key === regime) || REGIMI_IVA[0];
 
-  const imponibile = righe.reduce((s, l) => {
-    const p = Number(bozza[l.lineId]?.prezzo || 0);
-    const sc = Number(bozza[l.lineId]?.sconto || 0);
-    return s + Number(l.qtyOrdered || 0) * p * (1 - sc / 100);
-  }, 0);
+  // Con nettoRiga e non a mano: qui si contava solo il primo sconto, quindi il
+  // totale a schermo era piu' alto di quello che finiva in fattura appena si
+  // metteva un secondo sconto. La formula sta in un posto solo.
+  const imponibile = righe.reduce((s, l) => nettoRiga(
+    l.qtyOrdered,
+    bozza[l.lineId]?.prezzo,
+    bozza[l.lineId]?.sconto,
+    bozza[l.lineId]?.sconto2,
+    bozza[l.lineId]?.sconto3
+  ) + s, 0);
 
   // Con split payment o estero l'imposta non si somma al totale del cliente.
   const iva = !regimeCorrente.ivaEsiste
     ? 0
     : righe.reduce((s, l) => {
-        const p = Number(bozza[l.lineId]?.prezzo || 0);
-        const sc = Number(bozza[l.lineId]?.sconto || 0);
-        const al = Number(bozza[l.lineId]?.iva || 0);
-        return s + Number(l.qtyOrdered || 0) * p * (1 - sc / 100) * (al / 100);
+        const netto = nettoRiga(
+          l.qtyOrdered, bozza[l.lineId]?.prezzo, bozza[l.lineId]?.sconto,
+          bozza[l.lineId]?.sconto2, bozza[l.lineId]?.sconto3
+        );
+        return s + netto * (Number(bozza[l.lineId]?.iva || 0) / 100);
       }, 0);
 
   // Quello che il cliente ci paga davvero: con lo split l'IVA la versa allo Stato.
@@ -1695,11 +1708,13 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
         const p = String(bozza[l.lineId]?.prezzo ?? "").trim();
         const sc = String(bozza[l.lineId]?.sconto ?? "").trim();
         const sc2 = String(bozza[l.lineId]?.sconto2 ?? "").trim();
+        const sc3 = String(bozza[l.lineId]?.sconto3 ?? "").trim();
         const prima = l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario);
         if (
           p === prima &&
           sc === (l.scontoPct ? String(l.scontoPct) : "") &&
-          sc2 === (l.sconto2Pct ? String(l.sconto2Pct) : "")
+          sc2 === (l.sconto2Pct ? String(l.sconto2Pct) : "") &&
+          sc3 === (l.sconto3Pct ? String(l.sconto3Pct) : "")
         ) continue;
         await callSheetsApi({
           action: "updateOrderLine",
@@ -1708,6 +1723,7 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
             prezzoUnitario: p === "" ? null : Number(p),
             scontoPct: sc === "" ? 0 : Number(sc),
             sconto2Pct: sc2 === "" ? 0 : Number(sc2),
+            sconto3Pct: sc3 === "" ? 0 : Number(sc3),
             ivaPct: Number(bozza[l.lineId]?.iva ?? 4),
             naturaIva: bozza[l.lineId]?.natura || "",
             prezzoOrigine: "valorizzazione-preparati",
@@ -1800,16 +1816,23 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
             const bz = bozza[l.lineId] || {};
             const senzaPrezzo = !(Number(bz.prezzo ?? l.prezzoUnitario) > 0);
             const senzaIva = String(bz.iva ?? (l.ivaPct ?? "")).trim() === "";
-            const inErrore = senzaPrezzo || senzaIva;
-            const perche = [senzaPrezzo ? "manca il prezzo" : "", senzaIva ? "manca l'aliquota IVA" : ""]
-              .filter(Boolean).join(" e ");
+            // Avviso dalla valorizzazione: listino e fatture non dicono lo
+            // stesso prezzo su questo articolo. Non e' un campo mancante, e'
+            // un prezzo da guardare in faccia prima di spedire.
+            const avviso = String(l.prezzoAvviso || "").trim();
+            const inErrore = senzaPrezzo || senzaIva || !!avviso;
+            const perche = [
+              senzaPrezzo ? "manca il prezzo" : "",
+              senzaIva ? "manca l'aliquota IVA" : "",
+              avviso,
+            ].filter(Boolean).join(" · ");
             return (
               <div
                 key={l.lineId}
                 title={inErrore ? `Da sistemare: ${perche}` : undefined}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 110px 80px 80px 90px",
+                  gridTemplateColumns: "1fr 110px 72px 72px 72px 90px",
                   gap: 8,
                   alignItems: "center",
                   ...(inErrore
@@ -1827,6 +1850,11 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                   {inErrore ? <span title={perche}>⚠️ </span> : null}
                   {l.productName}
                   <span style={{ color: "#6b7280", fontWeight: 600 }}> · {l.qtyOrdered}</span>
+                  {avviso ? (
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#b91c1c", marginTop: 2 }}>
+                      {avviso}
+                    </div>
+                  ) : null}
                   {a && a.ultimoPrezzo != null ? (
                     <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 12 }}>
                       {` · ultimo ${a.ultimoPrezzo.toFixed(2)} €${a.ultimoSconto ? ` -${a.ultimoSconto}%` : ""}`}
@@ -1879,8 +1907,8 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                     }))
                   }
                 />
-                {/* Secondo sconto, IN CASCATA: si applica al prezzo gia'
-                    scontato dal primo. 100 con 30+10 fa 63,00, non 60,00. */}
+                {/* Sconti 2 e 3, IN CASCATA: ognuno si applica al prezzo gia'
+                    scontato dal precedente. 100 con 10+10+10 fa 72,90. */}
                 <input
                   style={{ ...inputStyle(), padding: "6px 8px" }}
                   type="number"
@@ -1894,6 +1922,22 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                     setBozza((prev) => ({
                       ...prev,
                       [l.lineId]: { ...(prev[l.lineId] || {}), sconto2: e.target.value },
+                    }))
+                  }
+                />
+                <input
+                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  placeholder="Sc 3 %"
+                  title="Terzo sconto, sul prezzo gia' scontato dai primi due"
+                  value={bozza[l.lineId]?.sconto3 ?? ""}
+                  onChange={(e) =>
+                    setBozza((prev) => ({
+                      ...prev,
+                      [l.lineId]: { ...(prev[l.lineId] || {}), sconto3: e.target.value },
                     }))
                   }
                 />
@@ -3143,8 +3187,19 @@ export default function App() {
     const form = {};
     for (const f of ANAG_FIELDS) form[f.key] = String(merged[f.key] ?? "");
     form.agente_id = String(merged.agente_id ?? "");
-    form.usa_storico = merged.usa_storico === false ? false : true;
+    // Da dove arrivano i prezzi. Chi ha ancora solo il vecchio interruttore
+    // booleano si ritrova la scelta corrispondente, gli altri la regola nuova:
+    // prima il listino, lo storico dove il listino non arriva.
+    form.fonte_prezzi = String(
+      merged.fonte_prezzi || (merged.usa_storico === false ? "solo-listino" : "listino")
+    );
     form.listino_standard = String(merged.listino_standard ?? "");
+    // Gli sconti del cliente, in cascata. Vuoto NON e' zero: vuoto vuol dire
+    // "non lo sappiamo" e lascia lavorare lo sconto ricavato dalle fatture,
+    // zero vuol dire "prezzo pieno, e' voluto".
+    for (const k of ["sconto1_pct", "sconto2_pct", "sconto3_pct"]) {
+      form[k] = merged[k] === null || merged[k] === undefined ? "" : String(merged[k]);
+    }
     // Se l'ordine porta gia' un agente, il form parte da quello.
     if (!form.agente_nome && order.agenteNome) form.agente_nome = String(order.agenteNome);
     if (!form.cap && order?.cap) form.cap = String(order.cap);
@@ -3167,8 +3222,28 @@ export default function App() {
       const payload = { chiave, operatore: authUser?.username || "" };
       for (const f of ANAG_FIELDS) payload[f.key] = anagForm[f.key] ?? "";
       payload.agente_id = anagForm.agente_id ?? "";
-      payload.usa_storico = anagForm.usa_storico !== false;
+      payload.fonte_prezzi = anagForm.fonte_prezzi || "listino";
+      // Il vecchio booleano si tiene allineato: altri pezzi lo leggono ancora.
+      payload.usa_storico = payload.fonte_prezzi !== "solo-listino";
       payload.listino_standard = anagForm.listino_standard ?? "";
+      for (const k of ["sconto1_pct", "sconto2_pct", "sconto3_pct"]) {
+        payload[k] = anagForm[k] ?? "";
+      }
+
+      // "Se inserisco un listino a mano i prezzi devono automaticamente
+      // cambiare" (Luca 05/08/2026). Gli ordini di QUESTO cliente ancora da
+      // preparare vengono rivalorizzati subito: la chiave la sappiamo solo qui,
+      // quindi la lista degli id la prepariamo noi e la manda l'adapter.
+      // Gli ordini spediti o archiviati non si toccano: quello che e' partito
+      // resta come e' partito.
+      payload.rivalorizza = orders
+        .filter((o) =>
+          clientKeyFor(o) === chiave &&
+          !o.archived &&
+          String(o.computedStatus) !== "Spedito"
+        )
+        .map((o) => String(o.id));
+
       const res = await callSheetsApi({
         action: "saveClienteOverride",
         payload: JSON.stringify(payload),
@@ -5531,9 +5606,10 @@ export default function App() {
         const prezzo = Number(line.prezzoUnitario || 0);
         const sconto = Number(line.scontoPct || 0);
         const sconto2 = Number(line.sconto2Pct || 0);
-        // I due sconti in CASCATA: il secondo sul prezzo gia' scontato dal
-        // primo. Stessa formula del database (netto_riga).
-        const totale = nettoRiga(line.qtyOrdered, prezzo, sconto, sconto2);
+        const sconto3 = Number(line.sconto3Pct || 0);
+        // I tre sconti in CASCATA: ognuno sul prezzo gia' scontato dal
+        // precedente. Stessa formula del database (netto_riga).
+        const totale = nettoRiga(line.qtyOrdered, prezzo, sconto, sconto2, sconto3);
         imponibile += totale;
         const aliq = Number(line.ivaPct ?? 4);
         perAliquota[aliq] = (perAliquota[aliq] || 0) + totale;
@@ -5553,8 +5629,8 @@ export default function App() {
           `<tr>${base}` +
           `<td style="text-align:right">${cellaPrezzo}</td>` +
           `<td style="text-align:right">${
-             [sconto > 0 ? eur(sconto) + "%" : "", sconto2 > 0 ? eur(sconto2) + "%" : ""]
-               .filter(Boolean).join(" + ") || ""
+             [sconto, sconto2, sconto3].filter((x) => x > 0)
+               .map((x) => eur(x) + "%").join(" + ") || ""
            }</td>` +
           `<td style="text-align:right">${cellaIva}</td>` +
           `<td style="text-align:right">${cellaTotale}</td></tr>`
@@ -12990,26 +13066,34 @@ ${isConferma
                   background: "#f8fafc",
                 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a", marginBottom: 8 }}>
-                    Da dove arrivano i prezzi
+                    Prezzi e sconti di questo cliente
                   </div>
-                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
-                    <input
-                      type="checkbox"
-                      checked={anagForm.usa_storico !== false}
-                      onChange={(e) => setAnagForm((prev) => ({ ...prev, usa_storico: e.target.checked }))}
-                      style={{ width: 16, height: 16, accentColor: "#15803d", cursor: "pointer" }}
-                    />
-                    <span>
-                      <b>Usa lo storico di questo cliente</b>
-                      <span style={{ color: "#66758b" }}> — quello che ha davvero pagato negli ultimi 12 mesi</span>
-                    </span>
-                  </label>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 13, color: anagForm.usa_storico !== false ? "#8a94a6" : "#40516a", fontWeight: 700 }}>
-                      Listino {anagForm.usa_storico !== false ? "di riserva" : "da usare"}
+
+                  {/* Una scelta sola invece di una spunta piu' una tendina:
+                      erano due controlli per una domanda, e "listino, ma storico
+                      dove il listino non arriva" non si riusciva nemmeno a dire
+                      (Luca: "piuttosto che mille bottoni, fai piu' ordinato"). */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: "#40516a", fontWeight: 700, minWidth: 92 }}>
+                      I prezzi da
                     </span>
                     <select
-                      style={{ ...inputStyle(), width: 260, height: 40 }}
+                      style={{ ...inputStyle(), width: 320, height: 40 }}
+                      value={anagForm.fonte_prezzi || "listino"}
+                      onChange={(e) => setAnagForm((prev) => ({ ...prev, fonte_prezzi: e.target.value }))}
+                    >
+                      <option value="listino">Listino, storico dove il listino non arriva</option>
+                      <option value="solo-listino">Solo listino, mai lo storico</option>
+                      <option value="storico">Storico, listino dove lo storico non arriva</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: "#40516a", fontWeight: 700, minWidth: 92 }}>
+                      Listino
+                    </span>
+                    <select
+                      style={{ ...inputStyle(), width: 320, height: 40 }}
                       value={anagForm.listino_standard ?? ""}
                       onChange={(e) => setAnagForm((prev) => ({ ...prev, listino_standard: e.target.value }))}
                     >
@@ -13018,11 +13102,56 @@ ${isConferma
                       <option value="8">Listino 8 · Ho.Re.Ca. (56 articoli)</option>
                     </select>
                   </div>
+
+                  {/* Tre sconti in cascata: il secondo sul prezzo gia' scontato
+                      dal primo, il terzo su quello scontato dai primi due.
+                      100 con 10+10+10 fa 72,90, non 70,00. */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: "#40516a", fontWeight: 700, minWidth: 92 }}>
+                      Sconti %
+                    </span>
+                    {[
+                      ["sconto1_pct", "Sc 1", "Primo sconto, sul prezzo di listino"],
+                      ["sconto2_pct", "Sc 2", "Secondo sconto, sul prezzo gia' scontato dal primo"],
+                      ["sconto3_pct", "Sc 3", "Terzo sconto, sul prezzo gia' scontato dai primi due"],
+                    ].map(([k, etichetta, spiega]) => (
+                      <input
+                        key={k}
+                        style={{ ...inputStyle(), width: 84, height: 40 }}
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        placeholder={etichetta}
+                        title={spiega}
+                        value={anagForm[k] ?? ""}
+                        onChange={(e) => setAnagForm((prev) => ({ ...prev, [k]: e.target.value }))}
+                      />
+                    ))}
+                    {(() => {
+                      const sc = ["sconto1_pct", "sconto2_pct", "sconto3_pct"]
+                        .map((k) => Number(String(anagForm[k] ?? "").replace(",", ".")) || 0);
+                      const netto = 100 * (1 - sc[0] / 100) * (1 - sc[1] / 100) * (1 - sc[2] / 100);
+                      if (!sc.some((x) => x > 0)) return null;
+                      return (
+                        <span style={{ fontSize: 12, color: "#15803d", fontWeight: 700 }}>
+                          su 100 € paga {netto.toFixed(2)} €
+                        </span>
+                      );
+                    })()}
+                  </div>
+
                   <div style={{ marginTop: 8, fontSize: 11.5, color: "#66758b", lineHeight: 1.45 }}>
-                    {anagForm.usa_storico !== false
-                      ? "Comanda lo storico. Il listino serve per gli articoli che questo cliente non ha mai comprato."
-                      : "Comanda il listino: lo storico non viene consultato, nemmeno se esiste."}
-                    {" "}Il listino 8 copre 56 articoli: sugli altri si ripiega sul listino 1.
+                    Gli sconti valgono sui prezzi di listino. Sui prezzi che
+                    arrivano dallo storico resta lo sconto con cui il cliente ha
+                    davvero comprato, che di quel prezzo e' l'altra meta'.
+                    {" "}Lasciare vuoto non e' come scrivere zero: vuoto usa lo
+                    sconto ricavato dalle fatture di questo cliente, zero vuol
+                    dire prezzo pieno.
+                    {" "}Il listino 8 copre 56 articoli: sugli altri si ripiega
+                    sul listino 1.
+                    {" "}Salvando, gli ordini di questo cliente ancora da
+                    preparare si aggiornano da soli.
                   </div>
                 </div>
 

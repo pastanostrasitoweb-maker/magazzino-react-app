@@ -77,16 +77,17 @@ async function selectIn(table, col, ids, cols = "*") {
   return out;
 }
 
-// Il netto di una riga. I due sconti vanno IN CASCATA: il secondo si applica
-// al prezzo gia' scontato dal primo, quindi 100 con 30+10 fa 63,00 e non 60,00.
-// Sommarli darebbe un prezzo piu' basso del dovuto su ogni riga.
-// Stessa formula della netto_riga() sul database (sql/valorizza_ordine.sql):
-// se cambia una, va cambiata l'altra.
-export function nettoRiga(qta, prezzo, sconto1, sconto2) {
+// Il netto di una riga. I tre sconti vanno IN CASCATA: ognuno si applica al
+// prezzo gia' scontato dal precedente, quindi 100 con 10+10+10 fa 72,90 e non
+// 70,00. Sommarli darebbe un prezzo piu' basso del dovuto su ogni riga.
+// Stessa formula della netto_riga() sul database
+// (sql/sconti_cliente_e_listino.sql): se cambia una, va cambiata l'altra.
+export function nettoRiga(qta, prezzo, sconto1, sconto2, sconto3) {
   return (
     Number(qta || 0) * Number(prezzo || 0) *
     (1 - Number(sconto1 || 0) / 100) *
-    (1 - Number(sconto2 || 0) / 100)
+    (1 - Number(sconto2 || 0) / 100) *
+    (1 - Number(sconto3 || 0) / 100)
   );
 }
 
@@ -145,7 +146,10 @@ const mapRigaRow = (row) => ({
     : Number(row.prezzo_unitario),
   Sconto_Pct: Number(row.sconto_pct ?? 0),
   Sconto2_Pct: Number(row.sconto2_pct ?? 0),
+  Sconto3_Pct: Number(row.sconto3_pct ?? 0),
   Prezzo_Origine: row.prezzo_origine ?? "",
+  // Avviso rosso quando il listino e le fatture non dicono lo stesso prezzo.
+  Prezzo_Avviso: row.prezzo_avviso ?? "",
   Iva_Pct: row.iva_pct === null || row.iva_pct === undefined ? null : Number(row.iva_pct),
   Natura_Iva: row.natura_iva ?? "",
 });
@@ -194,13 +198,14 @@ async function ricalcolaImponibile(idOrdine) {
   try {
     const { data, error } = await supabase
       .from("righe_ordine")
-      .select("quantita_ordinata,prezzo_unitario,sconto_pct,sconto2_pct")
+      .select("quantita_ordinata,prezzo_unitario,sconto_pct,sconto2_pct,sconto3_pct")
       .eq("id_ordine", String(idOrdine));
     if (error) return;
     const righe = data || [];
     if (!righe.some((r) => r.prezzo_unitario != null)) return; // ordine non valorizzato
     const tot = righe.reduce(
-      (s, r) => s + nettoRiga(r.quantita_ordinata, r.prezzo_unitario, r.sconto_pct, r.sconto2_pct),
+      (s, r) => s + nettoRiga(r.quantita_ordinata, r.prezzo_unitario, r.sconto_pct,
+                              r.sconto2_pct, r.sconto3_pct),
       0
     );
     await supabase
@@ -401,9 +406,26 @@ async function bulkLoad() {
   // Si sovrappone allo snapshot/GAMMA senza toccare la fonte. Best-effort.
   const overridesClienti = {};
   try {
-    const { data } = await supabase.from("clienti_override").select("*");
-    for (const r of data || []) {
-      if (r && r.chiave) overridesClienti[String(r.chiave)] = r;
+    // A PAGINE, come le destinazioni. Le anagrafiche corrette a mano sono 653 e
+    // crescono ogni giorno: al millesimo PostgREST taglia senza dire niente e i
+    // clienti oltre quella soglia si ritroverebbero l'anagrafica vuota, agente e
+    // sconti compresi. Il taglio non da' errore, quindi non si vedrebbe finche'
+    // qualcuno non se ne accorge su un DDT.
+    const PAGINA = 1000;
+    for (let da = 0; ; da += PAGINA) {
+      const { data, error } = await supabase
+        .from("clienti_override")
+        .select("*")
+        .order("chiave")
+        .range(da, da + PAGINA - 1);
+      if (error) {
+        console.warn("clienti_override:", error.message);
+        break;
+      }
+      for (const r of data || []) {
+        if (r && r.chiave) overridesClienti[String(r.chiave)] = r;
+      }
+      if (!data || data.length < PAGINA) break;
     }
   } catch (_) {
     // tabella non ancora creata: nessun override
@@ -1113,9 +1135,17 @@ const OVERRIDE_CLIENTE_FIELDS = [
   // L'agente e' un dato del cliente: si sceglie una volta e vale per tutti i
   // suoi ordini (Luca 04/08/2026).
   "agente_id", "agente_nome",
-  // Come si valorizza: storico o listino fisso (Luca 04/08/2026).
-  "listino_standard",
+  // Come si valorizza: quale listino, e in che ordine si guardano listino e
+  // storico (Luca 04/08 e 05/08/2026).
+  "listino_standard", "fonte_prezzi",
 ];
+
+// Gli sconti sono NUMERI e stanno fuori dal ciclo di sopra, che passa tutto da
+// String(): "0" e' una stringa piena, quindi un cliente che azzera lo sconto
+// se lo ritroverebbe scritto invece che cancellato. Vuoto vuol dire "non lo
+// sappiamo" e lascia lavorare la rete di sicurezza; zero vuol dire "prezzo
+// pieno, e' voluto". Sono due cose diverse e devono restare distinguibili.
+const OVERRIDE_CLIENTE_SCONTI = ["sconto1_pct", "sconto2_pct", "sconto3_pct"];
 
 async function saveClienteOverride(params) {
   const p = parsePayload(params);
@@ -1133,6 +1163,12 @@ async function saveClienteOverride(params) {
   // in JavaScript e' vero, e il cliente si ritroverebbe lo storico acceso
   // proprio dopo averlo spento.
   if (p.usa_storico !== undefined) row.usa_storico = !!p.usa_storico;
+  for (const f of OVERRIDE_CLIENTE_SCONTI) {
+    if (p[f] === undefined) continue;
+    const grezzo = String(p[f] ?? "").trim().replace(",", ".");
+    row[f] = grezzo === "" ? null : Number(grezzo);
+    if (Number.isNaN(row[f])) row[f] = null;
+  }
   row.operatore = p.operatore || "";
   row.aggiornato_il = new Date().toISOString();
   const { data, error } = await supabase
@@ -1141,7 +1177,30 @@ async function saveClienteOverride(params) {
     .select()
     .maybeSingle();
   if (error) return failure(error);
-  return { success: true, override: data || row };
+
+  // "Se inserisco un listino a mano i prezzi devono automaticamente cambiare"
+  // (Luca 05/08/2026). Cambiare listino o sconti in anagrafica e' una decisione
+  // commerciale: gli ordini ancora da preparare la devono recepire subito,
+  // altrimenti si scopre il vecchio prezzo in fattura.
+  // Con FORZA, perche' quelle righe hanno gia' un prezzo: senza, la
+  // valorizzazione le salterebbe e non cambierebbe niente.
+  // Gli id li manda l'interfaccia, che sa quali ordini sono di questo cliente:
+  // la chiave override si costruisce da dati che vivono solo nel frontend
+  // (snapshot APP e anagrafiche GAMMA) e qui non si potrebbe rifare uguale.
+  const daRivalorizzare = Array.isArray(p.rivalorizza) ? p.rivalorizza : [];
+  const rivalorizzati = [];
+  for (const idOrdine of daRivalorizzare) {
+    const id = String(idOrdine || "").trim();
+    if (!id) continue;
+    const { error: errVal } = await supabase.rpc("valorizza_ordine", {
+      p_id_ordine: id,
+      p_forza: true,
+    });
+    if (errVal) console.warn("rivalorizzazione", id, errVal.message);
+    else rivalorizzati.push(id);
+  }
+
+  return { success: true, override: data || row, rivalorizzati };
 }
 
 // Carica un file (data URL) nel bucket Storage 'documenti' e ritorna l'URL
@@ -1759,6 +1818,7 @@ async function addOrderLine(params) {
     riga.prezzo_unitario = Number(prezzo);
     riga.sconto_pct = Number(p.scontoPct ?? p.sconto_pct ?? 0);
     riga.sconto2_pct = Number(p.sconto2Pct ?? p.sconto2_pct ?? 0);
+    riga.sconto3_pct = Number(p.sconto3Pct ?? p.sconto3_pct ?? 0);
     riga.prezzo_origine = String(p.prezzoOrigine ?? p.prezzo_origine ?? "storico");
   }
 
@@ -1821,6 +1881,8 @@ async function updateOrderLine(params) {
   if (scontoUp !== undefined) patch.sconto_pct = Number(scontoUp || 0);
   const sconto2Up = p.sconto2Pct ?? p.sconto2_pct;
   if (sconto2Up !== undefined) patch.sconto2_pct = Number(sconto2Up || 0);
+  const sconto3Up = p.sconto3Pct ?? p.sconto3_pct;
+  if (sconto3Up !== undefined) patch.sconto3_pct = Number(sconto3Up || 0);
   // Aliquota IVA della riga: nello stesso documento convivono il 4 del cibo e
   // il 22 del trasporto, quindi sta sulla riga e non sulla testata.
   const ivaUp = p.ivaPct ?? p.iva_pct;
