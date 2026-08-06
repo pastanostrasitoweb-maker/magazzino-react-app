@@ -1996,11 +1996,22 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                       {` · ultimo ${a.ultimoPrezzo.toFixed(2)} €${a.ultimoSconto ? ` -${a.ultimoSconto}%` : ""}`}
                     </span>
                   ) : null}
-                  <PrezziDisponibili
-                    compatto
+                  {/* Il prezzo dell'app agenti resta quello che e': da qui si
+                      cambia listino solo se serve, e si vede prima quanto costa. */}
+                  {l.prezzoOrigine === "app" && l.prezzoUnitario != null ? (
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#166534", marginTop: 2 }}>
+                      prezzo dall'app agenti
+                    </div>
+                  ) : null}
+                  <TendinaListini
                     codice={a?.codice || String(l.productName || "").split(" ").slice(0, 2).join(" ")}
                     storico={a}
                     listini={listini}
+                    dallApp={
+                      l.prezzoOrigine === "app" && l.prezzoUnitario != null
+                        ? { prezzo: l.prezzoUnitario, sconto: l.scontoPct }
+                        : null
+                    }
                     onScegli={(prezzo, sconto) =>
                       setBozza((prev) => ({
                         ...prev,
@@ -2134,6 +2145,72 @@ function useListiniPrezzi(attivo) {
   }, [attivo]);
 
   return listini;
+}
+
+// TENDINA DEI LISTINI (Luca 06/08/2026).
+//
+// Il prezzo che arriva dall'app agenti si tiene sempre com'e': e' quello che
+// l'agente ha concordato col cliente. Da qui pero' si deve poter passare a un
+// altro listino quando serve, vedendo prima quanto costa: la tendina dice il
+// nome del listino E il prezzo, cosi' si sceglie sapendo, non a memoria.
+function TendinaListini({ codice, storico, listini, dallApp, onScegli }) {
+  const k = String(codice || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const l = (listini || {})[k] || {};
+  const voci = [];
+
+  if (dallApp && dallApp.prezzo != null) {
+    voci.push({
+      id: "app",
+      etichetta: "Dall'app agenti",
+      prezzo: Number(dallApp.prezzo),
+      sconto: Number(dallApp.sconto || 0),
+    });
+  }
+  if (storico && storico.ultimoPrezzo != null) {
+    voci.push({
+      id: "storico",
+      etichetta: "Ultimo a questo cliente",
+      prezzo: Number(storico.ultimoPrezzo),
+      sconto: Number(storico.ultimoSconto || 0),
+      nota: storico.ultimoOrdine,
+    });
+  }
+  if (l.l1) voci.push({ id: "l1", etichetta: "Listino 1", prezzo: Number(l.l1.prezzo), sconto: Number(l.l1.sconto || 0) });
+  if (l.l8) voci.push({ id: "l8", etichetta: "Listino 8 Ho.Re.Ca.", prezzo: Number(l.l8.prezzo), sconto: Number(l.l8.sconto || 0) });
+
+  if (!voci.length) return null;
+
+  const euro = (n) => Number(n).toFixed(2).replace(".", ",");
+  return (
+    <select
+      value=""
+      onChange={(e) => {
+        const v = voci.find((x) => x.id === e.target.value);
+        if (v) onScegli(v.prezzo, v.sconto);
+      }}
+      title="Cambia il prezzo prendendolo da un altro listino"
+      style={{
+        marginTop: 4,
+        width: "100%",
+        maxWidth: 330,
+        border: "1px solid #c7d2fe",
+        background: "#eef2ff",
+        color: "#3730a3",
+        borderRadius: 8,
+        padding: "5px 8px",
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: "pointer",
+      }}
+    >
+      <option value="">Cambia listino…</option>
+      {voci.map((v) => (
+        <option key={v.id} value={v.id}>
+          {v.etichetta}: {euro(v.prezzo)} €{v.sconto ? ` −${v.sconto}%` : ""}{v.nota ? ` · ${v.nota}` : ""}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 // Le tre fonti di prezzo per un articolo, una accanto all'altra: quello che il
