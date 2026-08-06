@@ -459,11 +459,26 @@ function scadenzaDaMetodo(dataOrdine, metodo) {
   return base;
 }
 
-function pagamentoDaSistemare(order) {
+// Il metodo di un ordine si scrive UNA volta. Vale quello dell'ordine se c'e' ed
+// e' leggibile (la deroga: capita che una singola vendita si incassi in modo
+// diverso dal solito), altrimenti quello dell'ANAGRAFICA del cliente.
+//
+// "Non far inserire le informazioni due volte: se il metodo di pagamento lo metto
+// sull'anagrafica deve essere quello, non me lo deve richiedere in fase di ordine.
+// Richiedilo solo se non e' conforme." (Luca 06/08/2026)
+function metodoEffettivo(metodoOrdine, metodoCliente) {
+  if (metodoLeggibile(metodoOrdine)) return String(metodoOrdine).trim();
+  if (metodoLeggibile(metodoCliente)) return String(metodoCliente).trim();
+  // Niente di leggibile: si tiene quello che c'e' scritto sull'ordine, che
+  // almeno dice da dove partire per correggere.
+  return String(metodoOrdine || metodoCliente || "").trim();
+}
+
+function pagamentoDaSistemare(order, metodoCliente) {
   if (!order) return false;
   const data = String(order.date || "").slice(0, 10);
   if (data && data < PAGAMENTI_ALLINEATI_DAL) return false;
-  return !metodoLeggibile(order.metodoPagamento);
+  return !metodoLeggibile(metodoEffettivo(order.metodoPagamento, metodoCliente));
 }
 
 // Motivi rapidi per cui un ordine resta FERMO (Luca 2026-07-24). Il magazziniere
@@ -914,8 +929,10 @@ function SchedaCliente({
               <label style={{ ...labelStyle(), fontSize: 11 }}>Agente *</label>
               <select style={{ ...inputStyle(), height: 38 }} value={f.agente_nome} onChange={set("agente_nome")}>
                 <option value="">— scegli —</option>
-                {(agenti || []).map((a) => (
-                  <option key={a.id || a.nome} value={a.nome || a.name || ""}>{a.nome || a.name}</option>
+                {(agenti || []).map((a, i) => (
+                  <option key={`${a.id || a.nome || a.name || "ag"}-${i}`} value={a.nome || a.name || ""}>
+                    {a.nome || a.name}
+                  </option>
                 ))}
               </select>
             </div>
@@ -1087,10 +1104,13 @@ const CAMPI_SCHEDA = [
 // 30 giorni messo a caso (condizione_certa = false) e nessuno lo sa. Scegliendo
 // dalla tendina si riscrivono insieme il metodo E la scadenza della partita.
 // Verde scarico quando e' a posto: si legge senza dover cliccare.
-function BadgePagamento({ order, onScegli, compatto = false }) {
-  const attuale = String(order?.metodoPagamento || "").trim();
+function BadgePagamento({ order, metodoCliente, onScegli, compatto = false }) {
+  const attuale = metodoEffettivo(order?.metodoPagamento, metodoCliente);
   const leggibile = metodoLeggibile(attuale);
-  const daSistemare = pagamentoDaSistemare(order);
+  const daSistemare = pagamentoDaSistemare(order, metodoCliente);
+  // Da dove arriva: serve saperlo, perche' cambiarlo qui vale solo per QUESTO
+  // ordine, mentre quello dell'anagrafica vale per tutti i suoi.
+  const dallAnagrafica = !metodoLeggibile(order?.metodoPagamento) && metodoLeggibile(metodoCliente);
   const base = {
     fontSize: compatto ? 11.5 : 12.5, whiteSpace: "nowrap",
     border: "1px solid #cfd8e6", cursor: "pointer",
@@ -1110,7 +1130,7 @@ function BadgePagamento({ order, onScegli, compatto = false }) {
           ? (attuale
               ? `"${attuale}" non dice quando si incassa: la scadenza a Cashflow e' messa a caso. Scegli il metodo giusto.`
               : "Metodo di pagamento mancante: la scadenza a Cashflow e' messa a caso.")
-          : `${attuale} — la scadenza si calcola da qui. Clicca per cambiarlo.`
+          : `${attuale}${dallAnagrafica ? " (dall'anagrafica del cliente)" : ""} — la scadenza si calcola da qui. Cambiandolo qui vale solo per questo ordine.`
       }
       onChange={(e) => { if (e.target.value) onScegli(e.target.value); }}
     >
@@ -3647,6 +3667,15 @@ export default function App() {
     return nome ? "nome:" + nome : "";
   };
 
+  // Il metodo scritto sull'ANAGRAFICA del cliente di quell'ordine. E' la fonte
+  // che vale quando l'ordine non ne porta uno suo: cosi' non si chiede due volte.
+  const metodoDelCliente = (order) =>
+    String((clientiOverride[clientKeyFor(order)] || {}).metodo_pagamento || "").trim();
+
+  // Se il pagamento di questo ordine e' da sistemare, tenendo conto
+  // dell'anagrafica. Da usare al posto di pagamentoDaSistemare(order) secco.
+  const pagamentoScoperto = (order) => pagamentoDaSistemare(order, metodoDelCliente(order));
+
   // Dato cliente EFFETTIVO = base (snapshot APP o GAMMA) + il nostro override.
   const effectiveCliente = (order) => {
     const app = appAnagrafiche[String(order?.id || "")];
@@ -3783,8 +3812,8 @@ export default function App() {
     // Sul contrassegno non e' nemmeno una questione di scadenza: e' il corriere
     // che deve sapere quanto incassare, e sul documento ci va scritto.
     // Gli ordini precedenti al 03/08 non li tocca (vedi pagamentoDaSistemare).
-    if (pagamentoDaSistemare(order)) {
-      const attuale = String(order?.metodoPagamento || "").trim();
+    if (pagamentoScoperto(order)) {
+      const attuale = metodoEffettivo(order?.metodoPagamento, metodoDelCliente(order));
       bloccanti.push(
         attuale
           ? `Metodo di pagamento non valido ("${attuale}": non dice quando si incassa)`
@@ -6184,6 +6213,7 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
   const bollinoPagamento = (order, compatto = false) => (
     <BadgePagamento
       order={order}
+      metodoCliente={metodoDelCliente(order)}
       compatto={compatto}
       onScegli={(m) => setOrderPagamento(order.id, m)}
     />
@@ -6765,7 +6795,7 @@ ${isConferma
       (o) =>
         !o.archived &&
         String(o.status || "").trim().toLowerCase() === "preparato" &&
-        pagamentoDaSistemare(o)
+        pagamentoScoperto(o)
     );
 
     const conferma = window.confirm(
@@ -6817,8 +6847,8 @@ ${isConferma
     // di non ritorno (Luca 06/08/2026: "metti in modo tale che debba essere
     // inserito bene").
     const ord = orders.find((o) => String(o.id) === String(orderId));
-    if (ord && pagamentoDaSistemare(ord)) {
-      const attuale = String(ord.metodoPagamento || "").trim();
+    if (ord && pagamentoScoperto(ord)) {
+      const attuale = metodoEffettivo(ord.metodoPagamento, metodoDelCliente(ord));
       alert(
         (attuale
           ? `Il metodo di pagamento e' "${attuale}", e non dice quando si incassa.`
@@ -9492,23 +9522,36 @@ ${isConferma
                             quando arrivano. */}
                         <div style={{
                           marginTop: 12, padding: "10px 12px", borderRadius: 14,
-                          border: "1px solid " + (pagamentoDaSistemare(selectedOrder) ? "#fecaca" : "#dbe2ea"),
-                          background: pagamentoDaSistemare(selectedOrder) ? "#fef2f2" : "#fff",
+                          border: "1px solid " + (pagamentoScoperto(selectedOrder) ? "#fecaca" : "#dbe2ea"),
+                          background: pagamentoScoperto(selectedOrder) ? "#fef2f2" : "#fff",
                           display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
                         }}>
                           <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a" }}>
                             Pagamento
                           </div>
                           {bollinoPagamento(selectedOrder)}
-                          {pagamentoDaSistemare(selectedOrder) ? (
+                          {pagamentoScoperto(selectedOrder) ? (
                             <span style={{ fontSize: 12, color: "#b91c1c", fontWeight: 700 }}>
                               Senza questo l'ordine non si archivia: la scadenza sarebbe una stima.
                             </span>
                           ) : (() => {
-                            const scad = scadenzaDaMetodo(selectedOrder.date, selectedOrder.metodoPagamento);
+                            // La scadenza parte dal giorno dell'ARCHIVIAZIONE, non
+                            // dalla data dell'ordine (regola di Luca 06/08/2026).
+                            // Finche' l'ordine non e' archiviato la data non c'e'
+                            // ancora: si mostra quella che uscirebbe archiviando
+                            // oggi, e lo si dice.
+                            const daQuando = selectedOrder.archived
+                              ? (selectedOrder.date || "")
+                              : new Date().toISOString().slice(0, 10);
+                            const scad = scadenzaDaMetodo(
+                              daQuando,
+                              metodoEffettivo(selectedOrder.metodoPagamento, metodoDelCliente(selectedOrder))
+                            );
                             return scad ? (
                               <span style={{ fontSize: 12, color: "#66758b" }}>
-                                si incassa entro il {fmtDate(scad)}
+                                {selectedOrder.archived
+                                  ? `si incassa entro il ${fmtDate(scad)}`
+                                  : `archiviando oggi si incassa entro il ${fmtDate(scad)}`}
                               </span>
                             ) : null;
                           })()}

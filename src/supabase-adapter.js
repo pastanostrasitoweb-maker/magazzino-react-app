@@ -528,12 +528,45 @@ async function archivePreparedOrders() {
   //
   // Gli ordini scoperti non si perdono: restano in "Preparati" col bollino 💸
   // rosso, e si archiviano appena qualcuno mette il metodo giusto.
+  // Il metodo NON si chiede due volte: se l'ordine non ne porta uno leggibile
+  // vale quello scritto sull'anagrafica del cliente (Luca 06/08/2026). Qui si
+  // rifa' lo stesso giro di metodo_pagamento_effettivo() sul database: codice
+  // cliente -> P.IVA dal registro -> anagrafica indicizzata per 'piva:<numero>'.
+  const metodiCliente = {};
+  const codiciCandidati = [...new Set(candidati.map((r) => String(r.id_cliente || "")).filter(Boolean))];
+  if (codiciCandidati.length) {
+    try {
+      const mstR = await selectIn("clienti_master", "codice", codiciCandidati, "codice,piva");
+      const chiavi = [...new Set(
+        (mstR || []).map((m) => "piva:" + String(m.piva || "").replace(/\D/g, "")).filter((k) => k !== "piva:")
+      )];
+      const perCodice = {};
+      for (const m of mstR || []) {
+        perCodice[String(m.codice)] = "piva:" + String(m.piva || "").replace(/\D/g, "");
+      }
+      if (chiavi.length) {
+        const ovR = await selectIn("clienti_override", "chiave", chiavi, "chiave,metodo_pagamento");
+        const perChiave = {};
+        for (const o of ovR || []) perChiave[String(o.chiave)] = String(o.metodo_pagamento || "").trim();
+        for (const [cod, ch] of Object.entries(perCodice)) metodiCliente[cod] = perChiave[ch] || "";
+      }
+    } catch (e) {
+      // Se le anagrafiche non si leggono si resta prudenti: senza il metodo del
+      // cliente qualche ordine resta in Preparati, che e' il male minore.
+      console.warn("archiviazione: anagrafiche non lette", e);
+    }
+  }
+
   const scoperti = [];
   const toArchive = [];
   for (const r of candidati) {
     const data0 = String(r.data_ordine || r.data_preparato || "").slice(0, 10);
     const daAllineare = !data0 || data0 >= PAGAMENTI_ALLINEATI_DAL_ADAPTER;
-    if (daAllineare && !METODI_PAGAMENTO_CANONICI.has(String(r.metodo_pagamento || "").trim())) {
+    const suOrdine = String(r.metodo_pagamento || "").trim();
+    const suCliente = String(metodiCliente[String(r.id_cliente || "")] || "").trim();
+    const leggibile =
+      METODI_PAGAMENTO_CANONICI.has(suOrdine) || METODI_PAGAMENTO_CANONICI.has(suCliente);
+    if (daAllineare && !leggibile) {
       scoperti.push(r.id_ordine);
       continue;
     }
