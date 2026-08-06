@@ -359,29 +359,85 @@ function useUnaAzioneAllaVolta() {
 // scadenze. La lista ricalca gli strumenti che usiamo davvero in fattura
 // (MP05 bonifico, MP12 Ri.Ba., MP02 assegno, MP01 contanti, MP08 carta)
 // incrociati con i termini che pratichiamo.
-const METODI_PAGAMENTO = [
-  "Contrassegno contanti",
-  "Contrassegno assegno",
-  "Bonifico anticipato",
-  "Bonifico alla consegna",
-  "Bonifico fine mese",
-  "Bonifico 30 gg",
-  "Bonifico 30 gg fine mese",
-  "Bonifico 60 gg fine mese",
-  "Bonifico 90 gg fine mese",
-  // "data fattura" scritto per esteso come "fine mese": sono due decorrenze
-  // diverse e su 60 giorni ballano settimane di incasso, quindi la sigla DF
-  // da sola e' troppo poco per chi sceglie dalla tendina. (Luca 05/08/2026)
-  "Ri.Ba. 30 gg data fattura",
-  "Ri.Ba. 60 gg data fattura",
-  "Ri.Ba. 30 gg fine mese",
-  "Ri.Ba. 60 gg fine mese",
-  "Ri.Ba. 90 gg fine mese",
-  "Assegno",
-  "Carta di credito",
-  "Carta / POS",
-  "Da concordare",
+// I METODI DI PAGAMENTO, IN FORMA CANONICA (Luca 06/08/2026)
+//
+// "Ci dobbiamo avere la sicurezza del metodo di pagamento, che lo leggi. Fai in
+// modo che i contrassegni e le riba siano perfettamente allineati: o lo metti
+// all'inizio o lo metti alla fine."
+//
+// La forma e' sempre  <MEZZO> <giorni> gg <decorrenza>
+// mezzo in TESTA, decorrenza in CODA, "gg" scritto sempre uguale, "data fattura"
+// e "fine mese" per esteso. Cosi' chi legge trova il mezzo dove se lo aspetta e
+// il termine dove se lo aspetta, e la stessa forma la sa leggere il database
+// (sql/metodo_pagamento_canonico.sql) per calcolarci la scadenza.
+//
+// Raggruppati per mezzo, e non piu' mescolati: tutti i contrassegni insieme,
+// tutte le Ri.Ba. insieme, tutti i bonifici insieme. Prima "Bonifico 30 gg" e
+// "Ri.Ba. 30 gg fine mese" erano a due righe di distanza in un elenco unico di
+// diciannove voci, ed e' li' che si sbaglia riga.
+//
+// "Bonifico 30 gg" senza decorrenza NON c'e' piu': era la voce che lasciava il
+// dubbio, e fra data fattura e fine mese su una fattura del 3 agosto ballano 28
+// giorni di incasso.
+const GRUPPI_PAGAMENTO = [
+  {
+    titolo: "Contrassegno — si incassa alla consegna",
+    voci: ["Contrassegno contanti", "Contrassegno assegno"],
+  },
+  {
+    titolo: "Ri.Ba.",
+    voci: [
+      "Ri.Ba. 30 gg data fattura",
+      "Ri.Ba. 30 gg fine mese",
+      "Ri.Ba. 60 gg data fattura",
+      "Ri.Ba. 60 gg fine mese",
+      "Ri.Ba. 90 gg data fattura",
+      "Ri.Ba. 90 gg fine mese",
+    ],
+  },
+  {
+    titolo: "Bonifico",
+    voci: [
+      "Bonifico anticipato",
+      "Bonifico alla consegna",
+      "Bonifico fine mese",
+      "Bonifico 30 gg data fattura",
+      "Bonifico 30 gg fine mese",
+      "Bonifico 60 gg data fattura",
+      "Bonifico 60 gg fine mese",
+      "Bonifico 90 gg data fattura",
+      "Bonifico 90 gg fine mese",
+    ],
+  },
+  {
+    titolo: "Altro — si incassa subito",
+    voci: ["Assegno", "Carta di credito", "Carta / POS"],
+  },
 ];
+
+const METODI_PAGAMENTO = GRUPPI_PAGAMENTO.flatMap((g) => g.voci);
+
+// Un metodo e' "leggibile" se sta nella lista canonica: solo di quelli il
+// database sa dire quando si incassa. "Bonifico" secco, "TRANSFER", "RIBA" e
+// "CONTRASSEGNO" non lo sono: dicono il mezzo ma non il termine, e senza termine
+// non c'e' scadenza. "Da concordare" e' fuori dalla lista per lo stesso motivo:
+// e' un promemoria, non una condizione di pagamento.
+function metodoLeggibile(metodo) {
+  return METODI_PAGAMENTO.includes(String(metodo || "").trim());
+}
+
+// Dal 03/08/2026 comanda il magazzino, e da quella data i metodi devono essere
+// in forma canonica. Il pregresso non si rincorre: quegli ordini sono chiusi e
+// le loro partite le governa il Cashflow (Luca: "a me interessa che sia
+// allineato dal 03.08").
+const PAGAMENTI_ALLINEATI_DAL = "2026-08-03";
+
+function pagamentoDaSistemare(order) {
+  if (!order) return false;
+  const data = String(order.date || "").slice(0, 10);
+  if (data && data < PAGAMENTI_ALLINEATI_DAL) return false;
+  return !metodoLeggibile(order.metodoPagamento);
+}
 
 // Motivi rapidi per cui un ordine resta FERMO (Luca 2026-07-24). Il magazziniere
 // tocca il motivo o lo scrive a mano; produzione e logistica lo vedono sul badge.
@@ -711,6 +767,67 @@ function BadgeCorriere({ order, onApri, compatto = false }) {
     >
       ⚠️ CORRIERE MANCANTE
     </button>
+  );
+}
+
+// COME si incassa questo ordine, e se la scadenza si sa calcolare.
+//
+// "Se putacaso e' stato caricato male un metodo di pagamento, abbiamo la
+// possibilita' di cliccare li' e metterci uno che tu vedi e ci crei una corretta
+// scadenza. Altrimenti perdiamo i soldi." (Luca 06/08/2026)
+//
+// Rosso quando il metodo non e' leggibile: allora la scadenza nel Cashflow e' un
+// 30 giorni messo a caso (condizione_certa = false) e nessuno lo sa. Scegliendo
+// dalla tendina si riscrivono insieme il metodo E la scadenza della partita.
+// Verde scarico quando e' a posto: si legge senza dover cliccare.
+function BadgePagamento({ order, onScegli, compatto = false }) {
+  const attuale = String(order?.metodoPagamento || "").trim();
+  const leggibile = metodoLeggibile(attuale);
+  const daSistemare = pagamentoDaSistemare(order);
+  const base = {
+    fontSize: compatto ? 11.5 : 12.5, whiteSpace: "nowrap",
+    border: "1px solid #cfd8e6", cursor: "pointer",
+    appearance: "none", WebkitAppearance: "none", paddingRight: 22,
+    backgroundImage:
+      "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0h10L5 6z' fill='%23667'/></svg>\")",
+    backgroundRepeat: "no-repeat",
+    backgroundPosition: "right 7px center",
+  };
+
+  return (
+    <select
+      style={{ ...badgeStyle(daSistemare ? "danger" : "outline"), ...base }}
+      value={leggibile ? attuale : ""}
+      title={
+        daSistemare
+          ? (attuale
+              ? `"${attuale}" non dice quando si incassa: la scadenza a Cashflow e' messa a caso. Scegli il metodo giusto.`
+              : "Metodo di pagamento mancante: la scadenza a Cashflow e' messa a caso.")
+          : `${attuale} — la scadenza si calcola da qui. Clicca per cambiarlo.`
+      }
+      onChange={(e) => { if (e.target.value) onScegli(e.target.value); }}
+    >
+      {/* La voce di testa c'e' ogni volta che il valore attuale non sta nella
+          lista: senza, il browser mostrerebbe la PRIMA opzione del menu, e un
+          ordine col metodo vuoto sembrerebbe in contrassegno. Un campo vuoto che
+          si spaccia per una condizione di pagamento e' peggio di un campo vuoto.
+          Prima del 03/08 non e' un errore da correggere, e' solo storia: si dice
+          cosi' com'e', senza il rosso e senza chiedere niente. */}
+      {leggibile ? null : (
+        <option value="">
+          {daSistemare
+            ? (attuale ? `💸 DA SISTEMARE: ${attuale}` : "💸 PAGAMENTO MANCANTE")
+            : (attuale ? `${attuale} (vecchio)` : "— pagamento non indicato")}
+        </option>
+      )}
+      {GRUPPI_PAGAMENTO.map((g) => (
+        <optgroup key={g.titolo} label={g.titolo}>
+          {g.voci.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
   );
 }
 
@@ -1358,6 +1475,11 @@ function normalizeOrders(rows) {
         getField(row, ["Stato_Pagamento", "Stato pagamento", "PaymentStatus"]) || ""
       ).trim().toLowerCase(),
       date: getField(row, ["Data_Ordine", "Data ordine", "Data", "date"]),
+      // Come paga questo ordine. Va in forma canonica, altrimenti il Cashflow
+      // non sa calcolare la scadenza (vedi GRUPPI_PAGAMENTO).
+      metodoPagamento: String(
+        getField(row, ["Metodo_Pagamento", "metodo_pagamento"]) || ""
+      ).trim(),
       // CAP di destinazione salvato sull'ordine (congelato alla creazione).
       cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
       // Corriere scelto per la spedizione + numero DDT (se generato).
@@ -5599,6 +5721,46 @@ export default function App() {
     return lista.find((d) => String(d.id) === scelta) || lista.find((d) => d.predefinita) || lista[0];
   };
 
+  // Correggere il metodo senza rifare la scadenza non servirebbe a niente: la
+  // scadenza e' il motivo per cui si corregge. Lo fa il database in un colpo
+  // solo (imposta_metodo_pagamento), cosi' non esiste il mezzo secondo in cui il
+  // metodo e' nuovo e la scadenza e' vecchia.
+  const setOrderPagamento = async (orderId, metodo) => {
+    if (!orderId || !metodo) return;
+    const prima = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(orderId) ? { ...o, metodoPagamento: metodo } : o))
+    );
+    try {
+      const r = await callSheetsApi({
+        action: "impostaMetodoPagamento",
+        payload: JSON.stringify({ orderId, metodo }),
+      });
+      if (!r || !r.success) {
+        setOrders(prima);
+        alert("Metodo di pagamento non salvato: " + ((r && r.error) || "errore"));
+        return;
+      }
+      // La scadenza si dice ad alta voce: e' il motivo per cui si e' cliccato,
+      // e chi corregge deve vedere che numero e' uscito, non fidarsi.
+      if (r.scadenza) {
+        alert(`Pagamento: ${metodo}
+Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
+      }
+    } catch (e) {
+      setOrders(prima);
+      alert("Errore di collegamento nel salvare il metodo di pagamento.");
+    }
+  };
+
+  const bollinoPagamento = (order, compatto = false) => (
+    <BadgePagamento
+      order={order}
+      compatto={compatto}
+      onScegli={(m) => setOrderPagamento(order.id, m)}
+    />
+  );
+
   const setOrderDestinazione = async (orderId, idDest) => {
     if (!orderId) return;
     const prima = orders;
@@ -8829,6 +8991,7 @@ ${isConferma
                                 Spedire a
                               </div>
                               {bollinoDestinazione(selectedOrder)}
+                              {bollinoPagamento(selectedOrder)}
                               {dst ? (
                                 <span style={{ fontSize: 12, color: "#66758b" }}>
                                   {[dst.via, dst.civico].filter(Boolean).join(" ")}
@@ -9709,6 +9872,7 @@ ${isConferma
                             ) : null}
                             <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} />
                             {bollinoDestinazione(order)}
+                            {bollinoPagamento(order)}
                             {(() => {
                               const a = anagraficaFor(order);
                               return a.stato === "ko" ? (
@@ -10093,6 +10257,7 @@ ${isConferma
                             lo si dice in rosso. */}
                         <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} />
                         {bollinoDestinazione(order)}
+                        {bollinoPagamento(order)}
                         {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
                         {order.daBollinare ? (
                           <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
@@ -10754,6 +10919,11 @@ ${isConferma
                                   proprio il dato che si va a ricontrollare. */}
                               <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} compatto />
                               {bollinoDestinazione(order, true)}
+                              {/* In archivio il pagamento SI CAMBIA, a differenza
+                                  della destinazione: il DDT e' emesso e la merce
+                                  e' arrivata, ma i soldi non sono ancora entrati e
+                                  la scadenza sbagliata li fa perdere di vista. */}
+                              {bollinoPagamento(order, true)}
                             </div>
 
                             {/* Cosa manca per fare il documento. In archivio si

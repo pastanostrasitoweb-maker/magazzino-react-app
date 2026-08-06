@@ -130,6 +130,10 @@ const mapOrdineRow = (row) => ({
   Agente_Nome: row.agente_nome ?? "",
   Unito_In: row.unito_in ?? "",
   Data_Ordine: toIsoString(row.data_ordine),
+  // Il metodo di pagamento dell'ordine: serve al magazzino per accorgersi se e'
+  // in una forma che non produce scadenza. Non arrivava al frontend, quindi il
+  // campo non si poteva ne' vedere ne' correggere da qui (Luca 06/08/2026).
+  Metodo_Pagamento: row.metodo_pagamento ?? "",
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
 });
 const mapRigaRow = (row) => ({
@@ -2829,6 +2833,29 @@ export async function callSheetsApi(params = {}) {
         if (error) return failure(error);
         const r = Array.isArray(data) ? data[0] : data;
         return { success: true, ...r };
+      }
+      case "impostaMetodoPagamento": {
+        // Il metodo di pagamento E la scadenza della partita, insieme. Il
+        // database rifiuta un metodo che non sa leggere (metodo_pagamento_canonico
+        // ritorna NULL): meglio un errore in faccia che una scadenza inventata.
+        const pm = parsePayload(params);
+        const idOrdine = String(pm.orderId || pm.idOrdine || "").trim();
+        const metodo = String(pm.metodo || pm.metodo_pagamento || "").trim();
+        if (!idOrdine) return { success: false, error: "orderId mancante" };
+        if (!metodo) return { success: false, error: "metodo mancante" };
+        const { data, error } = await supabase.rpc("imposta_metodo_pagamento", {
+          p_id_ordine: idOrdine,
+          p_metodo: metodo,
+        });
+        if (error) return failure(error);
+        const r = Array.isArray(data) ? data[0] : data;
+        return {
+          success: true,
+          metodo: r?.metodo || metodo,
+          scadenza: r?.scadenza || "",
+          giorni: r?.giorni ?? null,
+          aggiornataCashflow: !!r?.aggiornata_cashflow,
+        };
       }
       case "salvaDestinazione": {
         // Crea o aggiorna un punto di consegna. Se lo si marca predefinito,
