@@ -1075,6 +1075,35 @@ function bollinoScadenza(expiry, oggiMs) {
   return null; // vendibile a prezzo pieno: nessun bollino, la riga resta pulita
 }
 
+// ---- IL CARTONE BOLLATO IN OMAGGIO (Luca 06/08/2026) ----
+// "Quando c'e' il cartone bollato ti deve dare la lista per selezionare quale
+// cartone bollato hanno messo all'interno, cosi' ce lo riscarica dal magazzino.
+// Altrimenti noi mandiamo i bollati pero' non ce li riscarica, rimangono dentro."
+//
+// COSA STAVA SUCCEDENDO DAVVERO, e non era solo il mancato scarico. Sulla riga
+// in omaggio la tendina proponeva tutti i lotti del prodotto, e quando il lotto
+// bollato risultava impegnato l'operatore prendeva il primo con disponibilita':
+// cosi' l'omaggio e' uscito con lotti da 52 e 45 giorni mentre i bollati da 18 e
+// 27 restavano in magazzino a scadere. Si regalava merce fresca e si buttava
+// quella corta: l'esatto contrario della regola.
+//
+// L'agente sceglie il cartone bollato al checkout e ne scrive il codice nella
+// descrizione della riga ("· lotto 2606174P"). Quel codice e' un'istruzione, non
+// una nota: e' IL cartone che deve uscire.
+const RIGA_OMAGGIO_BOLLATO = /DA BOLLINARE/i;
+
+function rigaBollata(line) {
+  return RIGA_OMAGGIO_BOLLATO.test(String(line?.productName || ""));
+}
+
+// Il codice lotto scritto dall'agente dentro la descrizione. Il formato che
+// manda l'app agenti e' "· lotto 2606174P", a volte seguito dalla scadenza fra
+// parentesi, quindi si ferma al primo pezzo alfanumerico dopo la parola.
+function lottoChiestoDallAgente(line) {
+  const m = String(line?.productName || "").match(/lotto\s+([A-Za-z0-9./-]+)/i);
+  return m ? m[1].replace(/[.,;:]+$/, "") : "";
+}
+
 // Stato pagamento di un ordine → aspetto del badge. "ok" verde, "ko" rosso,
 // vuoto = "Da verificare" (grigio).
 function paymentBadgeInfo(status) {
@@ -4589,20 +4618,50 @@ export default function App() {
 
     // Stesso criterio della vista dettaglio: lotti con giacenza fisica > 0,
     // anche se la disponibilita' calcolata e' 0 (impegnata altrove).
-    return activeLots
-      .filter(
-        (lot) =>
-          String(lot.productId) === String(line.productId) &&
-          (lotAssignedMap[String(lot.id)]?.total || 0) > 0
-      )
-      .sort((a, b) => new Date(a.expiry) - new Date(b.expiry));
+    const delloStessoProdotto = activeLots.filter(
+      (lot) =>
+        String(lot.productId) === String(line.productId) &&
+        (lotAssignedMap[String(lot.id)]?.total || 0) > 0
+    );
+    const perScadenza = (a, b) => new Date(a.expiry) - new Date(b.expiry);
+
+    // RIGA IN OMAGGIO: si offrono i BOLLATI, non tutto il magazzino. Sono quelli
+    // che devono uscire, e sono l'unica cosa che si regala. Il lotto scritto
+    // dall'agente va in cima e ci resta anche se risulta impegnato: e' il
+    // cartone che ha promesso al cliente, e se non compare l'operatore ne
+    // prende un altro, che e' come il problema e' nato.
+    if (rigaBollata(line)) {
+      const chiesto = lottoChiestoDallAgente(line).toUpperCase();
+      const codice = (lot) => String(lot.lot || "").toUpperCase();
+      const bollati = delloStessoProdotto.filter((lot) => {
+        const b = bollinoScadenza(lot.expiry, Date.now());
+        return b && b.tipo === "bollato";
+      });
+      const inCima = delloStessoProdotto.filter((lot) => chiesto && codice(lot) === chiesto);
+      const resto = bollati.filter((lot) => !inCima.includes(lot)).sort(perScadenza);
+      // Se di bollati non ce n'e' nemmeno uno si torna all'elenco intero: meglio
+      // spedire con un lotto qualunque che bloccare l'ordine, ma sotto la
+      // tendina compare l'avviso rosso.
+      const mirati = [...inCima, ...resto];
+      return mirati.length ? mirati : delloStessoProdotto.sort(perScadenza);
+    }
+
+    return delloStessoProdotto.sort(perScadenza);
   };
 
   const handleInlineLotSelect = (line, lotId) => {
     if (!line) return;
 
     const available = lotsAvailableMap[String(lotId)] || 0;
-    const suggestedQty = Math.min(line.qtyToAssign, available);
+    let suggestedQty = Math.min(line.qtyToAssign, available);
+
+    // Sul cartone in omaggio la quantita' si propone comunque, anche quando il
+    // bollato risulta tutto impegnato. Altrimenti succedeva questo: l'operatore
+    // sceglieva il bollato giusto, la quantita' proposta era 0, la conferma
+    // rispondeva "inserisci una quantita' valida", e a quel punto ripiegava sul
+    // lotto fresco che invece la disponibilita' l'aveva. La frizione decideva
+    // quale merce si regala. Se davvero sfora, la conferma qui sotto lo chiede.
+    if (rigaBollata(line) && suggestedQty <= 0) suggestedQty = Number(line.qtyToAssign || 0);
 
     setInlineAssignmentForms((prev) => ({
       ...prev,
@@ -8895,6 +8954,9 @@ ${isConferma
                       const product = productMap[String(line.productId)];
                       const lineAssignments = assignments[line.lineId] || [];
                       const availableLots = getAvailableLotsForLine(line);
+                      // Riga in omaggio: cambia cosa si offre e cosa si segnala.
+                      const omaggio = rigaBollata(line);
+                      const lottoChiesto = omaggio ? lottoChiestoDallAgente(line) : "";
                       const form = getInlineAssignmentForm(line.lineId);
                       const savingThisLine = savingAssignmentLineId === String(line.lineId);
                       const completed = line.qtyToAssign <= 0;
@@ -9248,14 +9310,44 @@ ${isConferma
                                         const info = lotAssignedMap[String(lot.id)] || {};
                                         const disp = Number(info.assignable ?? 0);
                                         const giac = Number(info.total || 0);
+                                        // Sulla riga in omaggio si scrive quanti giorni ha
+                                        // il lotto e quale ha chiesto l'agente: sono i due
+                                        // numeri su cui si sbaglia.
+                                        const bol = bollinoScadenza(lot.expiry, Date.now());
+                                        const suffisso = omaggio
+                                          ? (String(lot.lot || "").toUpperCase() === lottoChiesto.toUpperCase()
+                                              ? " ← scelto dall'agente"
+                                              : bol && bol.tipo === "bollato"
+                                              ? ` · bollato ${bol.giorni} gg`
+                                              : " · NON bollato")
+                                          : "";
                                         return (
                                           <option key={lot.id} value={String(lot.id)}>
                                             {lot.lot} · scad. {fmtDate(lot.expiry)} · disp. {disp}
                                             {disp === 0 && giac > 0 ? ` (giac. ${giac})` : ""}
+                                            {suffisso}
                                           </option>
                                         );
                                       })}
                                     </select>
+
+                                    {/* L'avviso sul cartone regalato. Non blocca:
+                                        a volte il bollato e' finito davvero e
+                                        l'ordine deve partire comunque. Ma deve
+                                        vedersi, perche' e' merce che si regala. */}
+                                    {omaggio && form.lotId ? (() => {
+                                      const scelto = availableLots.find((l) => String(l.id) === String(form.lotId));
+                                      if (!scelto) return null;
+                                      const b = bollinoScadenza(scelto.expiry, Date.now());
+                                      if (b && b.tipo === "bollato") return null;
+                                      return (
+                                        <div style={{ fontSize: 11.5, fontWeight: 700, color: "#b91c1c", lineHeight: 1.35 }}>
+                                          ⚠️ Questo lotto non e' bollato{b ? ` (${b.giorni} gg)` : ""}: stai
+                                          regalando merce buona e i bollati restano in magazzino a scadere.
+                                          {lottoChiesto ? ` L'agente aveva scelto il lotto ${lottoChiesto}.` : ""}
+                                        </div>
+                                      );
+                                    })() : null}
                                     {!isOutsideStockLine(line) ? (
                                       <button
                                         type="button"
