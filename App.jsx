@@ -3463,7 +3463,27 @@ export default function App() {
       bloccanti.push("Corriere");
     }
     if (!order?.colliIsManual) daCompletare.push("Colli non confermati");
-    if (!has(merged.metodo_pagamento)) daCompletare.push("Metodo di pagamento");
+
+    // IL METODO DI PAGAMENTO BLOCCA (Luca 06/08/2026: "metti in modo tale che
+    // debba essere inserito bene").
+    //
+    // Prima era solo "da completare", e guardava il campo dell'ANAGRAFICA invece
+    // di quello dell'ordine, e ne guardava solo la presenza: quindi un ordine con
+    // scritto "TRANSFER" o "Bonifico" passava il controllo pur non producendo
+    // nessuna scadenza. Ora blocca, e blocca sulla LEGGIBILITA': un mezzo senza
+    // termine non dice quando si incassa.
+    //
+    // Sul contrassegno non e' nemmeno una questione di scadenza: e' il corriere
+    // che deve sapere quanto incassare, e sul documento ci va scritto.
+    // Gli ordini precedenti al 03/08 non li tocca (vedi pagamentoDaSistemare).
+    if (pagamentoDaSistemare(order)) {
+      const attuale = String(order?.metodoPagamento || "").trim();
+      bloccanti.push(
+        attuale
+          ? `Metodo di pagamento non valido ("${attuale}": non dice quando si incassa)`
+          : "Metodo di pagamento"
+      );
+    }
 
     // Valorizzazione: e' il pezzo che serve per fatturare, non per spedire.
     const righe = order?.lines || [];
@@ -6329,8 +6349,25 @@ ${isConferma
   };
 
   const archiveAllPreparedOrders = async () => {
+    // Stessa regola sull'archiviazione in blocco, ma senza fermare tutto: si
+    // dice QUALI restano indietro e si archiviano gli altri. Bloccare venti
+    // ordini buoni per due scoperti farebbe rimandare l'archiviazione a domani,
+    // e allora non si archivia piu' niente.
+    const scoperti = orders.filter(
+      (o) =>
+        !o.archived &&
+        String(o.status || "").trim().toLowerCase() === "preparato" &&
+        pagamentoDaSistemare(o)
+    );
+
     const conferma = window.confirm(
-      "Vuoi archiviare tutti gli ordini preparati non ancora archiviati?"
+      scoperti.length
+        ? `Attenzione: ${scoperti.length} ordini non hanno un metodo di pagamento leggibile e ` +
+          "NON verranno archiviati, perche' la loro scadenza a Cashflow sarebbe una stima:\n\n- " +
+          scoperti.slice(0, 8).map((o) => `${o.customer} (${o.metodoPagamento || "vuoto"})`).join("\n- ") +
+          (scoperti.length > 8 ? `\n- e altri ${scoperti.length - 8}` : "") +
+          "\n\nArchivio gli altri?"
+        : "Vuoi archiviare tutti gli ordini preparati non ancora archiviati?"
     );
 
     if (!conferma) return;
@@ -6364,6 +6401,25 @@ ${isConferma
 
   const archivePreparedOrder = async (orderId) => {
     if (!orderId) return;
+
+    // IL CANCELLO. Archiviare apre la partita a Cashflow, e la scadenza la
+    // calcola il metodo di pagamento: senza un metodo leggibile nascerebbe una
+    // scadenza stimata, cioe' un incasso che nessuno aspetta al giorno giusto.
+    // Qui si blocca e non si avvisa soltanto, perche' l'archiviazione e' il punto
+    // di non ritorno (Luca 06/08/2026: "metti in modo tale che debba essere
+    // inserito bene").
+    const ord = orders.find((o) => String(o.id) === String(orderId));
+    if (ord && pagamentoDaSistemare(ord)) {
+      const attuale = String(ord.metodoPagamento || "").trim();
+      alert(
+        (attuale
+          ? `Il metodo di pagamento e' "${attuale}", e non dice quando si incassa.`
+          : "Questo ordine non ha un metodo di pagamento.") +
+          "\n\nArchiviando adesso, la scadenza a Cashflow sarebbe una stima." +
+          "\nScegli il metodo dal bollino 💸 sull'ordine, poi archivia."
+      );
+      return;
+    }
 
     const conferma = window.confirm("Vuoi archiviare questo ordine preparato?");
     if (!conferma) return;

@@ -475,6 +475,25 @@ async function bulkLoad() {
 
 // ---------- action handlers ----------
 
+// La stessa forma canonica dei metodi di pagamento che usa App.jsx, e la stessa
+// data di allineamento. E' l'unica cosa duplicata fra i due file, e sta qui
+// perche' il cancello dell'archiviazione deve reggere anche quando parte da solo
+// dopo la mezzanotte, senza nessuna interfaccia davanti. Se cambia una lista,
+// cambia l'altra: il database rifiuta comunque i metodi che non sa leggere
+// (imposta_metodo_pagamento), quindi una divergenza si vede subito.
+const METODI_PAGAMENTO_CANONICI = new Set([
+  "Contrassegno contanti", "Contrassegno assegno",
+  "Ri.Ba. 30 gg data fattura", "Ri.Ba. 30 gg fine mese",
+  "Ri.Ba. 60 gg data fattura", "Ri.Ba. 60 gg fine mese",
+  "Ri.Ba. 90 gg data fattura", "Ri.Ba. 90 gg fine mese",
+  "Bonifico anticipato", "Bonifico alla consegna", "Bonifico fine mese",
+  "Bonifico 30 gg data fattura", "Bonifico 30 gg fine mese",
+  "Bonifico 60 gg data fattura", "Bonifico 60 gg fine mese",
+  "Bonifico 90 gg data fattura", "Bonifico 90 gg fine mese",
+  "Assegno", "Carta di credito", "Carta / POS",
+]);
+const PAGAMENTI_ALLINEATI_DAL_ADAPTER = "2026-08-03";
+
 async function archivePreparedOrders() {
   // REGOLA: gli ordini preparati NON si archiviano subito. Si archiviano solo
   // alla prima esecuzione del bulk-load successiva alla mezzanotte locale: in
@@ -487,7 +506,7 @@ async function archivePreparedOrders() {
 
   const { data, error } = await supabase
     .from("ordini")
-    .select("id_ordine, stato, archiviato, data_preparato")
+    .select("id_ordine, stato, archiviato, data_preparato, data_ordine, metodo_pagamento")
     .or("archiviato.is.null,archiviato.eq.false")
     .lt("data_preparato", midnightIso);
   if (error) return failure(error);
@@ -495,18 +514,49 @@ async function archivePreparedOrders() {
   // Solo i PREPARATO si auto-archiviano a mezzanotte. Gli SPEDITI restano
   // nella loro sezione finche' non si preme Archivia (richiesta Luca: la
   // vista degli ordini usciti deve restare consultabile, es. review col team).
-  const toArchive = (data || [])
-    .filter((r) => String(r.stato || "").trim().toLowerCase() === "preparato")
-    .map((r) => r.id_ordine);
+  const candidati = (data || []).filter(
+    (r) => String(r.stato || "").trim().toLowerCase() === "preparato"
+  );
 
-  if (toArchive.length === 0) return { success: true };
+  // IL CANCELLO DEL PAGAMENTO, e sta QUI e non solo sul bottone.
+  // Questa funzione non la chiama solo chi premo "Archivia": parte da sola alla
+  // prima apertura dopo la mezzanotte. Archiviare apre la partita a Cashflow, e
+  // se il metodo di pagamento non e' leggibile la scadenza nasce STIMATA, cioe'
+  // un incasso che nessuno aspetta al giorno giusto. Senza il controllo qui,
+  // stanotte quelle scadenze sarebbero nate da sole, senza che nessuno scegliesse
+  // (Luca 06/08/2026: "metti in modo tale che debba essere inserito bene").
+  //
+  // Gli ordini scoperti non si perdono: restano in "Preparati" col bollino 💸
+  // rosso, e si archiviano appena qualcuno mette il metodo giusto.
+  const scoperti = [];
+  const toArchive = [];
+  for (const r of candidati) {
+    const data0 = String(r.data_ordine || r.data_preparato || "").slice(0, 10);
+    const daAllineare = !data0 || data0 >= PAGAMENTI_ALLINEATI_DAL_ADAPTER;
+    if (daAllineare && !METODI_PAGAMENTO_CANONICI.has(String(r.metodo_pagamento || "").trim())) {
+      scoperti.push(r.id_ordine);
+      continue;
+    }
+    toArchive.push(r.id_ordine);
+  }
+
+  if (scoperti.length) {
+    console.warn(
+      `Archiviazione: ${scoperti.length} ordini restano in Preparati, metodo di pagamento da sistemare`,
+      scoperti
+    );
+  }
+
+  if (toArchive.length === 0) {
+    return { success: true, archiviati: 0, scopertiPagamento: scoperti.length };
+  }
 
   const up = await supabase
     .from("ordini")
     .update({ archiviato: true })
     .in("id_ordine", toArchive);
   if (up.error) return failure(up.error);
-  return { success: true, archiviati: toArchive.length };
+  return { success: true, archiviati: toArchive.length, scopertiPagamento: scoperti.length };
 }
 
 const OUTSIDE_STOCK_LOT = "FUORI_MAGAZZINO";
