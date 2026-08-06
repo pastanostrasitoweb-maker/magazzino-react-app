@@ -432,6 +432,33 @@ function metodoLeggibile(metodo) {
 // allineato dal 03.08").
 const PAGAMENTI_ALLINEATI_DAL = "2026-08-03";
 
+// Quando si incassa, calcolato come lo calcola il database
+// (scadenza_da_metodo in sql/metodo_pagamento_canonico.sql). Serve a scriverlo
+// accanto alla scelta: chi mette "60 gg fine mese" deve vedere che data esce,
+// non fidarsi. Se le due formule divergono si vede subito, perche' il numero a
+// schermo e quello del Cashflow non coinciderebbero.
+//
+// "fine mese" e' fine del mese del documento, POI i giorni: non data + giorni.
+function scadenzaDaMetodo(dataOrdine, metodo) {
+  const m = String(metodo || "").trim();
+  if (!metodoLeggibile(m) || !dataOrdine) return null;
+  const d = new Date(dataOrdine);
+  if (Number.isNaN(d.getTime())) return null;
+
+  // Incasso immediato: la merce e i soldi si incrociano sul furgone.
+  if (/^Contrassegno/.test(m) || /anticipato$/.test(m) || /alla consegna$/.test(m) ||
+      ["Assegno", "Carta di credito", "Carta / POS"].includes(m)) {
+    return d;
+  }
+
+  const gg = Number((m.match(/(\d+)/) || [0, 0])[1]);
+  const base = /fine mese$/.test(m)
+    ? new Date(d.getFullYear(), d.getMonth() + 1, 0)
+    : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  base.setDate(base.getDate() + gg);
+  return base;
+}
+
 function pagamentoDaSistemare(order) {
   if (!order) return false;
   const data = String(order.date || "").slice(0, 10);
@@ -9032,11 +9059,19 @@ ${isConferma
                           ) : null}
                         </div>
 
-                        {/* Dove va la merce, per QUESTO ordine. Sta accanto al
-                            corriere perche' sono la stessa domanda: cosa parte
-                            e dove va. */}
+                        {/* Dove va la merce, per QUESTO ordine. Riquadro suo,
+                            insieme al trasporto: la domanda e' cosa parte e dove
+                            va. Il pagamento sta SOTTO, in un riquadro separato:
+                            infilarlo qui dentro faceva leggere "Spedire a:
+                            Bonifico anticipato", che sono due cose diverse messe
+                            sulla stessa riga (segnalato da Luca 06/08/2026). */}
                         {(() => {
                           const dst = destinazioneDi(selectedOrder);
+                          const bollino = bollinoDestinazione(selectedOrder);
+                          // Sugli ordini senza codice cliente il bollino non
+                          // c'e': senza questo controllo restava un riquadro
+                          // "Spedire a" vuoto, o peggio con dentro il pagamento.
+                          if (!bollino) return null;
                           return (
                             <div style={{
                               marginTop: 12, padding: "10px 12px", borderRadius: 14,
@@ -9046,8 +9081,7 @@ ${isConferma
                               <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a" }}>
                                 Spedire a
                               </div>
-                              {bollinoDestinazione(selectedOrder)}
-                              {bollinoPagamento(selectedOrder)}
+                              {bollino}
                               {dst ? (
                                 <span style={{ fontSize: 12, color: "#66758b" }}>
                                   {[dst.via, dst.civico].filter(Boolean).join(" ")}
@@ -9059,6 +9093,33 @@ ${isConferma
                             </div>
                           );
                         })()}
+
+                        {/* COME si incassa. Riquadro suo, sotto la spedizione,
+                            perche' e' un'altra domanda: la merce dove va, i soldi
+                            quando arrivano. */}
+                        <div style={{
+                          marginTop: 12, padding: "10px 12px", borderRadius: 14,
+                          border: "1px solid " + (pagamentoDaSistemare(selectedOrder) ? "#fecaca" : "#dbe2ea"),
+                          background: pagamentoDaSistemare(selectedOrder) ? "#fef2f2" : "#fff",
+                          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                        }}>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a" }}>
+                            Pagamento
+                          </div>
+                          {bollinoPagamento(selectedOrder)}
+                          {pagamentoDaSistemare(selectedOrder) ? (
+                            <span style={{ fontSize: 12, color: "#b91c1c", fontWeight: 700 }}>
+                              Senza questo l'ordine non si archivia: la scadenza sarebbe una stima.
+                            </span>
+                          ) : (() => {
+                            const scad = scadenzaDaMetodo(selectedOrder.date, selectedOrder.metodoPagamento);
+                            return scad ? (
+                              <span style={{ fontSize: 12, color: "#66758b" }}>
+                                si incassa entro il {fmtDate(scad)}
+                              </span>
+                            ) : null;
+                          })()}
+                        </div>
 
                         {/* Prezzi gia' qui, mentre l'ordine si prepara, non solo
                             nei Preparati: e' il momento in cui si guarda cosa
