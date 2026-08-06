@@ -797,6 +797,286 @@ function BadgeCorriere({ order, onApri, compatto = false }) {
   );
 }
 
+function SchedaCliente({
+  cliente, override, sedi, agenti, listini,
+  onCrea, onSalva, onSalvaSede, onDisattivaSede, onChiudi,
+}) {
+  const nuovo = !cliente;
+  const [f, setF] = useState(() => {
+    const base = {};
+    for (const g of CAMPI_SCHEDA) for (const c of g.campi) base[c.key] = "";
+    const ov = override || {};
+    for (const k of Object.keys(base)) base[k] = String(ov[k] ?? "");
+    if (cliente) {
+      if (!base.ragione_sociale) base.ragione_sociale = cliente.name || "";
+      if (!base.partita_iva) base.partita_iva = cliente.piva || "";
+      if (!base.codice_fiscale) base.codice_fiscale = cliente.codiceFiscale || "";
+      if (!base.email) base.email = cliente.email || "";
+      if (!base.telefono) base.telefono = cliente.telefono || "";
+      if (!base.sede_localita) base.sede_localita = cliente.citta || "";
+      if (!base.sede_provincia) base.sede_provincia = cliente.provincia || "";
+      if (!base.sede_cap) base.sede_cap = cliente.cap || "";
+      if (!base.codice_univoco) base.codice_univoco = cliente.codiceDestinatarioTs || "";
+    }
+    base.tipologia = String(ov.tipologia || (cliente ? normalizeTipologia(cliente.category) : "") || "");
+    base.metodo_pagamento = String(ov.metodo_pagamento || "");
+    base.agente_nome = String(ov.agente_nome || "");
+    base.listino_standard = String(ov.listino_standard || "");
+    base.fonte_prezzi = String(ov.fonte_prezzi || "listino");
+    for (const k of ["sconto1_pct", "sconto2_pct", "sconto3_pct"]) {
+      base[k] = ov[k] === null || ov[k] === undefined ? "" : String(ov[k]);
+    }
+    return base;
+  });
+  const [salvando, setSalvando] = useState(false);
+
+  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
+
+  // Manca qualcosa di bloccante? Le stesse cose che bloccano il DDT, dette qui
+  // mentre si scrive invece che scoperte al momento di spedire.
+  const mancano = [];
+  if (!String(f.ragione_sociale || "").trim()) mancano.push("ragione sociale");
+  if (!String(f.partita_iva || "").trim()) mancano.push("partita IVA");
+  if (!String(f.sede_via || "").trim()) mancano.push("via della sede legale");
+  if (!String(f.sede_cap || "").trim()) mancano.push("CAP");
+  if (!String(f.sede_localita || "").trim()) mancano.push("localita'");
+  if (!String(f.agente_nome || "").trim()) mancano.push("agente");
+  if (!metodoLeggibile(f.metodo_pagamento)) mancano.push("metodo di pagamento");
+
+  const salva = async () => {
+    if (!String(f.ragione_sociale || "").trim()) {
+      alert("La ragione sociale serve: e' quella che finisce sul documento.");
+      return;
+    }
+    setSalvando(true);
+    try {
+      await (nuovo ? onCrea(f) : onSalva(cliente, f));
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const riquadro = (titolo, dentro) => (
+    <div style={{
+      border: "1px solid #dbe2ea", borderRadius: 12, padding: 12,
+      background: "#fff", marginBottom: 12,
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a", marginBottom: 8 }}>{titolo}</div>
+      {dentro}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "grid", gap: 0 }}>
+      {mancano.length ? (
+        <div style={{
+          ...cardStyle({ background: "#fef2f2" }), padding: 10, marginBottom: 12,
+          border: "1px solid #fecaca", color: "#991b1b", fontSize: 12.5, lineHeight: 1.45,
+        }}>
+          Senza questi il DDT non si fa e l'ordine non si archivia: <b>{mancano.join(", ")}</b>.
+        </div>
+      ) : null}
+
+      {CAMPI_SCHEDA.map((g) =>
+        riquadro(g.titolo,
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {g.campi.map((c) => (
+              <div key={c.key} style={{ flex: c.largo ? "1 1 100%" : "1 1 140px", minWidth: 120 }}>
+                <label style={{ ...labelStyle(), fontSize: 11 }}>
+                  {c.label}{c.obbligatorio ? " *" : ""}
+                </label>
+                <input
+                  style={{ ...inputStyle(), height: 38 }}
+                  value={f[c.key] ?? ""}
+                  onChange={set(c.key)}
+                />
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      {riquadro("Condizioni commerciali",
+        <div style={{ display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: "1 1 220px" }}>
+              <label style={{ ...labelStyle(), fontSize: 11 }}>Metodo di pagamento *</label>
+              <select style={{ ...inputStyle(), height: 38 }} value={f.metodo_pagamento} onChange={set("metodo_pagamento")}>
+                <option value="">— scegli —</option>
+                {GRUPPI_PAGAMENTO.map((g) => (
+                  <optgroup key={g.titolo} label={g.titolo}>
+                    {g.voci.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            <div style={{ flex: "1 1 180px" }}>
+              <label style={{ ...labelStyle(), fontSize: 11 }}>Agente *</label>
+              <select style={{ ...inputStyle(), height: 38 }} value={f.agente_nome} onChange={set("agente_nome")}>
+                <option value="">— scegli —</option>
+                {(agenti || []).map((a) => (
+                  <option key={a.id || a.nome} value={a.nome || a.name || ""}>{a.nome || a.name}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ flex: "1 1 140px" }}>
+              <label style={{ ...labelStyle(), fontSize: 11 }}>Tipologia</label>
+              <select style={{ ...inputStyle(), height: 38 }} value={f.tipologia} onChange={set("tipologia")}>
+                <option value="">—</option>
+                {["HORECA", "FARMA", "GDO", "EXPORT", "BIOLOGICO"].map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: "1 1 260px" }}>
+              <label style={{ ...labelStyle(), fontSize: 11 }}>I prezzi da</label>
+              <select style={{ ...inputStyle(), height: 38 }} value={f.fonte_prezzi} onChange={set("fonte_prezzi")}>
+                <option value="listino">Listino, storico dove il listino non arriva</option>
+                <option value="solo-listino">Solo listino, mai lo storico</option>
+                <option value="storico">Storico, listino dove lo storico non arriva</option>
+              </select>
+            </div>
+            <div style={{ flex: "1 1 200px" }}>
+              <label style={{ ...labelStyle(), fontSize: 11 }}>Listino</label>
+              <select style={{ ...inputStyle(), height: 38 }} value={f.listino_standard} onChange={set("listino_standard")}>
+                <option value="">— quello del gestionale —</option>
+                <option value="1">Listino 1 · base</option>
+                <option value="8">Listino 8 · Ho.Re.Ca.</option>
+              </select>
+            </div>
+            {["sconto1_pct", "sconto2_pct", "sconto3_pct"].map((k, i) => (
+              <div key={k} style={{ flex: "0 0 84px" }}>
+                <label style={{ ...labelStyle(), fontSize: 11 }}>{`Sc ${i + 1} %`}</label>
+                <input style={{ ...inputStyle(), height: 38 }} type="number" step="0.1" min="0" max="100"
+                  value={f[k] ?? ""} onChange={set(k)} />
+              </div>
+            ))}
+            {(() => {
+              const sc = ["sconto1_pct", "sconto2_pct", "sconto3_pct"]
+                .map((k) => Number(String(f[k] ?? "").replace(",", ".")) || 0);
+              if (!sc.some((x) => x > 0)) return null;
+              const netto = 100 * (1 - sc[0] / 100) * (1 - sc[1] / 100) * (1 - sc[2] / 100);
+              return (
+                <span style={{ fontSize: 12, color: "#15803d", fontWeight: 700, paddingBottom: 10 }}>
+                  su 100 € paga {netto.toFixed(2)} €
+                </span>
+              );
+            })()}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#66758b", lineHeight: 1.45 }}>
+            Gli sconti sono in cascata e valgono sui prezzi di listino. Lasciarli vuoti non e' come
+            scrivere zero: vuoto usa lo sconto ricavato dalle fatture di questo cliente, zero vuol
+            dire prezzo pieno.
+          </div>
+        </div>
+      )}
+
+      {/* LE SEDI, dentro la scheda e non piu' dentro un ordine. Su un cliente
+          nuovo il modulo compare dopo il salvataggio: una sede ha bisogno del
+          codice cliente, e il codice lo assegna il registro al primo salvataggio. */}
+      {riquadro("Sedi di consegna",
+        nuovo ? (
+          <div style={{ fontSize: 12.5, color: "#66758b", lineHeight: 1.45 }}>
+            Salva prima il cliente: la sede si attacca al suo codice, e il codice lo assegna il
+            registro adesso. Appena salvato, il modulo compare qui.
+          </div>
+        ) : (
+          <SediConsegna
+            codiceCliente={String(cliente.id)}
+            sedi={sedi || []}
+            onSalva={onSalvaSede}
+            onDisattiva={onDisattivaSede}
+          />
+        )
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button style={btnStyle("primary")} onClick={salva} disabled={salvando}>
+          {salvando ? "Salvo…" : nuovo ? "Crea cliente" : "Salva modifiche"}
+        </button>
+        <button style={btnStyle("outline")} onClick={onChiudi} disabled={salvando}>
+          Chiudi
+        </button>
+        {!nuovo ? (
+          <span style={{ fontSize: 12, color: "#8a94a6", alignSelf: "center" }}>
+            Codice cliente <b style={{ color: "#07153a" }}>{cliente.id}</b>
+            {cliente.codeTs ? ` · gestionale ${cliente.codeTs}` : ""}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// LA SCHEDA CLIENTE: un posto solo per crearlo e per correggerlo.
+//
+// RICHIESTA DI LUCA (06/08/2026): "dai in modo ordinato la possibilita' di
+// aggiungere un nuovo cliente da app magazzino, con dentro tutti i campi
+// necessari per l'anagrafica. Inoltre deve esserci anche la sezione aggiungi sede,
+// ma deve essere tutto sotto crea nuovo cliente. Poi serve una sezione clienti
+// dove possiamo vederli tutti ed eventualmente modificarli."
+//
+// PERCHE' SERVIVA. Prima un cliente si poteva completare solo passando da un suo
+// ORDINE ("Completa anagrafica"), quindi un cliente nuovo lo si creava a meta' e
+// il resto si scriveva la prima volta che ordinava. E le sedi di consegna stavano
+// dentro quel modale, cioe' raggiungibili solo da un ordine.
+//
+// I dati stanno in tre posti diversi e questa scheda li tiene insieme:
+//   `clienti` / registro   ragione sociale, P.IVA, codice fiscale, il CODICE nostro
+//   `clienti_override`     indirizzi, orari, pagamento, listino, sconti, agente
+//   `clienti_destinazioni` i negozi dove va la merce
+// Salvando si scrive in tutti e tre nell'ordine giusto, perche' le sedi hanno
+// bisogno del codice e il codice lo assegna il registro.
+const CAMPI_SCHEDA = [
+  {
+    titolo: "Chi e'",
+    campi: [
+      { key: "ragione_sociale", label: "Ragione sociale", largo: true, obbligatorio: true },
+      { key: "insegna", label: "Insegna (se diversa)" },
+      { key: "partita_iva", label: "Partita IVA", obbligatorio: true },
+      { key: "codice_fiscale", label: "Codice fiscale" },
+    ],
+  },
+  {
+    titolo: "Sede legale",
+    campi: [
+      { key: "sede_via", label: "Via", largo: true },
+      { key: "sede_civico", label: "Civico" },
+      { key: "sede_cap", label: "CAP" },
+      { key: "sede_localita", label: "Localita'" },
+      { key: "sede_provincia", label: "Provincia" },
+    ],
+  },
+  {
+    titolo: "Fatturazione elettronica",
+    campi: [
+      { key: "codice_univoco", label: "Codice destinatario (SdI)" },
+      { key: "pec", label: "PEC" },
+    ],
+  },
+  {
+    titolo: "Contatti",
+    campi: [
+      { key: "email", label: "Email" },
+      { key: "telefono", label: "Telefono referente" },
+    ],
+  },
+  {
+    titolo: "Consegna",
+    campi: [
+      { key: "orari_consegna", label: "Orario di scarico (finestra min 3 ore)", largo: true },
+      { key: "giorno_chiusura", label: "Giorno di chiusura" },
+    ],
+  },
+  {
+    titolo: "Note da stampare sui documenti",
+    campi: [{ key: "note", label: "Note (finiscono sul DDT e sulla conferma d'ordine)", largo: true }],
+  },
+];
+
 // COME si incassa questo ordine, e se la scadenza si sa calcolare.
 //
 // "Se putacaso e' stato caricato male un metodo di pagamento, abbiamo la
@@ -5403,6 +5683,107 @@ export default function App() {
   };
 
   // Sedi di consegna: si salvano sul cliente, non sull'ordine.
+  // ---- SEZIONE CLIENTI ----
+  // La chiave dell'anagrafica arricchita, per un CLIENTE (non per un ordine):
+  // stessa regola di clientKeyFor, che pero' parte da un ordine.
+  const chiaveAnagrafica = (cli, pivaScritta) => {
+    const piva = String(pivaScritta ?? cli?.piva ?? "").replace(/\D/g, "");
+    if (piva) return "piva:" + piva;
+    const nome = String(cli?.name || "").trim().toLowerCase().replace(/\s+/g, " ");
+    return nome ? "nome:" + nome : "";
+  };
+
+  const [clientiCerca, setClientiCerca] = useState("");
+  const [clienteAperto, setClienteAperto] = useState(null); // {cliente} oppure {nuovo:true}
+
+  // I campi arricchiti si salvano su clienti_override; quelli di identita' sulla
+  // tabella clienti. Qui si scrive dove va scritto, senza far pensare a chi
+  // compila che siano tre posti diversi.
+  const salvaSchedaOverride = async (chiave, f) => {
+    const payload = { chiave, operatore: authUser?.username || "" };
+    for (const g of CAMPI_SCHEDA) for (const c of g.campi) payload[c.key] = f[c.key] ?? "";
+    payload.tipologia = f.tipologia ?? "";
+    payload.metodo_pagamento = f.metodo_pagamento ?? "";
+    payload.agente_nome = f.agente_nome ?? "";
+    payload.listino_standard = f.listino_standard ?? "";
+    payload.fonte_prezzi = f.fonte_prezzi || "listino";
+    payload.usa_storico = (f.fonte_prezzi || "listino") !== "solo-listino";
+    for (const k of ["sconto1_pct", "sconto2_pct", "sconto3_pct"]) payload[k] = f[k] ?? "";
+    const r = await callSheetsApi({
+      action: "saveClienteOverride",
+      payload: JSON.stringify(payload),
+    });
+    if (r && r.success) {
+      setClientiOverride((prev) => ({
+        ...prev,
+        [chiave]: { ...(prev[chiave] || {}), ...payload, ...(r.override || {}), chiave },
+      }));
+    }
+    return r;
+  };
+
+  const creaClienteScheda = async (f) => {
+    // Prima il codice: senza codice il cliente e' invisibile al CRM e allo
+    // storico, e il DDT non si puo' emettere. Se questo passo non riesce non si
+    // scrive niente da nessuna parte.
+    const res = await callSheetsApi({
+      action: "createCliente",
+      payload: JSON.stringify({
+        ragioneSociale: f.ragione_sociale,
+        piva: f.partita_iva,
+        codiceFiscale: f.codice_fiscale,
+        codiceDestinatarioTs: f.codice_univoco,
+        categoria: f.tipologia,
+        note: f.note,
+      }),
+    });
+    if (!res || !res.success) {
+      alert("Cliente NON creato: " + ((res && res.error) || "errore"));
+      return;
+    }
+    const nuovo = res.cliente || res.dato || null;
+    const idNuovo = String((nuovo && (nuovo.ID_Cliente || nuovo.id_cliente)) || res.codice || "");
+    const chiave = chiaveAnagrafica({ name: f.ragione_sociale, piva: f.partita_iva }, f.partita_iva);
+    if (chiave) await salvaSchedaOverride(chiave, f);
+    await loadDataFromSheets();
+    alert(
+      `Cliente creato con il codice ${idNuovo || "(assegnato dal registro)"}.\n\n` +
+      "Ora aggiungi la sede di consegna: la trovi in fondo alla scheda."
+    );
+    // Si resta dentro la scheda, adesso in modifica, cosi' la sede si aggiunge
+    // subito senza cercare il cliente nell'elenco.
+    setClienteAperto({ idAppena: idNuovo, chiave });
+  };
+
+  const salvaClienteScheda = async (cliente, f) => {
+    const chiave = chiaveAnagrafica(cliente, f.partita_iva);
+    if (!chiave) {
+      alert("Cliente non identificabile: manca sia P.IVA sia ragione sociale.");
+      return;
+    }
+    const r = await salvaSchedaOverride(chiave, f);
+    if (!r || !r.success) {
+      alert("Anagrafica non salvata: " + ((r && r.error) || "errore"));
+      return;
+    }
+    // I campi di identita' stanno sulla tabella clienti, non nell'override: se
+    // qualcuno corregge la P.IVA qui, deve cambiare anche la' o l'elenco
+    // continuerebbe a mostrare quella vecchia.
+    await callSheetsApi({
+      action: "updateCliente",
+      payload: JSON.stringify({
+        idCliente: cliente.id,
+        ragioneSociale: f.ragione_sociale,
+        piva: f.partita_iva,
+        codiceFiscale: f.codice_fiscale,
+        codiceDestinatarioTs: f.codice_univoco,
+        categoria: f.tipologia,
+      }),
+    });
+    await loadDataFromSheets();
+    setClienteAperto(null);
+  };
+
   const salvaDestinazione = async (dest) => {
     const r = await callSheetsApi({
       action: "salvaDestinazione",
@@ -8583,7 +8964,7 @@ ${isConferma
               <MenuScelte
                 titolo="Altro"
                 larghezza={280}
-                attivo={["ordini-app", "fermi", "ddt", "magazzino", "bollati", "prodotti", "foto-bolle"].includes(page)}
+                attivo={["ordini-app", "fermi", "ddt", "magazzino", "bollati", "prodotti", "clienti", "foto-bolle"].includes(page)}
                 badge={(isProduzione ? 0 : ordiniApp.length) + stoppedCount}
                 voci={[
                   !isProduzione && {
@@ -8616,6 +8997,18 @@ ${isConferma
                     label: "Prodotti", icona: <Package size={16} />,
                     attivo: page === "prodotti",
                     onClick: () => setPage("prodotti"),
+                  },
+                  // I clienti stanno qui e non sotto "Nuovo": da qui si guardano
+                  // tutti e si correggono, creare e' una delle cose che si fanno
+                  // dentro (Luca 06/08/2026).
+                  !isProduzione && {
+                    label: "Clienti", icona: <span style={{ fontSize: 15 }}>🗂️</span>,
+                    attivo: page === "clienti", separatoreSopra: true,
+                    onClick: () => { setPage("clienti"); setClienteAperto(null); },
+                  },
+                  !isProduzione && {
+                    label: "Nuovo cliente", icona: <span style={{ fontSize: 15 }}>＋</span>,
+                    onClick: () => { setPage("clienti"); setClienteAperto({ nuovo: true }); },
                   },
                   isAdmin && {
                     label: "Foto bolle", icona: <Camera size={16} />,
@@ -11254,6 +11647,129 @@ ${isConferma
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {page === "clienti" && (
+          <div style={{ ...cardStyle(), padding: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>🗂️ Clienti</div>
+                <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
+                  Tutti i clienti, con il loro codice. Da qui si crea un cliente nuovo e si
+                  corregge quello che c'è, sedi di consegna comprese, senza passare da un ordine.
+                </div>
+              </div>
+              <div style={{ marginLeft: "auto" }}>
+                <button style={btnStyle("primary")} onClick={() => setClienteAperto({ nuovo: true })}>
+                  + Nuovo cliente
+                </button>
+              </div>
+            </div>
+
+            {(() => {
+              // La scheda aperta: nuova, oppure quella di un cliente. Dopo la
+              // creazione si resta dentro, cosi' la sede si aggiunge subito.
+              const ap = clienteAperto;
+              if (!ap) return null;
+              const cli = ap.nuovo
+                ? null
+                : (ap.idAppena
+                    ? clients.find((c) => String(c.id) === String(ap.idAppena)) || null
+                    : ap.cliente);
+              const chiave = ap.chiave || (cli ? chiaveAnagrafica(cli) : "");
+              return (
+                <div style={{ marginTop: 16, paddingTop: 16, borderTop: "2px solid #e6ebf2" }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: "#07153a", marginBottom: 10 }}>
+                    {cli ? `Scheda di ${cli.name}` : "Crea nuovo cliente"}
+                  </div>
+                  <SchedaCliente
+                    cliente={cli}
+                    override={clientiOverride[chiave] || null}
+                    sedi={cli ? (destinazioni[String(cli.id)] || []) : []}
+                    agenti={agenti}
+                    listini={listiniPrezzi}
+                    onCrea={creaClienteScheda}
+                    onSalva={salvaClienteScheda}
+                    onSalvaSede={salvaDestinazione}
+                    onDisattivaSede={disattivaDestinazione}
+                    onChiudi={() => setClienteAperto(null)}
+                  />
+                </div>
+              );
+            })()}
+
+            <div style={{ marginTop: 16 }}>
+              <input
+                style={{ ...inputStyle(), height: 42 }}
+                placeholder="Cerca per nome, codice, P.IVA o città"
+                value={clientiCerca}
+                onChange={(e) => setClientiCerca(e.target.value)}
+              />
+            </div>
+
+            {(() => {
+              const q = clientiCerca.trim().toLowerCase();
+              const filtrati = activeClients.filter((c) => {
+                if (!q) return true;
+                return [c.name, c.id, c.piva, c.citta, c.codeTs]
+                  .some((v) => String(v || "").toLowerCase().includes(q));
+              });
+              // Senza ricerca si mostrano i primi cento: sono 2.194 e disegnarli
+              // tutti rende la pagina inservibile sul tablet del magazzino.
+              const mostrati = q ? filtrati.slice(0, 300) : filtrati.slice(0, 100);
+              return (
+                <>
+                  <div style={{ margin: "10px 0", fontSize: 12.5, color: "#66758b" }}>
+                    {filtrati.length} clienti
+                    {mostrati.length < filtrati.length
+                      ? ` · ne vedi ${mostrati.length}, scrivi nella ricerca per restringere`
+                      : ""}
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {mostrati.map((c) => {
+                      const ov = clientiOverride[chiaveAnagrafica(c)] || {};
+                      const manca = [];
+                      if (!String(ov.partita_iva || c.piva || "").trim()) manca.push("P.IVA");
+                      if (!String(ov.sede_via || ov.sede_legale || "").trim()) manca.push("indirizzo");
+                      if (!String(ov.agente_nome || "").trim()) manca.push("agente");
+                      if (!metodoLeggibile(ov.metodo_pagamento)) manca.push("pagamento");
+                      const quanteSedi = (destinazioni[String(c.id)] || []).length;
+                      return (
+                        <div key={c.id} style={{
+                          border: "1px solid #e6ebf2", borderRadius: 12, padding: "10px 12px",
+                          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                          background: manca.length ? "#fffbeb" : "#fff",
+                        }}>
+                          <div style={{ minWidth: 0, flex: "1 1 260px" }}>
+                            <div style={{ fontSize: 14, fontWeight: 800, color: "#07153a" }}>{c.name}</div>
+                            <div style={{ fontSize: 11.5, color: "#8a94a6" }}>
+                              {c.id}
+                              {c.piva ? ` · P.IVA ${c.piva}` : ""}
+                              {c.citta ? ` · ${c.citta}` : ""}
+                              {quanteSedi ? ` · ${quanteSedi} ${quanteSedi === 1 ? "sede" : "sedi"}` : ""}
+                            </div>
+                          </div>
+                          {manca.length ? (
+                            <span style={badgeStyle("warning")} title={"Mancano: " + manca.join(", ")}>
+                              manca {manca.join(", ")}
+                            </span>
+                          ) : (
+                            <span style={badgeStyle("success")}>completo</span>
+                          )}
+                          <button
+                            style={{ ...btnStyle("outline"), padding: "6px 12px" }}
+                            onClick={() => setClienteAperto({ cliente: c })}
+                          >
+                            ✎ Modifica
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
 
