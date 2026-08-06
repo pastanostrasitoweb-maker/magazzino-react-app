@@ -490,7 +490,7 @@ function MenuScelte({ titolo, icona, voci, variante = "soft", attivo = false, la
 // campo "Indirizzo di spedizione" nell'anagrafica, e il DDT leggeva la
 // destinazione: due posti per lo stesso dato, quindi su GIOIA S.R.L. il
 // documento e' uscito con la sede legale invece che col negozio.
-function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva }) {
+function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva, apriNuovaSubito = false }) {
   const [apertaId, setApertaId] = useState("");
   const [bozza, setBozza] = useState(null);
   const [salvando, setSalvando] = useState(false);
@@ -507,7 +507,24 @@ function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva }) {
     setBozza(d ? { ...d, codice_cliente: codiceCliente } : vuota());
   };
 
+  // Chi arriva qui dal bollino "+ Aggiungi un negozio" vuole scrivere un
+  // indirizzo, non leggere l'elenco di quelli che ha gia': il modulo si apre
+  // subito, altrimenti sono due click per la stessa intenzione.
+  useEffect(() => {
+    if (apriNuovaSubito && !apertaId) {
+      setApertaId("nuova");
+      setBozza(vuota());
+    }
+  }, [apriNuovaSubito]);
+
   const salva = async () => {
+    if (!String(codiceCliente || "").trim()) {
+      alert(
+        "Questo ordine non ha ancora un codice cliente, quindi il negozio non " +
+        "saprebbe a chi appartenere. Assegna prima il codice al cliente."
+      );
+      return;
+    }
     if (!String(bozza.via || "").trim()) {
       alert("Serve almeno la via: senza, il documento non dice dove va la merce.");
       return;
@@ -694,6 +711,96 @@ function BadgeCorriere({ order, onApri, compatto = false }) {
     >
       ⚠️ CORRIERE MANCANTE
     </button>
+  );
+}
+
+// DOVE va la merce, per QUESTO ordine. Una ragione sociale puo' avere piu'
+// negozi, e due ordini dello stesso cliente possono andare in due posti diversi:
+// prima si poteva solo eleggere una sede predefinita, che valeva per tutti gli
+// ordini insieme, e quindi non si potevano mandare da due parti (Luca 05/08/2026).
+//
+// Il bollino c'e' SEMPRE, come quello del corriere, anche con un negozio solo:
+// chi spedisce deve leggere dove sta mandando la merce senza aprire niente.
+// Prima compariva solo da due negozi in su, e siccome su 1.519 clienti solo due
+// ne hanno piu' di uno, in pratica non si vedeva mai.
+//
+// E' una tendina travestita da bollino, non un bottone in piu': la scelta si fa
+// dove la si legge. L'ultima voce aggiunge un negozio nuovo, perche' il secondo
+// punto vendita quasi sempre non esiste ancora nel momento in cui serve.
+function BadgeDestinazione({ order, sedi, scelta, onScegli, onAggiungi, compatto = false }) {
+  // Gli ordini archiviati di prima dei codici cliente non hanno un cliente a cui
+  // attaccare un negozio: li' il bollino tace, invece di chiedere in rosso una
+  // cosa a cui non si puo' rispondere. Sono 151 documenti gia' partiti.
+  if (!String(order?.clientId || "").trim()) return null;
+  const base = {
+    fontSize: compatto ? 11.5 : 12.5, whiteSpace: "nowrap",
+    border: "1px solid #cfd8e6", cursor: "pointer",
+    appearance: "none", WebkitAppearance: "none",
+    paddingRight: 22,
+    backgroundImage:
+      "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0h10L5 6z' fill='%23667'/></svg>\")",
+    backgroundRepeat: "no-repeat",
+    backgroundPosition: "right 7px center",
+  };
+
+  const NUOVO = "__nuovo__";
+  const elenco = sedi || [];
+
+  if (!elenco.length) {
+    return (
+      <button
+        style={{ ...badgeStyle("danger"), ...base, backgroundImage: "none", paddingRight: 10 }}
+        onClick={onAggiungi}
+        title="Nessun negozio registrato per questo cliente: clicca per aggiungerlo"
+      >
+        📍 DOVE SPEDIRE?
+      </button>
+    );
+  }
+
+  const etichetta = (d) => {
+    const dove = [d.localita, d.provincia ? `(${d.provincia})` : ""].filter(Boolean).join(" ");
+    return [d.etichetta, dove].filter(Boolean).join(" · ");
+  };
+
+  // In archivio si legge e non si cambia: il DDT e' emesso e la merce e'
+  // arrivata, quindi cambiare il negozio di destinazione vorrebbe dire far
+  // dire al documento una cosa diversa da quella che e' successa.
+  // L'archiviazione e' il punto di non ritorno (Luca 04/08/2026).
+  if (order?.archived) {
+    return (
+      <span
+        style={{ ...badgeStyle("outline"), ...base, cursor: "default", backgroundImage: "none", paddingRight: 10 }}
+        title={scelta ? `Merce consegnata a: ${etichetta(scelta)}` : ""}
+      >
+        📍 {scelta ? etichetta(scelta) : "—"}
+      </span>
+    );
+  }
+
+  return (
+    <select
+      style={{ ...badgeStyle(elenco.length > 1 ? "dark" : "outline"), ...base }}
+      value={String(scelta?.id || "")}
+      title={
+        scelta
+          ? `Spedire a: ${etichetta(scelta)}. ${[scelta.via, scelta.civico].filter(Boolean).join(" ")}` +
+            (elenco.length > 1 ? " · Cambia negozio da qui, vale solo per questo ordine." : "")
+          : "Scegli dove spedire questo ordine"
+      }
+      onChange={(e) => {
+        const v = String(e.target.value);
+        if (v === NUOVO) { if (onAggiungi) onAggiungi(); return; }
+        if (onScegli) onScegli(v);
+      }}
+    >
+      {elenco.map((d) => (
+        <option key={d.id} value={d.id}>
+          📍 {etichetta(d)}{d.predefinita && elenco.length > 1 ? " (predefinita)" : ""}
+        </option>
+      ))}
+      <option value={NUOVO}>+ Aggiungi un negozio…</option>
+    </select>
   );
 }
 
@@ -2804,6 +2911,9 @@ export default function App() {
   // Layer di arricchimento nostro (chiave cliente -> override): tipologia + campi
   // anagrafica completati a mano. Si sovrappone allo snapshot senza toccarlo.
   const [clientiOverride, setClientiOverride] = useState({});
+  // Il modale dell'anagrafica si apre gia' sul modulo della sede nuova quando
+  // ci si arriva dal bollino "dove spedire".
+  const [anagNuovaSede, setAnagNuovaSede] = useState(false);
   const [savingOverride, setSavingOverride] = useState("");
   const [anagOpen, setAnagOpen] = useState(false);
   const [anagOrderId, setAnagOrderId] = useState("");
@@ -3181,8 +3291,9 @@ export default function App() {
   };
 
   // Apre il modale per completare a mano l'anagrafica del cliente dell'ordine.
-  const openCompletaAnagrafica = (order) => {
+  const openCompletaAnagrafica = (order, opzioni) => {
     if (!order) return;
+    setAnagNuovaSede(!!(opzioni && opzioni.nuovaSede));
     const { merged } = effectiveCliente(order);
     const form = {};
     for (const f of ANAG_FIELDS) form[f.key] = String(merged[f.key] ?? "");
@@ -5323,7 +5434,28 @@ export default function App() {
   // Le destinazioni di un cliente, e quella scelta per questo ordine.
   // Se non e' stata scelta vale la predefinita: la merce parte comunque, e
   // parte dove e' sempre andata.
-  const destinazioniDi = (order) => destinazioni[String(order?.clientId || "")] || [];
+  const destinazioniDi = (order) => {
+    const cod = String(order?.clientId || "").trim();
+    // Senza codice cliente non c'e' niente da agganciare, e soprattutto non si
+    // deve leggere il secchio della chiave vuota: una sede finita li' dentro
+    // comparirebbe su tutti i 151 ordini storici che il codice non l'hanno.
+    if (!cod) return [];
+    return destinazioni[cod] || [];
+  };
+
+  // Il bollino della destinazione monta uguale in tutte le viste: lo stesso
+  // gesto in Ordini, Preparati, Spediti e Archivio, come chiesto da Luca
+  // ("il layout ed i bottoni devono essere uguali per tutti").
+  const bollinoDestinazione = (order, compatto = false) => (
+    <BadgeDestinazione
+      order={order}
+      sedi={destinazioniDi(order)}
+      scelta={destinazioneDi(order)}
+      compatto={compatto}
+      onScegli={(id) => setOrderDestinazione(order.id, id)}
+      onAggiungi={() => openCompletaAnagrafica(order, { nuovaSede: true })}
+    />
+  );
   const destinazioneDi = (order) => {
     const lista = destinazioniDi(order);
     if (!lista.length) return null;
@@ -8546,33 +8678,32 @@ ${isConferma
                           ) : null}
                         </div>
 
-                        {/* Dove va la merce. Compare SOLO se il cliente ha piu'
-                            di un punto di consegna: con una destinazione sola
-                            sarebbe una tendina con dentro una scelta, cioe'
-                            rumore. */}
-                        {destinazioniDi(selectedOrder).length > 1 ? (
-                          <div style={{
-                            marginTop: 12, padding: "10px 12px", borderRadius: 14,
-                            border: "1px solid #dbe2ea", background: "#fff",
-                            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-                          }}>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a" }}>
-                              📍 Spedire a
+                        {/* Dove va la merce, per QUESTO ordine. Sta accanto al
+                            corriere perche' sono la stessa domanda: cosa parte
+                            e dove va. */}
+                        {(() => {
+                          const dst = destinazioneDi(selectedOrder);
+                          return (
+                            <div style={{
+                              marginTop: 12, padding: "10px 12px", borderRadius: 14,
+                              border: "1px solid #dbe2ea", background: "#fff",
+                              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                            }}>
+                              <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a" }}>
+                                Spedire a
+                              </div>
+                              {bollinoDestinazione(selectedOrder)}
+                              {dst ? (
+                                <span style={{ fontSize: 12, color: "#66758b" }}>
+                                  {[dst.via, dst.civico].filter(Boolean).join(" ")}
+                                  {dst.cap ? ` · ${dst.cap}` : ""}
+                                  {dst.orari_consegna ? ` · ${dst.orari_consegna}` : ""}
+                                  {dst.giorno_chiusura ? ` · chiuso ${dst.giorno_chiusura}` : ""}
+                                </span>
+                              ) : null}
                             </div>
-                            <select
-                              style={{ ...inputStyle(), height: 40, flex: 1, minWidth: 240 }}
-                              value={destinazioneDi(selectedOrder)?.id || ""}
-                              onChange={(e) => setOrderDestinazione(selectedOrder.id, e.target.value)}
-                            >
-                              {destinazioniDi(selectedOrder).map((d) => (
-                                <option key={d.id} value={d.id}>
-                                  {d.etichetta}
-                                  {d.predefinita ? " (predefinita)" : ""} — {d.riga_via}, {d.riga_localita}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        ) : null}
+                          );
+                        })()}
 
                         {/* Prezzi gia' qui, mentre l'ordine si prepara, non solo
                             nei Preparati: e' il momento in cui si guarda cosa
@@ -9408,6 +9539,7 @@ ${isConferma
                               </span>
                             ) : null}
                             <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} />
+                            {bollinoDestinazione(order)}
                             {(() => {
                               const a = anagraficaFor(order);
                               return a.stato === "ko" ? (
@@ -9791,6 +9923,7 @@ ${isConferma
                             il corriere della spedizione, e se davvero non c'e'
                             lo si dice in rosso. */}
                         <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} />
+                        {bollinoDestinazione(order)}
                         {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
                         {order.daBollinare ? (
                           <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
@@ -10451,6 +10584,7 @@ ${isConferma
                                   affatto, e su un documento gia' emesso e'
                                   proprio il dato che si va a ricontrollare. */}
                               <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} compatto />
+                              {bollinoDestinazione(order, true)}
                             </div>
 
                             {/* Cosa manca per fare il documento. In archivio si
@@ -13045,7 +13179,9 @@ ${isConferma
                       <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a", marginBottom: 8 }}>
                         📍 Sedi di consegna
                         <span style={{ fontWeight: 600, color: "#8a94a6" }}>
-                          {" "}— dove va la merce. Quella predefinita si propone sui nuovi ordini.
+                          {" "}— dove va la merce. La predefinita si propone sui nuovi ordini, ma
+                          ogni ordine puo' andare in un negozio diverso: si sceglie dal bollino
+                          📍 sull'ordine.
                         </span>
                       </div>
                       <SediConsegna
@@ -13053,6 +13189,7 @@ ${isConferma
                         sedi={destinazioni[cod] || []}
                         onSalva={salvaDestinazione}
                         onDisattiva={disattivaDestinazione}
+                        apriNuovaSubito={anagNuovaSede}
                       />
                     </div>
                   );
