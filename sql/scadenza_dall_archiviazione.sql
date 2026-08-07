@@ -65,12 +65,18 @@ SET search_path = public
 AS $$
 DECLARE
   cod text;
-  c record;
   gg int;
   certa boolean;
   d date;
   v_metodo text;
   v_scad date;
+  -- Variabili normali, NON un record. La prima versione leggeva
+  -- cf_condizioni_cliente in un record `c` dentro il SOLO ramo del ripiego e poi
+  -- l'INSERT citava c.cond_pag sempre: col metodo di pagamento leggibile quel
+  -- ramo non passava, `c` restava non assegnato e Postgres rifiutava tutta la
+  -- UPDATE. Il 07/08/2026 questo ha bloccato l'archiviazione per due ore.
+  v_cond_pag text := NULL;
+  v_effetto_storico text := NULL;
 BEGIN
   IF NOT (new.archiviato IS TRUE AND coalesce(old.archiviato, false) IS FALSE) THEN
     RETURN new;
@@ -110,8 +116,10 @@ BEGIN
   ELSE
     -- Ripiego: la storia di quel cliente. Utile per non avere la colonna vuota,
     -- ma NON si chiama certa: e' una media di ritardi, non un accordo.
-    SELECT * INTO c FROM cf_condizioni_cliente WHERE codice = cod;
-    IF found THEN gg := c.giorni; ELSE gg := 30; END IF;
+    SELECT co.giorni, co.cond_pag, co.effetto
+      INTO gg, v_cond_pag, v_effetto_storico
+      FROM cf_condizioni_cliente co WHERE co.codice = cod;
+    IF gg IS NULL THEN gg := 30; END IF;
     v_scad := d + gg;
     certa := false;
   END IF;
@@ -122,8 +130,8 @@ BEGIN
   VALUES
     (new.id_ordine, cod, coalesce(new.cliente, ''),
      coalesce(nullif(trim(new.ddt_numero), ''), new.id_ordine),
-     d, gg, c.cond_pag,
-     coalesce(split_part(v_metodo, ' ', 1), c.effetto),
+     d, gg, v_cond_pag,
+     coalesce(split_part(v_metodo, ' ', 1), v_effetto_storico),
      v_scad, certa)
   ON CONFLICT (id) DO NOTHING;
   RETURN new;

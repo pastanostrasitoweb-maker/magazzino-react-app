@@ -170,6 +170,12 @@ GRANT EXECUTE ON FUNCTION giorni_da_metodo(date, text) TO anon, authenticated;
 CREATE OR REPLACE FUNCTION ordine_metodo_da_storia()
 RETURNS trigger
 LANGUAGE plpgsql
+-- SECURITY DEFINER OBBLIGATORIO: legge cf_partite e cf_condizioni_cliente, che
+-- l'utente dell'app non puo' leggere. Senza questa riga ogni insert e update su
+-- ordini risponde "permission denied for table cf_partite": il 07/08/2026 non si
+-- creavano ordini, non si preparavano, non si spedivano, non si archiviavano.
+SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
   cod text;
