@@ -3667,6 +3667,22 @@ export default function App() {
     return nome ? "nome:" + nome : "";
   };
 
+  const destinazioniDi = (order) => {
+    const cod = String(order?.clientId || "").trim();
+    // Senza codice cliente non c'e' niente da agganciare, e soprattutto non si
+    // deve leggere il secchio della chiave vuota: una sede finita li' dentro
+    // comparirebbe su tutti i 151 ordini storici che il codice non l'hanno.
+    if (!cod) return [];
+    return destinazioni[cod] || [];
+  };
+
+  const destinazioneDi = (order) => {
+    const lista = destinazioniDi(order);
+    if (!lista.length) return null;
+    const scelta = String(order?.idDestinazione || "");
+    return lista.find((d) => String(d.id) === scelta) || lista.find((d) => d.predefinita) || lista[0];
+  };
+
   // Il metodo scritto sull'ANAGRAFICA del cliente di quell'ordine. E' la fonte
   // che vale quando l'ordine non ne porta uno suo: cosi' non si chiede due volte.
   const metodoDelCliente = (order) =>
@@ -3780,12 +3796,37 @@ export default function App() {
     // scritto sull'ordine, altrimenti quello del cliente in anagrafica.
     if (!has(agenteDi(order))) bloccanti.push("Agente");
     if (!has(merged.partita_iva) && !has(cli.piva)) bloccanti.push("Partita IVA");
-    if (!has(merged.indirizzo) && !has(merged.sede_legale) && !has(cli.indirizzo)) {
+    // INDIRIZZO, CAP E CITTA' SI LEGGONO DOVE LI LEGGE IL DOCUMENTO.
+    //
+    // Il controllo guardava solo i campi dell'anagrafica e ignorava la SEDE DI
+    // CONSEGNA, che e' proprio la prima fonte che usa generaDocumento(): cosi'
+    // diceva "manca l'indirizzo" su ordini il cui DDT stampava l'indirizzo
+    // giusto. Succedeva su tutti i clienti nati fuori dal gestionale, che hanno
+    // l'indirizzo solo come sede: Simone Lanzi, Jaume Masdevall, Eddy Cash and
+    // Carry, Villa Beccaris (Luca 07/08/2026: "dice che manca l'indirizzo ma in
+    // realta' c'e'").
+    //
+    // Regola: la checklist e il documento devono leggere le stesse cose, sennomo'
+    // uno dice che manca e l'altro lo stampa.
+    const dstCheck = destinazioneDi(order);
+    const viaDst = dstCheck ? [dstCheck.via, dstCheck.civico].filter(Boolean).join(" ") : "";
+
+    if (!has(viaDst) && !has(merged.indirizzo) && !has(merged.sede_legale) &&
+        !has(merged.sede_via) && !has(cli.indirizzo)) {
       bloccanti.push("Indirizzo di consegna");
     }
-    if (!has(merged.cap) && !has(cli.cap) && !has(order?.cap)) bloccanti.push("CAP");
-    if (!has(merged.citta) && !has(cli.citta)) bloccanti.push("Citta'");
-    if (!has(merged.provincia) && !has(cli.provincia)) daCompletare.push("Provincia");
+    if (!has(dstCheck?.cap) && !has(merged.cap) && !has(merged.sede_cap) &&
+        !has(cli.cap) && !has(order?.cap)) {
+      bloccanti.push("CAP");
+    }
+    if (!has(dstCheck?.localita) && !has(merged.citta) && !has(merged.sede_localita) &&
+        !has(cli.citta)) {
+      bloccanti.push("Citta'");
+    }
+    if (!has(dstCheck?.provincia) && !has(merged.provincia) &&
+        !has(merged.sede_provincia) && !has(cli.provincia)) {
+      daCompletare.push("Provincia");
+    }
 
     if (!has(order?.ddtNumero)) daCompletare.push("Numero DDT (mai generato)");
     // Stesso ragionamento che fa generaDDT: vale il corriere scelto, e in
@@ -6149,14 +6190,6 @@ export default function App() {
   // Le destinazioni di un cliente, e quella scelta per questo ordine.
   // Se non e' stata scelta vale la predefinita: la merce parte comunque, e
   // parte dove e' sempre andata.
-  const destinazioniDi = (order) => {
-    const cod = String(order?.clientId || "").trim();
-    // Senza codice cliente non c'e' niente da agganciare, e soprattutto non si
-    // deve leggere il secchio della chiave vuota: una sede finita li' dentro
-    // comparirebbe su tutti i 151 ordini storici che il codice non l'hanno.
-    if (!cod) return [];
-    return destinazioni[cod] || [];
-  };
 
   // Il bollino della destinazione monta uguale in tutte le viste: lo stesso
   // gesto in Ordini, Preparati, Spediti e Archivio, come chiesto da Luca
@@ -6171,12 +6204,6 @@ export default function App() {
       onAggiungi={() => openCompletaAnagrafica(order, { nuovaSede: true })}
     />
   );
-  const destinazioneDi = (order) => {
-    const lista = destinazioniDi(order);
-    if (!lista.length) return null;
-    const scelta = String(order?.idDestinazione || "");
-    return lista.find((d) => String(d.id) === scelta) || lista.find((d) => d.predefinita) || lista[0];
-  };
 
   // Correggere il metodo senza rifare la scadenza non servirebbe a niente: la
   // scadenza e' il motivo per cui si corregge. Lo fa il database in un colpo
