@@ -592,6 +592,7 @@ function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva, apriNuovaSubi
   const [apertaId, setApertaId] = useState("");
   const [bozza, setBozza] = useState(null);
   const [salvando, setSalvando] = useState(false);
+  const staSalvandoSede = useRef(false);
 
   const vuota = () => ({
     id: "", codice_cliente: codiceCliente, etichetta: "", insegna: "",
@@ -616,6 +617,9 @@ function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva, apriNuovaSubi
   }, [apriNuovaSubito]);
 
   const salva = async () => {
+    // Stessa guardia sincrona del salvataggio cliente: due click veloci qui
+    // creavano due sedi identiche sullo stesso negozio.
+    if (staSalvandoSede.current) return;
     if (!String(codiceCliente || "").trim()) {
       alert(
         "Questo ordine non ha ancora un codice cliente, quindi il negozio non " +
@@ -627,11 +631,13 @@ function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva, apriNuovaSubi
       alert("Serve almeno la via: senza, il documento non dice dove va la merce.");
       return;
     }
+    staSalvandoSede.current = true;
     setSalvando(true);
     try {
       await onSalva(bozza);
       setApertaId(""); setBozza(null);
     } finally {
+      staSalvandoSede.current = false;
       setSalvando(false);
     }
   };
@@ -844,6 +850,7 @@ function SchedaCliente({
     return base;
   });
   const [salvando, setSalvando] = useState(false);
+  const staSalvando = useRef(false);
 
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
 
@@ -859,14 +866,22 @@ function SchedaCliente({
   if (!metodoLeggibile(f.metodo_pagamento)) mancano.push("metodo di pagamento");
 
   const salva = async () => {
+    // UN CLICK, UNA AZIONE. Il bottone e' disabled={salvando}, ma setSalvando e'
+    // asincrono: fra il click e il ridisegno c'e' una finestra in cui un secondo
+    // click passa ancora. Su "Crea cliente" quella finestra significa due
+    // anagrafiche e due codici staccati dal registro. La guardia sul ref e'
+    // sincrona e chiude anche il doppio click piu' veloce.
+    if (staSalvando.current) return;
     if (!String(f.ragione_sociale || "").trim()) {
       alert("La ragione sociale serve: e' quella che finisce sul documento.");
       return;
     }
+    staSalvando.current = true;
     setSalvando(true);
     try {
       await (nuovo ? onCrea(f) : onSalva(cliente, f));
     } finally {
+      staSalvando.current = false;
       setSalvando(false);
     }
   };
