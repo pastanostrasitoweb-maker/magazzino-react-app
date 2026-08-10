@@ -1822,6 +1822,8 @@ function normalizeOrders(rows) {
       metodoPagamento: String(
         getField(row, ["Metodo_Pagamento", "metodo_pagamento"]) || ""
       ).trim(),
+      // Riga descrittiva da stampare nel corpo del DDT dopo l'ultimo articolo.
+      notaDdt: String(getField(row, ["Nota_DDT", "nota_ddt"]) || ""),
       // CAP di destinazione salvato sull'ordine (congelato alla creazione).
       cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
       // Corriere scelto per la spedizione + numero DDT (se generato).
@@ -6261,6 +6263,39 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
     />
   );
 
+  // La riga descrittiva del DDT. Si salva a mano con un bottone e non a ogni
+  // tasto premuto: e' testo che si compone, e un salvataggio per lettera
+  // riempirebbe il database di versioni a meta' frase.
+  const [notaDdtBozza, setNotaDdtBozza] = useState({});
+
+  const salvaNotaDdt = async (orderId) => {
+    if (!orderId) return;
+    const testo = String(notaDdtBozza[String(orderId)] ?? "");
+    const prima = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(orderId) ? { ...o, notaDdt: testo } : o))
+    );
+    try {
+      const r = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId, nota_ddt: testo }),
+      });
+      if (!r || !r.success) {
+        setOrders(prima);
+        alert("Riga per il DDT non salvata: " + ((r && r.error) || "errore"));
+        return;
+      }
+      setNotaDdtBozza((prev) => {
+        const n = { ...prev };
+        delete n[String(orderId)];
+        return n;
+      });
+    } catch (e) {
+      setOrders(prima);
+      alert("Errore di collegamento nel salvare la riga per il DDT.");
+    }
+  };
+
   const setOrderDestinazione = async (orderId, idDest) => {
     if (!orderId) return;
     const prima = orders;
@@ -6568,6 +6603,16 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
       })
       .join("");
 
+    // LA RIGA DESCRITTIVA, dopo l'ultimo articolo (Luca 07/08/2026). Sono le
+    // istruzioni per accettare la merce, e vanno lette da chi scarica: quindi
+    // stanno nel corpo del documento, in fondo all'elenco, non in un angolo.
+    // Occupa tutta la larghezza: le colonne dei prezzi qui non hanno senso.
+    const colonneTabella = conPrezzi ? 7 : 3;
+    const notaRiga = String(order.notaDdt || "").trim();
+    const rigaNotaHtml = notaRiga
+      ? `<tr><td colspan="${colonneTabella}" style="padding-top:8px;font-weight:700">${esc(notaRiga)}</td></tr>`
+      : "";
+
     const iva = Object.entries(perAliquota).reduce(
       (s, [a, imp]) => s + imp * (Number(a) / 100),
       0
@@ -6699,7 +6744,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
 </div>
 ${consegnaHtml}
 <div class="box"><b>Trasporto a mezzo:</b> ${esc(corriere) || "vettore"} · <b>Causale:</b> Vendita · <b>Porto:</b> franco · <b>Ordine:</b> ${esc(order.id)}${dest.pagamento ? " · <b>Pagamento:</b> " + esc(dest.pagamento) : ""}</div>
-<table><thead><tr><th>Codice</th><th>Descrizione (lotto e scadenza)</th><th style="text-align:right">Qta</th>${intestazionePrezzi}</tr></thead><tbody>${righeHtml}</tbody></table>
+<table><thead><tr><th>Codice</th><th>Descrizione (lotto e scadenza)</th><th style="text-align:right">Qta</th>${intestazionePrezzi}</tr></thead><tbody>${righeHtml}${rigaNotaHtml}</tbody></table>
 ${riepilogoPrezzi}
 <div class="tot"><span>Colli: ${order.colli ?? ""}</span><span>Peso lordo: ${fmtKg(order.pesoTotale)} kg</span></div>
 ${dest.note
@@ -9598,6 +9643,58 @@ ${isConferma
                             ) : null;
                           })()}
                         </div>
+
+                        {/* LA RIGA DESCRITTIVA PER IL DDT (Luca 07/08/2026).
+                            Sta qui, negli Ordini, perche' va scritta PRIMA che
+                            l'ordine si prepari: e' l'istruzione con cui il
+                            cliente accetta la merce, e chi prepara la deve
+                            trovare gia' pronta. Finisce nel corpo del documento
+                            dopo l'ultimo articolo. */}
+                        {(() => {
+                          const idOrd = String(selectedOrder.id);
+                          const salvata = String(selectedOrder.notaDdt || "");
+                          const inBozza = notaDdtBozza[idOrd];
+                          const valore = inBozza === undefined ? salvata : inBozza;
+                          const daSalvare = inBozza !== undefined && inBozza !== salvata;
+                          return (
+                            <div style={{
+                              marginTop: 12, padding: "10px 12px", borderRadius: 14,
+                              border: "1px solid " + (daSalvare ? "#fbbf24" : "#dbe2ea"),
+                              background: daSalvare ? "#fffbeb" : "#fff",
+                            }}>
+                              <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a", marginBottom: 6 }}>
+                                Riga sul documento di trasporto
+                                <span style={{ fontWeight: 600, color: "#8a94a6" }}>
+                                  {" "}— compare nel DDT sotto l'ultimo articolo
+                                </span>
+                              </div>
+                              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+                                <textarea
+                                  style={{ ...inputStyle(), flex: 1, minWidth: 260, minHeight: 54, padding: 8, resize: "vertical" }}
+                                  placeholder="Es. Consegna su pallet, scarico a cura del cliente. Riportare il ns. rif. ordine."
+                                  value={valore}
+                                  onChange={(e) => setNotaDdtBozza((prev) => ({ ...prev, [idOrd]: e.target.value }))}
+                                />
+                                <button
+                                  style={{
+                                    ...btnStyle(daSalvare ? "primary" : "outline"),
+                                    opacity: daSalvare ? 1 : 0.55,
+                                    cursor: daSalvare ? "pointer" : "default",
+                                  }}
+                                  disabled={!daSalvare || !!azioniInCorso["nota-ddt-" + idOrd]}
+                                  onClick={() => azioneUnica("nota-ddt-" + idOrd, () => salvaNotaDdt(idOrd))}
+                                >
+                                  {azioniInCorso["nota-ddt-" + idOrd] ? "Salvo..." : "Salva riga"}
+                                </button>
+                              </div>
+                              {salvata && !daSalvare ? (
+                                <div style={{ marginTop: 6, fontSize: 11.5, color: "#15803d", fontWeight: 700 }}>
+                                  Sul DDT uscira' questa riga.
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
 
                         {/* Prezzi gia' qui, mentre l'ordine si prepara, non solo
                             nei Preparati: e' il momento in cui si guarda cosa

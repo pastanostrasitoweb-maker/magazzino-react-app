@@ -134,6 +134,9 @@ const mapOrdineRow = (row) => ({
   // in una forma che non produce scadenza. Non arrivava al frontend, quindi il
   // campo non si poteva ne' vedere ne' correggere da qui (Luca 06/08/2026).
   Metodo_Pagamento: row.metodo_pagamento ?? "",
+  // Riga descrittiva stampata nel corpo del DDT dopo l'ultimo articolo: sono le
+  // istruzioni per accettare la merce su QUESTA consegna (Luca 07/08/2026).
+  Nota_DDT: row.nota_ddt ?? "",
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
 });
 const mapRigaRow = (row) => ({
@@ -747,6 +750,10 @@ async function updateOrder(params) {
   if (p.colli !== undefined) {
     // colli "" significa "ripristina default" (campo nullable).
     patch.colli = p.colli === "" || p.colli === null ? null : Number(p.colli);
+  }
+  if (p.nota_ddt !== undefined || p.notaDdt !== undefined) {
+    const v = p.nota_ddt !== undefined ? p.nota_ddt : p.notaDdt;
+    patch.nota_ddt = String(v ?? "").trim() || null;
   }
   if (p.id_destinazione !== undefined) {
     patch.id_destinazione = p.id_destinazione ? String(p.id_destinazione) : null;
