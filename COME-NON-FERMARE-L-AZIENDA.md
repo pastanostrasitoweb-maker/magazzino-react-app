@@ -65,3 +65,21 @@ contrario.**
   `prossimo_numero_ddt()`
 - le modifiche al database si fanno **fuori** dall'orario in cui il magazzino
   spedisce, quando si puo' scegliere
+
+## Due trappole del deploy, imparate il 07/08/2026
+
+**Guarda `git status` PRIMA di `git add -A`.** Nel commit della riga descrittiva
+sono finite anche modifiche di un'altra sessione (la telemetria in `main.jsx` piu'
+`lib/telemetria.js`): innocue, ma pubblicate senza che nessuno le avesse chieste.
+Se ci sono modifiche non tue, committa solo i tuoi file per nome.
+
+**L'autore del commit deve essere una email verificata.** Era
+`lucadelfanti@MacBook-Air-di-luca.local`: con un autore non verificato il deploy
+puo' restare BLOCKED senza dare errore. Ora `user.email` nel repo e'
+`lucadelfanti1@gmail.com`. E dopo ogni deploy si verifica il bundle davvero
+servito:
+
+```bash
+JS=$(curl -s https://magazzino-react-app-cyan.vercel.app/ | grep -o '/assets/index-[A-Za-z0-9_-]*\.js' | head -1)
+curl -s "https://magazzino-react-app-cyan.vercel.app$JS" | grep -c "una stringa tua nuova"
+```
