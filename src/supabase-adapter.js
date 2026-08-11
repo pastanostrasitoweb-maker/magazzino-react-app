@@ -193,10 +193,56 @@ function valorizzaRigaApp(r) {
     : 1;
   const prezzoPezzo = Number(r.prezzo_unitario || 0);
   const prezzo = Math.round(prezzoPezzo * pezziCollo * 10000) / 10000;
+
+  // REGOLA DI LUCA (11/08/2026): "ogni cosa che viene scontata NON modifica il
+  // prezzo di listino ma aggiunge lo sconto nella riga sconti. Adesso abbiamo uno
+  // sconto solo, ma preparati: ci sono clienti che hanno il secondo sconto."
+  //
+  // Il prezzo che si scrive e' quindi SEMPRE il listino, e gli sconti si scrivono
+  // nelle loro colonne. Prima si scriveva il netto e la colonna Sconto restava
+  // vuota: sulla conferma d'ordine di Gluten Free Sans Soucci il listino era
+  // 45,31 al cartone e il prezzo stampato 25,83, senza dire da nessuna parte che
+  // era un 43%. Chi la legge non sa che prezzo gli abbiamo fatto e chi la
+  // controlla non sa se e' giusto.
+  //
+  // Il ponte agenti manda due sconti distinti:
+  //   sconto_pct        lo sconto del cliente
+  //   promo_sconto_pct  quello della promozione (verificato: 70% su NFARMA 011)
+  // e li ha GIA' applicati dentro prezzo_netto, in cascata.
+  //
+  // Se i due dichiarati non ricostruiscono il netto, la differenza e' uno sconto
+  // che l'app non ha dichiarato (il 43% di Sans Soucci arrivava con sconto_pct a
+  // zero): si ricava e si mette nel primo sconto. Se anche cosi' i conti non
+  // tornano al centesimo non si tocca niente: un prezzo giusto scritto male e'
+  // meglio di un prezzo sbagliato scritto bene.
+  const listinoPezzo = Number(r.prezzo_listino || 0);
+  const sc1Dichiarato = Number(r.sconto_pct || 0);
+  const sc2Dichiarato = Number(r.promo_sconto_pct || 0);
+
+  if (listinoPezzo > 0 && prezzoPezzo > 0 && listinoPezzo >= prezzoPezzo) {
+    const lordo = Math.round(listinoPezzo * pezziCollo * 10000) / 10000;
+    const cascata = (a, b) => 1 - (1 - a / 100) * (1 - b / 100);
+    const scontoVero = 1 - prezzoPezzo / listinoPezzo;
+
+    // Quanto deve valere il primo sconto perche' la cascata col secondo
+    // dichiarato ridia il netto vero.
+    const restante = 1 - sc2Dichiarato / 100;
+    let sc1 = restante > 0
+      ? Math.round((1 - (1 - scontoVero) / restante) * 10000) / 100
+      : sc1Dichiarato;
+    if (Math.abs(sc1) < 0.005) sc1 = 0;
+
+    const netto = lordo * (1 - cascata(sc1, sc2Dichiarato));
+    if (sc1 >= 0 && sc1 < 100 && Math.abs(netto - prezzo) < 0.01) {
+      return { qty: aCartoni ? colli : pezzi, prezzo: lordo, sconto: sc1, sconto2: sc2Dichiarato };
+    }
+  }
+
   return {
     qty: aCartoni ? colli : pezzi,
     prezzo,
-    sconto: Number(r.sconto_pct || 0),
+    sconto: sc1Dichiarato,
+    sconto2: sc2Dichiarato,
   };
 }
 
@@ -2517,6 +2563,9 @@ async function spostaOrdineInOrdini(params) {
       // valorizzaRigaApp). Sconto e origine viaggiano con la riga.
       prezzoUnitario: val.prezzo,
       scontoPct: val.sconto,
+      // Il secondo sconto viaggia con la riga: certi clienti ne hanno due, e la
+      // promozione e' proprio il caso piu' frequente (Luca 11/08/2026).
+      sconto2Pct: val.sconto2 || 0,
       prezzoOrigine: "app",
     };
   });
