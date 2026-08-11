@@ -512,7 +512,7 @@ async function archivePreparedOrders() {
 
   const { data, error } = await supabase
     .from("ordini")
-    .select("id_ordine, stato, archiviato, data_preparato, data_ordine, metodo_pagamento")
+    .select("id_ordine, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile")
     .or("archiviato.is.null,archiviato.eq.false")
     .lt("data_preparato", midnightIso);
   if (error) return failure(error);
@@ -572,7 +572,12 @@ async function archivePreparedOrders() {
     const suCliente = String(metodiCliente[String(r.id_cliente || "")] || "").trim();
     const leggibile =
       METODI_PAGAMENTO_CANONICI.has(suOrdine) || METODI_PAGAMENTO_CANONICI.has(suCliente);
-    if (daAllineare && !leggibile) {
+    // Campionatura gratuita: niente da incassare, quindi il cancello non si
+    // applica (Luca 11/08/2026). A imponibile zero non c'e' nessuna scadenza da
+    // sbagliare, e chiedere il metodo le terrebbe bloccate per sempre.
+    const campionaturaGratis =
+      r.campionatura === true && Number(r.totale_imponibile || 0) === 0;
+    if (daAllineare && !leggibile && !campionaturaGratis) {
       scoperti.push(r.id_ordine);
       continue;
     }

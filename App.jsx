@@ -495,6 +495,15 @@ function pagamentoDaSistemare(order, metodoCliente) {
   if (!order) return false;
   const data = String(order.date || "").slice(0, 10);
   if (data && data < PAGAMENTI_ALLINEATI_DAL) return false;
+
+  // CAMPIONATURA GRATUITA: niente da incassare, niente scadenza da sbagliare,
+  // quindi non si chiede il metodo di pagamento (Luca 11/08/2026). Senza questa
+  // esenzione il cancello dell'archiviazione le bloccava per sempre, chiedendo un
+  // dato che per quegli ordini non esiste.
+  // Attenzione: vale solo a imponibile ZERO. Una campionatura a pagamento si
+  // incassa come qualsiasi vendita, e li' il metodo serve.
+  if (order.campionatura && Number(order.totaleImponibile || 0) === 0) return false;
+
   return !metodoLeggibile(metodoEffettivo(order.metodoPagamento, metodoCliente));
 }
 
@@ -1873,6 +1882,10 @@ function normalizeOrders(rows) {
       notaDdt: String(getField(row, ["Nota_DDT", "nota_ddt"]) || ""),
       campionatura: String(getField(row, ["Campionatura", "campionatura"]) ?? "")
         .toLowerCase() === "true",
+      totaleImponibile: (() => {
+        const v = getField(row, ["Totale_Imponibile", "totale_imponibile"]);
+        return v === "" || v === null || v === undefined ? 0 : Number(v);
+      })(),
       // CAP di destinazione salvato sull'ordine (congelato alla creazione).
       cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
       // Corriere scelto per la spedizione + numero DDT (se generato).
