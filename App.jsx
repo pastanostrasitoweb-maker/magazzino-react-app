@@ -2230,7 +2230,14 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
         sconto2: l.sconto2Pct ? String(l.sconto2Pct) : "",
         sconto3: l.sconto3Pct ? String(l.sconto3Pct) : "",
         // Il nostro prodotto sta al 4%: e' il caso normale, si cambia dove serve.
-        iva: l.ivaPct === null || l.ivaPct === undefined ? "4" : String(l.ivaPct),
+        // NIENTE 4% DI DEFAULT (Luca 07/08/2026: "perche' abbiamo l'IVA
+        // sballata? come lo risolviamo per sempre?"). Il 4 messo qui non era una
+        // scelta di nessuno, ma finiva in fattura come se lo fosse: la burrata di
+        // Green Door e' uscita al 4 invece che al 10, il polybox di Service Tour
+        // al 4 invece che al 22. Un'aliquota che non si sa resta VUOTA, la riga si
+        // colora di rosso e il documento non si fa: un campo vuoto si vede, un
+        // default no.
+        iva: l.ivaPct === null || l.ivaPct === undefined ? "" : String(l.ivaPct),
         natura: l.naturaIva || "",
       };
     }
@@ -2573,7 +2580,7 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                 />
                 <select
                   style={{ ...inputStyle(), padding: "6px 8px" }}
-                  value={`${bozza[l.lineId]?.iva ?? "4"}|${bozza[l.lineId]?.natura ?? ""}`}
+                  value={`${bozza[l.lineId]?.iva ?? ""}|${bozza[l.lineId]?.natura ?? ""}`}
                   disabled={!regimeCorrente.ivaEsiste}
                   title={!regimeCorrente.ivaEsiste ? "Con questo regime l'imposta non c'e'" : "Aliquota IVA della riga"}
                   onChange={(e) =>
@@ -2586,6 +2593,12 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                     }))
                   }
                 >
+                  {/* La voce vuota c'e' solo finche' l'aliquota non e' scelta:
+                      senza, il browser mostrerebbe la prima della lista e la riga
+                      sembrerebbe gia' a posto. */}
+                  {String(bozza[l.lineId]?.iva ?? "") === "" ? (
+                    <option value="|">⚠️ IVA da scegliere</option>
+                  ) : null}
                   {ALIQUOTE_IVA.map((a) => (
                     <option key={chiaveAliquota(a)} value={chiaveAliquota(a)}>{a.etichetta}</option>
                   ))}
@@ -3582,7 +3595,7 @@ export default function App() {
   const [newOrderCap, setNewOrderCap] = useState("");
   const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
-  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
+  const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "", naturaIva: "" }]);
   // Un click, una azione: vedi useUnaAzioneAllaVolta.
   const { esegui: azioneUnica, attive: azioniInCorso } = useUnaAzioneAllaVolta();
   // Cosa abbiamo gia' venduto a questo cliente FUORI dal nostro catalogo, negli
@@ -6561,6 +6574,9 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
 
     let imponibile = 0;
     const perAliquota = {};
+    // Quanto imponibile non ha un'aliquota scelta: si dichiara nel riepilogo
+    // invece di nasconderlo dentro il 4%.
+    let imponibileSenzaIva = 0;
     const righeHtml = (order.lines || [])
       .map((line) => {
         // Codice interno REALE del prodotto (dal catalogo), non l'id/riga.
@@ -6593,8 +6609,17 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
         // precedente. Stessa formula del database (netto_riga).
         const totale = nettoRiga(line.qtyOrdered, prezzo, sconto, sconto2, sconto3);
         imponibile += totale;
-        const aliq = Number(line.ivaPct ?? 4);
-        perAliquota[aliq] = (perAliquota[aliq] || 0) + totale;
+        // Se l'aliquota manca NON si butta nel secchio del 4%: si tiene da
+        // parte, cosi' il riepilogo dice che c'e' qualcosa da definire invece di
+        // farlo sparire dentro un'aliquota che nessuno ha scelto. Il documento
+        // comunque non si genera con un'aliquota mancante: e' una rete, non la
+        // strada normale.
+        if (line.ivaPct == null || String(line.ivaPct) === "") {
+          imponibileSenzaIva += totale;
+        } else {
+          const aliq = Number(line.ivaPct);
+          perAliquota[aliq] = (perAliquota[aliq] || 0) + totale;
+        }
         // Prezzo mancante: si scrive "da definire", non zero. Uno zero su un
         // documento consegnato al cliente sembra merce regalata.
         const cellaPrezzo = prezzo > 0 ? eur(prezzo) : "da definire";
@@ -6638,8 +6663,11 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
       ? `<th style="text-align:right">Prezzo</th><th style="text-align:right">Sconto</th>` +
         `<th style="text-align:right">IVA</th><th style="text-align:right">Totale</th>`
       : "";
+    const rigaSenzaIva = imponibileSenzaIva > 0
+      ? `<div style="color:#b91c1c;font-weight:700"><span>Imponibile SENZA ALIQUOTA</span><b>${eur(imponibileSenzaIva)} €</b></div>`
+      : "";
     const riepilogoPrezzi = conPrezzi
-      ? `<div class="riepilogo">
+      ? `<div class="riepilogo">${rigaSenzaIva}
            ${Object.entries(perAliquota)
              .sort((a, b) => Number(a[0]) - Number(b[0]))
              .map(([a, imp]) =>
@@ -7415,7 +7443,7 @@ ${isConferma
   };
 
   const addEmptyOrderLine = () => {
-    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
+    setNewOrderLines((prev) => [...prev, { productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "", naturaIva: "" }]);
   };
 
   const updateNewOrderLine = (index, field, value) => {
@@ -7546,7 +7574,7 @@ ${isConferma
       setNewOrderCap("");
       setNewOrderCategory("");
       setNewOrderNotes("");
-      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "4", naturaIva: "" }]);
+      setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "", naturaIva: "" }]);
       setNewOrderAgenteId("");
       setOrderDialogOpen(false);
       setPage("ordini");

@@ -1938,6 +1938,17 @@ async function addOrderLine(params) {
     valorizzazione = Array.isArray(v) ? v[0] : v;
   } catch (_) {}
 
+  // L'IVA delle righe FUORI MAGAZZINO. valorizza_ordine non le vede: la sua
+  // UPDATE dell'aliquota si aggancia a prodotti.id_prodotto, e una riga scritta a
+  // mano quel prodotto non ce l'ha. Erano proprio quelle a restare col 4% di
+  // default (la burrata di Green Door, il polybox di Service Tour).
+  // Deduce l'aliquota dal catalogo solo quando i prodotti somiglianti sono
+  // d'accordo, e per il polybox applica il suo 22% fisso. Quando non si sa lascia
+  // vuoto, e il vuoto blocca il documento.
+  try {
+    await supabase.rpc("iva_righe_fuori_magazzino", { p_id_ordine: String(idOrdine) });
+  } catch (_) {}
+
   await ricalcolaImponibile(idOrdine);
   // Rilegge la riga: l'RPC potrebbe averle appena messo prezzo e IVA, e chi
   // chiama deve vedere i valori veri, non quelli di un istante prima.
