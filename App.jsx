@@ -253,17 +253,34 @@ function transportBadgeInfo(transport) {
 // (lista Luca 2026-07-23). Se ne manca uno l'anagrafica e' in errore e
 // l'ordine non puo' caricare i lotti finche' non viene completata.
 // L'insegna e' richiesta solo se diversa dalla ragione sociale: non blocca.
-function checkAnagraficaApp(cli) {
+// `sede` e' la destinazione scelta per quell'ordine. Va passata, perche' da
+// quando le consegne sono diventate SEDI il campo indirizzo_spedizione
+// dell'anagrafica NON ESISTE PIU': cercarlo li' voleva dire chiedere una cosa
+// che nessuno puo' piu' compilare, e ogni ordine dall'app risultava con
+// "anagrafica incompleta: manca Indirizzo di spedizione" mentre il suo DDT
+// usciva perfetto, perche' il documento l'indirizzo lo prende dalla sede
+// (Luca 07/08/2026: "dice che manca indirizzo ma in realta' c'e'").
+//
+// Orario di scarico e giorno di chiusura seguono la stessa regola: ogni negozio
+// ha i suoi, e quelli che contano sono del negozio dove va il camion.
+function checkAnagraficaApp(cli, sede) {
   const has = (v) => String(v ?? "").trim() !== "";
+  const viaSede = sede ? [sede.via, sede.civico].filter(Boolean).join(" ") : "";
   const mancanti = [];
   if (!has(cli.ragione_sociale)) mancanti.push("Ragione sociale");
   if (!has(cli.partita_iva)) mancanti.push("Partita IVA");
-  if (!has(cli.sede_legale) && !has(cli.indirizzo)) mancanti.push("Sede legale");
-  if (!has(cli.cap)) mancanti.push("CAP");
-  if (!has(cli.indirizzo_spedizione)) mancanti.push("Indirizzo di spedizione");
-  if (!has(cli.orari_consegna) && !has(cli.orario_scarico))
+  if (!has(cli.sede_legale) && !has(cli.indirizzo) &&
+      !has([cli.sede_via, cli.sede_civico].filter(Boolean).join(" "))) {
+    mancanti.push("Sede legale");
+  }
+  if (!has(cli.cap) && !has(cli.sede_cap) && !has(sede && sede.cap)) mancanti.push("CAP");
+  if (!has(viaSede) && !has(cli.indirizzo_spedizione)) {
+    mancanti.push("Indirizzo di consegna (aggiungi una sede)");
+  }
+  if (!has(sede && sede.orari_consegna) && !has(cli.orari_consegna) && !has(cli.orario_scarico))
     mancanti.push("Orario di scarico (finestra di almeno 3 ore)");
-  if (!has(cli.giorno_chiusura)) mancanti.push("Giorno di chiusura");
+  if (!has(sede && sede.giorno_chiusura) && !has(cli.giorno_chiusura))
+    mancanti.push("Giorno di chiusura");
   if (!has(cli.codice_univoco) && !has(cli.pec)) mancanti.push("Codice univoco o PEC");
   if (!has(cli.email)) mancanti.push("Email");
   if (!has(cli.telefono)) mancanti.push("Telefono referente");
@@ -3771,7 +3788,7 @@ export default function App() {
     const { merged, ov, fonte } = effectiveCliente(order);
     // APP (o cliente a mano con override): checklist completa sul dato unito.
     if (fonte === "APP" || (fonte === "" && ov)) {
-      const mancanti = checkAnagraficaApp(merged);
+      const mancanti = checkAnagraficaApp(merged, destinazioneDi(order));
       const f = fonte === "APP" ? "APP" : "MANUALE";
       return mancanti.length
         ? { stato: "ko", label: "Anagrafica incompleta", mancanti, fonte: f }
