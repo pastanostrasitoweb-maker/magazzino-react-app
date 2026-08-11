@@ -219,6 +219,41 @@ function valorizzaRigaApp(r) {
   const sc1Dichiarato = Number(r.sconto_pct || 0);
   const sc2Dichiarato = Number(r.promo_sconto_pct || 0);
 
+  // LA SCOMPOSIZIONE DICHIARATA DALL'APP AGENTI (dal 11/08/2026).
+  //
+  // Il ponte manda listino, i due sconti e il prezzo finale, e la
+  // moltiplicazione deve tornare:
+  //
+  //   prezzo_listino x (1 - sconto1_pct) x (1 - sconto2_pct) = prezzo_finale
+  //
+  // Se torna si prende quella e non si indovina niente: e' chi fa il prezzo che
+  // dice com'e' fatto. Il primo sconto e' quello del cliente (il suo livello),
+  // il secondo tutto il resto in cascata: sconto di riga, sconto di canale, 5%
+  // extra dell'agente, sconto sull'ordine di una promozione.
+  //
+  // Se non torna, o se l'app e' una versione vecchia che non li manda, si
+  // continua col ricavo dai due prezzi qui sotto: gli ordini non si fermano
+  // perche' un telefono ha in cache il bundle di ieri.
+  const finalePezzo = r.prezzo_finale === null || r.prezzo_finale === undefined
+    ? null
+    : Number(r.prezzo_finale);
+  if (finalePezzo !== null && listinoPezzo > 0) {
+    const s1 = Number(r.sconto1_pct || 0);
+    const s2 = Number(r.sconto2_pct || 0);
+    const atteso = listinoPezzo * (1 - s1 / 100) * (1 - s2 / 100);
+    if (
+      s1 >= 0 && s1 <= 100 && s2 >= 0 && s2 <= 100 &&
+      Math.abs(atteso - finalePezzo) < 0.0001
+    ) {
+      return {
+        qty: aCartoni ? colli : pezzi,
+        prezzo: Math.round(listinoPezzo * pezziCollo * 10000) / 10000,
+        sconto: s1,
+        sconto2: s2,
+      };
+    }
+  }
+
   if (listinoPezzo > 0 && prezzoPezzo > 0 && listinoPezzo >= prezzoPezzo) {
     const lordo = Math.round(listinoPezzo * pezziCollo * 10000) / 10000;
     const cascata = (a, b) => 1 - (1 - a / 100) * (1 - b / 100);
