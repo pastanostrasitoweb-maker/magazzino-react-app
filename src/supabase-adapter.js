@@ -137,6 +137,9 @@ const mapOrdineRow = (row) => ({
   // Riga descrittiva stampata nel corpo del DDT dopo l'ultimo articolo: sono le
   // istruzioni per accettare la merce su QUESTA consegna (Luca 07/08/2026).
   Nota_DDT: row.nota_ddt ?? "",
+  // Campionatura, a pagamento o gratuita: serve alle metriche commerciali
+  // (Luca 11/08/2026). Prima si riconosceva solo dalla parola scritta nelle note.
+  Campionatura: row.campionatura === true,
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
 });
 const mapRigaRow = (row) => ({
@@ -751,6 +754,7 @@ async function updateOrder(params) {
     // colli "" significa "ripristina default" (campo nullable).
     patch.colli = p.colli === "" || p.colli === null ? null : Number(p.colli);
   }
+  if (p.campionatura !== undefined) patch.campionatura = !!p.campionatura;
   if (p.nota_ddt !== undefined || p.notaDdt !== undefined) {
     const v = p.nota_ddt !== undefined ? p.nota_ddt : p.notaDdt;
     patch.nota_ddt = String(v ?? "").trim() || null;

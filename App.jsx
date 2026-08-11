@@ -1337,6 +1337,36 @@ function SpuntaPrezziDDT({ attivo, onCambia, compatto = false }) {
 // Peso dell'ordine, sempre correggibile a mano. Il calcolo somma solo le righe
 // di magazzino con peso noto: un articolo fuori magazzino pesa 0 e l'ordine
 // risulta piu' leggero di com'e'. Chi spedisce ha la bilancia davanti.
+// Campionatura: una spunta sull'ordine, non una parola nelle note.
+// "Che sia a pagamento o no non ci interessa, ma a me serve per metriche"
+// (Luca 11/08/2026). Prima si riconoscevano dal testo libero, dove convivevano
+// col corriere e con le istruzioni di consegna: 20 ordini scritti in otto modi
+// diversi, e con quel testo non si conta niente.
+function SpuntaCampionatura({ attivo, onCambia, compatto = false }) {
+  return (
+    <label
+      title="Ordine di campionatura. Vale per questo ordine, e serve a contare quante campionature facciamo e per chi."
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer",
+        fontSize: compatto ? 11.5 : 12.5, fontWeight: 700,
+        color: attivo ? "#7c3aed" : "#66758b",
+        border: "1px solid " + (attivo ? "#c4b5fd" : "#dbe2ea"),
+        background: attivo ? "#f5f3ff" : "#fff",
+        borderRadius: 8, padding: compatto ? "4px 8px" : "6px 10px",
+        whiteSpace: "nowrap", userSelect: "none",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={!!attivo}
+        onChange={(e) => onCambia(e.target.checked)}
+        style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#7c3aed" }}
+      />
+      🧪 Campionatura
+    </label>
+  );
+}
+
 function PesoOrdine({ ord, onSalva }) {
   const [valore, setValore] = useState("");
   const [salvando, setSalvando] = useState(false);
@@ -1841,6 +1871,8 @@ function normalizeOrders(rows) {
       ).trim(),
       // Riga descrittiva da stampare nel corpo del DDT dopo l'ultimo articolo.
       notaDdt: String(getField(row, ["Nota_DDT", "nota_ddt"]) || ""),
+      campionatura: String(getField(row, ["Campionatura", "campionatura"]) ?? "")
+        .toLowerCase() === "true",
       // CAP di destinazione salvato sull'ordine (congelato alla creazione).
       cap: String(getField(row, ["Cap", "cap", "CAP"]) || "").trim(),
       // Corriere scelto per la spedizione + numero DDT (se generato).
@@ -6298,6 +6330,35 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
   // riempirebbe il database di versioni a meta' frase.
   const [notaDdtBozza, setNotaDdtBozza] = useState({});
 
+  const setOrderCampionatura = async (orderId, valore) => {
+    if (!orderId) return;
+    const prima = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(orderId) ? { ...o, campionatura: !!valore } : o))
+    );
+    try {
+      const r = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId, campionatura: !!valore }),
+      });
+      if (!r || !r.success) {
+        setOrders(prima);
+        alert("Campionatura non salvata: " + ((r && r.error) || "errore"));
+      }
+    } catch (e) {
+      setOrders(prima);
+      alert("Errore di collegamento nel salvare la campionatura.");
+    }
+  };
+
+  const spuntaCampionatura = (order, compatto = false) => (
+    <SpuntaCampionatura
+      attivo={order.campionatura}
+      compatto={compatto}
+      onCambia={(v) => azioneUnica("campionatura-" + order.id, () => setOrderCampionatura(order.id, v))}
+    />
+  );
+
   const salvaNotaDdt = async (orderId) => {
     if (!orderId) return;
     const testo = String(notaDdtBozza[String(orderId)] ?? "");
@@ -10717,6 +10778,7 @@ ${isConferma
                             onCambia={(v) => setDdtConPrezzi(order, v)}
                             compatto
                           />
+                          {spuntaCampionatura(order, true)}
                           <button
                             style={btnStyle("outline")}
                             onClick={() => generaDDT(order)}
@@ -11032,6 +11094,7 @@ ${isConferma
                         attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
                         onCambia={(v) => setDdtConPrezzi(order, v)}
                       />
+                      {spuntaCampionatura(order, false)}
                       <button
                         style={btnStyle("outline")}
                         onClick={() => generaDDT(order)}
@@ -11385,6 +11448,7 @@ ${isConferma
                         onCambia={(v) => setDdtConPrezzi(order, v)}
                         compatto
                       />
+                      {spuntaCampionatura(order, true)}
                     </div>
                   </div>
                 ))}
@@ -11843,6 +11907,7 @@ ${isConferma
                                 onCambia={(v) => setDdtConPrezzi(order, v)}
                                 compatto
                               />
+                              {spuntaCampionatura(order, true)}
                               {/* Niente Disarchivia. Un ordine archiviato ha il DDT
                                   emesso: e' un documento fiscale, non si annulla
                                   facendolo sparire (regola di Luca 03/08/2026, deroga
