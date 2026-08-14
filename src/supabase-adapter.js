@@ -24,8 +24,27 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.warn("[supabase-adapter] VITE_SUPABASE_URL o VITE_SUPABASE_ANON_KEY non impostate.");
 }
 
+// CHI HA TOCCATO L'ORDINE (Luca 13/08/2026).
+//
+// Lo storico degli stati registra ogni passaggio, ma senza un nome resta
+// "non registrato": l'app lavora con la chiave pubblica e il database non sa
+// chi c'e' dietro. Invece di infilare l'operatore in 31 punti diversi, lo si
+// dichiara UNA volta con un'intestazione della richiesta: PostgREST la passa
+// al database, e il trigger dello storico la legge.
+let operatoreCorrente = "";
+const testataOperatore = {
+  get "x-operatore"() {
+    return operatoreCorrente;
+  },
+};
+
+export function impostaOperatore(nome) {
+  operatoreCorrente = String(nome || "");
+}
+
 const supabase = createClient(SUPABASE_URL || "", SUPABASE_ANON_KEY || "", {
   auth: { persistSession: false, autoRefreshToken: false },
+  global: { headers: testataOperatore },
 });
 
 // ---------- helpers ----------

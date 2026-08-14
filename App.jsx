@@ -1,6 +1,8 @@
 // hotfix assegnazione prodotti senza lotto su ID disponibilità reale
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { callSheetsApi, aggiornaStatoOrdineApp, nettoRiga } from "./src/supabase-adapter.js";
+import { callSheetsApi, aggiornaStatoOrdineApp, nettoRiga,
+  impostaOperatore,
+} from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
 import {
@@ -3585,6 +3587,11 @@ export default function App() {
       return null;
     }
   });
+  // Sessione gia' salvata sul dispositivo: l'operatore va dichiarato subito,
+  // se no il primo cambio di stato dopo un refresh resta senza nome.
+  useEffect(() => {
+    impostaOperatore(authUser?.username || "");
+  }, [authUser]);
   const [loginUsers, setLoginUsers] = useState([]);
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -6195,6 +6202,9 @@ export default function App() {
         }
       } catch {}
       setAuthUser(session);
+      // Da qui in avanti ogni scrittura porta con se' chi l'ha fatta: lo
+      // storico degli stati smette di dire "non registrato".
+      impostaOperatore(session?.username || "");
       setLoginPassword("");
     } catch (err) {
       setLoginError("Errore di collegamento. Riprova.");
@@ -6209,6 +6219,7 @@ export default function App() {
       sessionStorage.removeItem("magazzino_auth");
     } catch {}
     setAuthUser(null);
+    impostaOperatore("");
     setIsAdmin(false);
   };
 
