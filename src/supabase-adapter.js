@@ -3182,3 +3182,18 @@ export async function callSheetsApi(params = {}) {
 }
 
 export default callSheetsApi;
+
+// STORICO DEGLI STATI di un ordine: da cosa a cosa, quando, chi. Serve a
+// rispondere a "perche' ci ha messo tanto" senza ricostruzioni a posteriori
+// (Luca 13/08/2026).
+export async function storicoStatiOrdine(idOrdine) {
+  if (!idOrdine) return [];
+  const { data, error } = await supabase
+    .from("ordini_stati_log")
+    .select("campo,valore_da,valore_a,quando,chi,dopo_giorni")
+    .eq("id_ordine", String(idOrdine))
+    .order("quando", { ascending: true })
+    .limit(200);
+  if (error) return [];
+  return data || [];
+}

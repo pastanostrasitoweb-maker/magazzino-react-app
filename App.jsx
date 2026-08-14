@@ -1,7 +1,11 @@
 // hotfix assegnazione prodotti senza lotto su ID disponibilità reale
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { callSheetsApi, aggiornaStatoOrdineApp, nettoRiga,
+import {
+  callSheetsApi,
+  aggiornaStatoOrdineApp,
+  nettoRiga,
   impostaOperatore,
+  storicoStatiOrdine,
 } from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
@@ -3331,6 +3335,60 @@ function applyStockMovementsToLots(lots, movements = []) {
 
 // Pannello chat riutilizzabile su un canale (tabella) qualsiasi. Gestisce da
 // solo polling, invio testo/vocale e beep all'arrivo di un messaggio altrui.
+
+// LA STORIA DELL'ORDINE (Luca 13/08/2026).
+//
+// Su Vini Burini nessuno sapeva dire perche' ci fossero voluti 6 giorni: gli
+// stati si sovrascrivevano e i passaggi non li registrava nessuno. Qui si
+// legge il percorso: ogni salto, quando, per mano di chi, e quanto e' rimasto
+// fermo nel punto piu' lungo, che di solito e' la risposta alla domanda.
+function StoriaOrdine({ idOrdine }) {
+  const [righe, setRighe] = useState(null);
+
+  useEffect(() => {
+    let vivo = true;
+    if (!idOrdine) return;
+    storicoStatiOrdine(idOrdine).then((r) => { if (vivo) setRighe(r); });
+    return () => { vivo = false; };
+  }, [idOrdine]);
+
+  if (!righe) return null;
+  const stati = righe.filter((r) => r.campo === "stato");
+  if (!stati.length) {
+    return (
+      <div style={{ fontSize: 12, color: "#8a94a6", marginTop: 8 }}>
+        Nessun passaggio registrato: lo storico parte dal 13/08/2026, prima gli stati non si annotavano.
+      </div>
+    );
+  }
+
+  // La sosta piu' lunga fra due passaggi: e' li' che l'ordine si e' fermato.
+  let sosta = { giorni: 0, dove: "" };
+  for (let i = 1; i < stati.length; i++) {
+    const gg = (new Date(stati[i].quando) - new Date(stati[i - 1].quando)) / 86400000;
+    if (gg > sosta.giorni) sosta = { giorni: gg, dove: stati[i - 1].valore_a || "" };
+  }
+  const dataOra = (q) => new Date(q).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <div style={{ marginTop: 10, border: "1px solid #e6eaf2", borderRadius: 10, padding: "10px 12px", background: "#fbfcfe" }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: "#40516a", marginBottom: 6 }}>
+        Storia dell'ordine · {stati.length} {stati.length === 1 ? "passaggio" : "passaggi"}
+        {sosta.giorni >= 1 ? ` · fermo ${sosta.giorni.toFixed(1)} giorni su "${sosta.dove}"` : ""}
+      </div>
+      {stati.map((r, i) => (
+        <div key={i} style={{ fontSize: 12.5, color: "#0f172a", padding: "3px 0", borderTop: i ? "1px solid #eef2f7" : "none" }}>
+          <b>{r.valore_a}</b>
+          {r.valore_da ? <span style={{ color: "#8a94a6" }}> (era {r.valore_da})</span> : null}
+          <span style={{ color: "#66758b" }}> · {dataOra(r.quando)}</span>
+          {r.chi && r.chi !== "non registrato" ? <span style={{ color: "#66758b" }}> · {r.chi}</span> : null}
+          {Number(r.dopo_giorni) > 0 ? <span style={{ color: "#8a94a6" }}> · dopo {Number(r.dopo_giorni).toFixed(1)} gg</span> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ChatPanel({ tabella, authUser, height = "42vh", vuotoLabel = "Nessun messaggio." }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
@@ -9538,6 +9596,8 @@ ${isConferma
                         <div style={{ marginTop: 6, color: "#66758b", fontSize: 13, overflowWrap: "anywhere" }}>
                           {fmtDate(selectedOrder.date)} · ID ordine {selectedOrder.id}
                         </div>
+
+                        <StoriaOrdine idOrdine={selectedOrder.id} />
 
                         <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                           <BadgeAgente
