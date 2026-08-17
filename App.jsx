@@ -235,7 +235,14 @@ function fmtEur(n) {
 // Temperatura di spedizione dell'ordine, dedotta dai prodotti (vince il piu'
 // freddo): surgelato -18 → frozen (a collo/poly box), pasta fresca → fresh,
 // resto → secco. Ordini misti: se c'e' del surgelato tutto va gestito frozen.
-function temperaturaOrdine(lines) {
+// PEDANA SURGELATA (Luca 17/08/2026): quando l'ordine dice di viaggiare in
+// pedana, la temperatura non si deduce. Il gelo ha due strade e sono
+// alternative: a collo nel poly box dentro una spedizione refrigerata, oppure
+// su una pedana a -18 con Stef surgelati. Dedurre "frozen" dai nomi porta al
+// primo caso, cioe' a proporre corrieri fresh e un imballo che in pedana non
+// esiste. Lo dichiara chi vende, come per gli sconti.
+function temperaturaOrdine(lines, pedanaFrozen) {
+  if (pedanaFrozen) return "frozen-pedana";
   const txt = (lines || [])
     .map((l) => `${l.category || ""} ${l.productName || ""}`)
     .join(" ")
@@ -1382,6 +1389,38 @@ function SpuntaCampionatura({ attivo, onCambia, compatto = false }) {
   );
 }
 
+// PEDANA SURGELATA: il gelo a cartoni, senza poly box.
+// "Il concetto dei polybox dal momento che scegli la logistica frozen non esiste
+// piu', perche' ovviamente deve essere tutto frozen dentro la pedana" (Luca
+// 17/08/2026). Sono due strade alternative: a collo nel poly box col ghiaccio
+// secco dentro una spedizione refrigerata, oppure tutto il carico a -18 con Stef
+// surgelati. La spunta decide quale, e con essa la temperatura di spedizione e i
+// corrieri che il motore puo' proporre.
+function SpuntaPedanaFrozen({ attivo, onCambia, compatto = false }) {
+  return (
+    <label
+      title="La merce viaggia su pedana surgelata (Stef surgelati, -18 °C per tutto il viaggio). Niente poly box, e dentro la pedana va solo gelo."
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer",
+        fontSize: compatto ? 11.5 : 12.5, fontWeight: 700,
+        color: attivo ? "#0369a1" : "#66758b",
+        border: "1px solid " + (attivo ? "#7dd3fc" : "#dbe2ea"),
+        background: attivo ? "#f0f9ff" : "#fff",
+        borderRadius: 8, padding: compatto ? "4px 8px" : "6px 10px",
+        whiteSpace: "nowrap", userSelect: "none",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={!!attivo}
+        onChange={(e) => onCambia(e.target.checked)}
+        style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#0369a1" }}
+      />
+      🧊 Pedana surgelata
+    </label>
+  );
+}
+
 function PesoOrdine({ ord, onSalva }) {
   const [valore, setValore] = useState("");
   const [salvando, setSalvando] = useState(false);
@@ -1887,6 +1926,10 @@ function normalizeOrders(rows) {
       // Riga descrittiva da stampare nel corpo del DDT dopo l'ultimo articolo.
       notaDdt: String(getField(row, ["Nota_DDT", "nota_ddt"]) || ""),
       campionatura: String(getField(row, ["Campionatura", "campionatura"]) ?? "")
+        .toLowerCase() === "true",
+      // Pedana surgelata: la temperatura di spedizione la dichiara chi vende, non
+      // si deduce dai nomi dei prodotti (Luca 17/08/2026).
+      pedanaFrozen: String(getField(row, ["Pedana_Frozen", "pedana_frozen"]) ?? "")
         .toLowerCase() === "true",
       totaleImponibile: (() => {
         const v = getField(row, ["Totale_Imponibile", "totale_imponibile"]);
@@ -4890,7 +4933,7 @@ export default function App() {
       // CAP + temperatura dedotta dai prodotti. Il CAP e' quello SALVATO
       // sull'ordine (order.cap, congelato alla creazione, vale per ogni cliente
       // anche agenti/testo libero); in mancanza, ripiego sull'anagrafica GAMMA.
-      const temperatura = temperaturaOrdine(lines);
+      const temperatura = temperaturaOrdine(lines, order.pedanaFrozen);
       const capDest = String(
         order.cap || clientsById[String(order.clientId)]?.cap || ""
       ).trim();
@@ -6438,6 +6481,38 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
       attivo={order.campionatura}
       compatto={compatto}
       onCambia={(v) => azioneUnica("campionatura-" + order.id, () => setOrderCampionatura(order.id, v))}
+    />
+  );
+
+  // PEDANA SURGELATA. Cambia la temperatura di spedizione dell'ordine, quindi il
+  // corriere che il motore propone: -18 per tutto il viaggio con Stef surgelati
+  // invece del poly box col ghiaccio secco dentro una spedizione refrigerata.
+  const setOrderPedanaFrozen = async (orderId, valore) => {
+    if (!orderId) return;
+    const prima = orders;
+    setOrders((prev) =>
+      prev.map((o) => (String(o.id) === String(orderId) ? { ...o, pedanaFrozen: !!valore } : o))
+    );
+    try {
+      const r = await callSheetsApi({
+        action: "updateOrder",
+        payload: JSON.stringify({ orderId, pedana_frozen: !!valore }),
+      });
+      if (!r || !r.success) {
+        setOrders(prima);
+        alert("Pedana surgelata non salvata: " + ((r && r.error) || "errore"));
+      }
+    } catch (e) {
+      setOrders(prima);
+      alert("Errore di collegamento nel salvare la pedana surgelata.");
+    }
+  };
+
+  const spuntaPedanaFrozen = (order, compatto = false) => (
+    <SpuntaPedanaFrozen
+      attivo={order.pedanaFrozen}
+      compatto={compatto}
+      onCambia={(v) => azioneUnica("pedana-" + order.id, () => setOrderPedanaFrozen(order.id, v))}
     />
   );
 
@@ -10863,6 +10938,7 @@ ${isConferma
                             compatto
                           />
                           {spuntaCampionatura(order, true)}
+                          {spuntaPedanaFrozen(order, true)}
                           <button
                             style={btnStyle("outline")}
                             onClick={() => generaDDT(order)}
@@ -11179,6 +11255,7 @@ ${isConferma
                         onCambia={(v) => setDdtConPrezzi(order, v)}
                       />
                       {spuntaCampionatura(order, false)}
+                      {spuntaPedanaFrozen(order, false)}
                       <button
                         style={btnStyle("outline")}
                         onClick={() => generaDDT(order)}
@@ -11533,6 +11610,7 @@ ${isConferma
                         compatto
                       />
                       {spuntaCampionatura(order, true)}
+                      {spuntaPedanaFrozen(order, true)}
                     </div>
                   </div>
                 ))}
@@ -11992,6 +12070,7 @@ ${isConferma
                                 compatto
                               />
                               {spuntaCampionatura(order, true)}
+                              {spuntaPedanaFrozen(order, true)}
                               {/* Niente Disarchivia. Un ordine archiviato ha il DDT
                                   emesso: e' un documento fiscale, non si annulla
                                   facendolo sparire (regola di Luca 03/08/2026, deroga

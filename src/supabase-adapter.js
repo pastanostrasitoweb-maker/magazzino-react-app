@@ -159,6 +159,10 @@ const mapOrdineRow = (row) => ({
   // Campionatura, a pagamento o gratuita: serve alle metriche commerciali
   // (Luca 11/08/2026). Prima si riconosceva solo dalla parola scritta nelle note.
   Campionatura: row.campionatura === true,
+  // Pedana surgelata: la merce va a -18 con Stef surgelati e senza poly box. Lo
+  // dichiara l'agente e comanda sulla temperatura di spedizione, quindi sul
+  // corriere che il motore propone (Luca 17/08/2026).
+  Pedana_Frozen: row.pedana_frozen === true,
   Colli: row.colli === null || row.colli === undefined ? "" : Number(row.colli),
 });
 const mapRigaRow = (row) => ({
@@ -860,6 +864,9 @@ async function updateOrder(params) {
     patch.colli = p.colli === "" || p.colli === null ? null : Number(p.colli);
   }
   if (p.campionatura !== undefined) patch.campionatura = !!p.campionatura;
+  if (p.pedana_frozen !== undefined || p.pedanaFrozen !== undefined) {
+    patch.pedana_frozen = !!(p.pedana_frozen !== undefined ? p.pedana_frozen : p.pedanaFrozen);
+  }
   if (p.nota_ddt !== undefined || p.notaDdt !== undefined) {
     const v = p.nota_ddt !== undefined ? p.nota_ddt : p.notaDdt;
     patch.nota_ddt = String(v ?? "").trim() || null;
@@ -1240,6 +1247,10 @@ async function createOrder(params) {
       ...(p.agenteId ? { agente_id: String(p.agenteId) } : {}),
       ...(p.agenteNome ? { agente_nome: String(p.agenteNome) } : {}),
       ...(p.listino ? { listino: String(p.listino) } : {}),
+      // PEDANA SURGELATA: la merce viaggia a -18 con Stef surgelati, non a collo
+      // nel poly box. Decide la temperatura di spedizione, quindi quali corrieri
+      // il motore puo' proporre (Luca 17/08/2026).
+      ...(p.pedanaFrozen ? { pedana_frozen: true } : {}),
       ...(p.scontoClientePct === undefined || p.scontoClientePct === null
         ? {}
         : { sconto_cliente_pct: Number(p.scontoClientePct) }),
@@ -2652,6 +2663,9 @@ async function spostaOrdineInOrdini(params) {
       // (Luca 05/08/2026)
       agenteId: src.agente_id || "",
       agenteNome: src.agente_nome || "",
+      // Come viaggia il gelo: la scelta l'ha fatta l'agente, il magazzino la
+      // eredita e non deve indovinarla dai nomi dei prodotti.
+      pedanaFrozen: src.pedana_frozen === true,
       lines,
     }),
   });
