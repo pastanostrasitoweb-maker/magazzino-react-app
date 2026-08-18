@@ -608,6 +608,7 @@ const METODI_PAGAMENTO_CANONICI = new Set([
   "Assegno", "Carta di credito", "Carta / POS",
 ]);
 const PAGAMENTI_ALLINEATI_DAL_ADAPTER = "2026-08-03";
+const COLLI_CONFERMATI_DAL_ADAPTER = "2026-08-17";
 
 async function archivePreparedOrders() {
   // REGOLA: gli ordini preparati NON si archiviano subito. Si archiviano solo
@@ -621,7 +622,7 @@ async function archivePreparedOrders() {
 
   const { data, error } = await supabase
     .from("ordini")
-    .select("id_ordine, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile")
+    .select("id_ordine, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile, colli")
     .or("archiviato.is.null,archiviato.eq.false")
     .lt("data_preparato", midnightIso);
   if (error) return failure(error);
@@ -673,6 +674,7 @@ async function archivePreparedOrders() {
   }
 
   const scoperti = [];
+  const senzaColli = [];
   const toArchive = [];
   for (const r of candidati) {
     const data0 = String(r.data_ordine || r.data_preparato || "").slice(0, 10);
@@ -690,7 +692,25 @@ async function archivePreparedOrders() {
       scoperti.push(r.id_ordine);
       continue;
     }
+    // I COLLI SI CONFERMANO (Luca 17/08/2026). Il numero automatico e' la somma
+    // delle quantita' di riga, cioe' pezzi, non scatole: se nessuno lo conferma
+    // in bolla finisce un conteggio che nessuno ha guardato, ed e' il numero su
+    // cui il corriere fattura. Anche questo cancello sta QUI e non solo sul
+    // bottone, perche' l'archiviazione parte da sola dopo la mezzanotte.
+    // Vale dagli ordini di oggi in poi: gli archiviati di prima restano come
+    // sono, sono due terzi e riaprirli non servirebbe a nessuno.
+    if (data0 >= COLLI_CONFERMATI_DAL_ADAPTER && (r.colli === null || r.colli === undefined)) {
+      senzaColli.push(r.id_ordine);
+      continue;
+    }
     toArchive.push(r.id_ordine);
+  }
+
+  if (senzaColli.length) {
+    console.warn(
+      `Archiviazione: ${senzaColli.length} ordini restano in Preparati, colli da confermare`,
+      senzaColli
+    );
   }
 
   if (scoperti.length) {

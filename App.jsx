@@ -462,6 +462,29 @@ function metodoLeggibile(metodo) {
 // allineato dal 03.08").
 const PAGAMENTI_ALLINEATI_DAL = "2026-08-03";
 
+// I COLLI SI CONFERMANO, NON SI DEDUCONO (Luca 17/08/2026).
+// "Chi spedisce ha il bancale davanti e sa quanti colli partono: il numero
+// automatico e' solo una proposta, la conferma e' il momento in cui qualcuno se
+// ne prende la responsabilita', ed e' anche il numero che finisce in bolla e che
+// il corriere fattura."
+// Il numero che si vede senza conferma e' la somma delle quantita' di riga: un
+// conteggio di pezzi, non di scatole. Da questa data in poi l'ordine non parte e
+// non si archivia finche' qualcuno non lo conferma. Gli ordini precedenti
+// restano come sono: il 67% dell'archivio non li ha confermati, e bloccarli a
+// posteriori vorrebbe dire fermare l'azienda per una cosa gia' successa.
+const COLLI_CONFERMATI_DAL = "2026-08-17";
+
+// L'ordine ha i colli ancora da confermare? Vale solo da COLLI_CONFERMATI_DAL in
+// poi: sugli ordini di prima il numero automatico e' quello che e' gia' finito
+// in bolla, e riaprirli adesso non serve a nessuno.
+function colliDaConfermare(order) {
+  if (!order) return false;
+  if (order.colliIsManual) return false;
+  const data = String(order.date || "").slice(0, 10);
+  if (data && data < COLLI_CONFERMATI_DAL) return false;
+  return true;
+}
+
 // Quando si incassa, calcolato come lo calcola il database
 // (scadenza_da_metodo in sql/metodo_pagamento_canonico.sql). Serve a scriverlo
 // accanto alla scelta: chi mette "60 gg fine mese" deve vedere che data esce,
@@ -2534,7 +2557,16 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
             // lavora: senza, l'errore compariva solo dopo, in fondo, e diceva
             // "1 riga senza aliquota" senza dire QUALE (Luca 04/08/2026).
             const bz = bozza[l.lineId] || {};
-            const senzaPrezzo = !(Number(bz.prezzo ?? l.prezzoUnitario) > 0);
+            // UNA RIGA IN OMAGGIO HA PREZZO ZERO PERCHE' E' REGALATA, e non
+            // perche' manca qualcosa: lo sconto al 100% e' la dichiarazione che
+            // quel cartone non si paga (Luca 17/08/2026, sul cartone bollinato
+            // 1+1 di Roberto Viansone segnalato in rosso). Segnare come errore
+            // una cosa scritta giusta insegna solo a ignorare il rosso.
+            const inOmaggio =
+              Number(bz.sconto ?? l.scontoPct ?? 0) >= 100 ||
+              Number(bz.sconto2 ?? l.sconto2Pct ?? 0) >= 100 ||
+              Number(bz.sconto3 ?? l.sconto3Pct ?? 0) >= 100;
+            const senzaPrezzo = !inOmaggio && !(Number(bz.prezzo ?? l.prezzoUnitario) > 0);
             const senzaIva = String(bz.iva ?? (l.ivaPct ?? "")).trim() === "";
             // Avviso dalla valorizzazione: listino e fatture non dicono lo
             // stesso prezzo su questo articolo. Non e' un campo mancante, e'
@@ -4072,8 +4104,29 @@ export default function App() {
       if (n.length <= 3) return n.join(", ");
       return n.slice(0, 3).join(", ") + ` e altri ${n.length - 3}`;
     };
-    const aZero = righe.filter((l) => !(Number(l.prezzoUnitario) > 0));
+    // Le righe in OMAGGIO restano fuori dal conto: prezzo zero e sconto 100
+    // sono la stessa dichiarazione, non un prezzo mancante. La regola e' la
+    // stessa usata riga per riga nel pannello di valorizzazione: se i due posti
+    // dicessero cose diverse, uno dei due mentirebbe.
+    const inOmaggioRiga = (l) =>
+      Number(l.scontoPct || 0) >= 100 ||
+      Number(l.sconto2Pct || 0) >= 100 ||
+      Number(l.sconto3Pct || 0) >= 100;
+    const aZero = righe.filter((l) => !inOmaggioRiga(l) && !(Number(l.prezzoUnitario) > 0));
+    // CAMPIONATURA GRATUITA: i prezzi a zero sono lo stato GIUSTO, non una
+    // mancanza. "Quando e' flaggata campionatura non devono esserci i prezzi,
+    // quindi l'errore non dovrebbe esistere" (Luca 17/08/2026, sull'ordine di
+    // DATA SERVICE MANAGEMENT). Un avviso che compare quando non c'e' niente da
+    // sistemare insegna solo a ignorare gli avvisi.
+    //
+    // Stessa esenzione del cancello sul pagamento, e con la stessa condizione:
+    // vale se la campionatura e' GRATUITA. Una campionatura fatturata (Green
+    // Door, 59,33 EUR) e' una vendita a tutti gli effetti, e li' un prezzo che
+    // manca e' un prezzo che manca.
+    const campionaturaGratuita =
+      Boolean(order?.campionatura) && Number(order?.totaleImponibile || 0) === 0;
     if (righe.length === 0) bloccanti.push("Nessuna riga");
+    else if (campionaturaGratuita) { /* campionatura in omaggio: nessun prezzo da chiedere */ }
     else if (aZero.length === righe.length) daCompletare.push(`Nessun prezzo su tutte le ${righe.length} righe`);
     else if (aZero.length > 0) daCompletare.push(`Senza prezzo: ${nomi(aZero)}`);
     // Aliquota mancante: va detto, non lasciato al valore di ripiego. Sul
@@ -6611,6 +6664,21 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
       setTransportModalOrderId(order.id);
       return;
     }
+    // I COLLI: qui, non domani in archivio. Questo e' il momento in cui la merce
+    // esce e chi la spedisce ha il bancale davanti.
+    if (colliDaConfermare(order)) {
+      const proposta = Number(order.colliSuggested ?? order.colli ?? 0);
+      const ok = window.confirm(
+        `Quanti COLLI partono per ${order.customer || order.id}?\n\n` +
+          `Il sistema ne conta ${proposta}, sommando le quantita' delle righe: e' una ` +
+          `proposta, non un conteggio delle scatole.\n\n` +
+          `Questo numero finisce in bolla ed e' quello su cui il corriere fattura.\n\n` +
+          `OK = confermo ${proposta} colli.\n` +
+          `Annulla = ne conto un altro (lo scrivo nel campo Colli qui accanto).`
+      );
+      if (!ok) return;
+      await saveOrderColli(order.id, String(proposta));
+    }
     const conferma = window.confirm(
       `Segnare come SPEDITO l'ordine di ${order.customer || order.id}?` +
         (corriere ? `\nCorriere: ${corriere}` : "\nNessun corriere selezionato.") +
@@ -7205,6 +7273,16 @@ ${isConferma
           : "Questo ordine non ha un metodo di pagamento.") +
           "\n\nArchiviando adesso, la scadenza a Cashflow sarebbe una stima." +
           "\nScegli il metodo dal bollino 💸 sull'ordine, poi archivia."
+      );
+      return;
+    }
+
+    if (colliDaConfermare(ord)) {
+      alert(
+        "I COLLI non sono confermati.\n\n" +
+          `Il numero che si vede (${Number(ord?.colliSuggested ?? ord?.colli ?? 0)}) e' la somma delle ` +
+          "quantita' delle righe, non un conteggio delle scatole, e finisce in bolla.\n\n" +
+          "Scrivi i colli nel campo sull'ordine e premi Salva, poi archivia."
       );
       return;
     }
