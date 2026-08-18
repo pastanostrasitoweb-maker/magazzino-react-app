@@ -62,11 +62,17 @@ export const TARIFFE = {
   'stef-surgelati': {
     giorni: 2,
     prezzi: {
-      // servizio pedana: tariffa a pedana, meno sensibile allo scaglione collo
-      Z1: { s5: 45.0, s10: 45.0, s25: 55.0, s50: 70.0, s100: 90.0 },
-      Z2: { s5: 50.0, s10: 50.0, s25: 60.0, s50: 78.0, s100: 100.0 },
-      Z3: { s5: 62.0, s10: 62.0, s25: 74.0, s50: 95.0, s100: 120.0 },
-      Z4: { s5: 82.0, s10: 82.0, s25: 98.0, s50: 125.0, s100: 160.0 }
+      // TARIFFA PROVVISORIA: 100 EUR per tutta Italia, ogni peso (Luca 17/08/2026).
+      // "Al momento metti piu' o meno tra gli 80 e 120, quindi metti 100 EUR per
+      // tutta Italia." E' un segnaposto in attesa della quotazione del surgelato
+      // chiesta ad Angela Tambone di Stef, come fece per il fresco: appena arriva
+      // la griglia vera (per regione e scaglione di peso) questa sparisce.
+      // Piatta apposta: una tariffa finta ma articolata sembrerebbe un preventivo
+      // vero, e nessuno andrebbe piu' a cercare quello giusto.
+      Z1: { s5: 100.0, s10: 100.0, s25: 100.0, s50: 100.0, s100: 100.0 },
+      Z2: { s5: 100.0, s10: 100.0, s25: 100.0, s50: 100.0, s100: 100.0 },
+      Z3: { s5: 100.0, s10: 100.0, s25: 100.0, s50: 100.0, s100: 100.0 },
+      Z4: { s5: 100.0, s10: 100.0, s25: 100.0, s50: 100.0, s100: 100.0 }
     }
   }
 }
