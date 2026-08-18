@@ -474,6 +474,15 @@ const PAGAMENTI_ALLINEATI_DAL = "2026-08-03";
 // posteriori vorrebbe dire fermare l'azienda per una cosa gia' successa.
 const COLLI_CONFERMATI_DAL = "2026-08-17";
 
+// I DOCUMENTI SONO NOSTRI DAL 03/08 (linea di demarcazione con TeamSystem).
+// Prima di quella data i DDT li faceva il gestionale, e nel magazzino restano
+// 255 ordini archiviati senza numero: dal 04/06 al 30/07, quindici dei quali
+// campionature. Chiedere "Numero DDT (mai generato)" su quegli ordini e' chiedere
+// una cosa che non esiste e non puo' esistere: il numero lo stacca il trigger
+// quando l'ordine viene archiviato, e quelli sono archiviati da un pezzo.
+// Un avviso che nessuno puo' togliere non e' un avviso, e' rumore.
+const DOCUMENTI_NOSTRI_DAL = "2026-08-03";
+
 // L'ordine ha i colli ancora da confermare? Vale solo da COLLI_CONFERMATI_DAL in
 // poi: sugli ordini di prima il numero automatico e' quello che e' gia' finito
 // in bolla, e riaprirli adesso non serve a nessuno.
@@ -2453,11 +2462,23 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
         const sc2 = String(bozza[l.lineId]?.sconto2 ?? "").trim();
         const sc3 = String(bozza[l.lineId]?.sconto3 ?? "").trim();
         const prima = l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario);
+        // L'ALIQUOTA CONTA COME UNA MODIFICA (Luca 17/08/2026: "non fa cambiare
+        // l'IVA che e' il 10%, ho provato tre volte e non si cambia").
+        // Questo controllo serve a non riscrivere righe intatte, ma guardava
+        // solo prezzo e sconti: cambiare la SOLA aliquota lasciava la riga
+        // identica ai suoi occhi, e il salvataggio la saltava in silenzio. Chi
+        // la stava correggendo vedeva il menu tornare com'era senza un errore.
+        const iv = String(bozza[l.lineId]?.iva ?? "").trim();
+        const ivaPrima = l.ivaPct === null || l.ivaPct === undefined ? "" : String(l.ivaPct);
+        const nat = String(bozza[l.lineId]?.natura ?? "").trim();
+        const natPrima = String(l.naturaIva ?? "");
         if (
           p === prima &&
           sc === (l.scontoPct ? String(l.scontoPct) : "") &&
           sc2 === (l.sconto2Pct ? String(l.sconto2Pct) : "") &&
-          sc3 === (l.sconto3Pct ? String(l.sconto3Pct) : "")
+          sc3 === (l.sconto3Pct ? String(l.sconto3Pct) : "") &&
+          iv === ivaPrima &&
+          nat === natPrima
         ) continue;
         await callSheetsApi({
           action: "updateOrderLine",
@@ -2467,8 +2488,13 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
             scontoPct: sc === "" ? 0 : Number(sc),
             sconto2Pct: sc2 === "" ? 0 : Number(sc2),
             sconto3Pct: sc3 === "" ? 0 : Number(sc3),
-            ivaPct: Number(bozza[l.lineId]?.iva ?? 4),
-            naturaIva: bozza[l.lineId]?.natura || "",
+            // Vuoto resta VUOTO. Prima qui c'era un 4 di ripiego, e con il campo
+            // svuotato Number("") faceva pure 0: due modi diversi di inventare
+            // un'aliquota che nessuno ha scelto. L'aliquota vuota si vede e
+            // blocca il documento, un 4% messo di nascosto finisce in fattura
+            // (sql/iva_mai_inventata.sql).
+            ivaPct: iv === "" ? null : Number(iv),
+            naturaIva: nat || "",
             prezzoOrigine: "valorizzazione-preparati",
           }),
         });
@@ -4060,7 +4086,10 @@ export default function App() {
       daCompletare.push("Provincia");
     }
 
-    if (!has(order?.ddtNumero)) daCompletare.push("Numero DDT (mai generato)");
+    const dataOrd = String(order?.date || "").slice(0, 10);
+    if (!has(order?.ddtNumero) && !(dataOrd && dataOrd < DOCUMENTI_NOSTRI_DAL)) {
+      daCompletare.push("Numero DDT (mai generato)");
+    }
     // Stesso ragionamento che fa generaDDT: vale il corriere scelto, e in
     // mancanza quello consigliato dal preventivo. Segnalarlo quando il
     // documento lo scriverebbe comunque sarebbe un falso allarme.
