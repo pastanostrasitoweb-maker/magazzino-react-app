@@ -33,8 +33,8 @@ Dal 05/08 ogni riga porta le tre cose **separate**, come chiesto da Luca:
 |---|---|
 | `prezzo_listino` | prezzo pieno di listino del canale, **al pezzo** |
 | `sconto_pct` | sconto complessivo applicato, in percentuale (100 = OMAGGIO) |
-| `prezzo_netto` | prezzo effettivo al pezzo, cioè quello che paga il cliente |
-| `prezzo_unitario` | uguale a `prezzo_netto`, resta per compatibilità |
+| `prezzo_unitario` | prezzo al pezzo **col solo sconto del livello cliente** già dentro. Non contiene lo sconto di riga, né quello di canale, né il 5% dell'agente: quelli stanno in `sconto_pct` e si applicano sopra |
+| `prezzo_finale` | il prezzo che il cliente paga davvero, tutti gli sconti compresi (dal 17/08, insieme a `sconto1_pct` e `sconto2_pct`) |
 | `iva_pct` | aliquota dell'articolo (4 o 10) |
 | `unita_prezzo` | `'pezzo'` — sempre, per non confondersi col cartone |
 | `pezzi_collo` | quanti pezzi ci sono in un cartone |
@@ -45,7 +45,7 @@ Dal 05/08 ogni riga porta le tre cose **separate**, come chiesto da Luca:
 
 Quando l'ordine arriva da `ordini_agenti`, i prezzi devono venire **da lì**, non dal listino:
 
-- `righe_ordine.prezzo_unitario` ← `prezzo_netto` (oppure `prezzo_listino` con `sconto_pct` valorizzato, se si preferisce tenere lo sconto visibile)
+- `righe_ordine.prezzo_unitario` ← `prezzo_unitario` (oppure `prezzo_listino` con `sconto_pct` valorizzato, se si preferisce tenere lo sconto visibile)
 - `righe_ordine.sconto_pct` ← `sconto_pct`
 - `righe_ordine.iva_pct` ← `iva_pct`
 - `righe_ordine.prezzo_origine` ← `'app'` invece di `'listino_1'`
@@ -56,3 +56,14 @@ Il listino 1 resta il ripiego giusto per gli ordini che **non** arrivano dall'ap
 ## Come verificare che sia a posto
 
 Sull'ordine `ORD-1785927821075` il totale imponibile deve diventare **206,03 €**, e `prezzo_origine` deve dire `app` su tutte le righe.
+
+
+## Correzione del 18/08/2026
+
+Questo documento diceva che `prezzo_netto` era "il prezzo effettivo che paga il cliente" e che `prezzo_unitario` era la stessa cosa. **Era sbagliato**, e il campo `prezzo_netto` non viene più mandato.
+
+`prezzo_unitario` porta dentro **solo lo sconto del livello cliente**. Tutto il resto (sconto di riga, sconto di canale GDO/HO.RE.CA., 5% dell'agente, sconto sull'ordine) sta in `sconto_pct` e va applicato sopra.
+
+Il prezzo che il cliente paga davvero è `prezzo_finale`. La differenza non è teorica: su una riga in **omaggio** i due valori sono **0,00 e 3,23** — trattarli come uguali significa fatturare un cartone regalato.
+
+Chi aggancia le righe già importate deve usare `prezzo_unitario`, non `prezzo_finale`: nella colonna prezzo del magazzino c'è il valore col solo sconto di livello, e col prezzo finale le righe smetterebbero di corrispondere.
