@@ -83,7 +83,13 @@ for (const o of ordini) {
   for (const r of conListino) {
     const pezziCollo = Number(r.pezzi_collo || 1) || 1
     const listino = Number(r.prezzo_listino)
-    const nettoPezzo = Number(r.prezzo_netto || 0)
+    // Il prezzo al pezzo con cui la riga e' stata scritta nel magazzino: e'
+    // `prezzo_netto`, e dal 17/08/2026 il ponte non lo manda piu' perche' era un
+    // duplicato letterale di `prezzo_unitario`. Gli ordini vecchi hanno il primo,
+    // i nuovi il secondo, e sono lo stesso numero. NON si usa `prezzo_finale`: quello
+    // ha dentro anche il secondo sconto, e non corrisponde a quello che c'e' scritto
+    // oggi nella colonna prezzo, quindi la riga non si aggancerebbe piu'.
+    const nettoPezzo = Number(r.prezzo_netto ?? r.prezzo_unitario ?? 0)
     const lordoCollo = Math.round(listino * pezziCollo * 10000) / 10000
     // Come la riga sta OGGI nel magazzino: prezzo = netto al cartone.
     const prezzoOggi = Math.round(nettoPezzo * pezziCollo * 10000) / 10000

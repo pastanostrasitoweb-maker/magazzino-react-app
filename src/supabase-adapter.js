@@ -231,7 +231,12 @@ function valorizzaRigaApp(r) {
   // Il ponte agenti manda due sconti distinti:
   //   sconto_pct        lo sconto del cliente
   //   promo_sconto_pct  quello della promozione (verificato: 70% su NFARMA 011)
-  // e li ha GIA' applicati dentro prezzo_netto, in cascata.
+  // e NON sono dentro il prezzo: `prezzo_unitario` e' il listino meno il solo
+  // sconto del LIVELLO cliente, e questi due si applicano sopra. Qui sotto il
+  // prezzo arriva da `prezzo_unitario`, non da `prezzo_netto`: quel campo era un
+  // duplicato letterale del primo e dal 17/08/2026 il ponte non lo manda piu'.
+  // (Il commento diceva "gia' applicati dentro prezzo_netto, in cascata": era
+  // falso e avrebbe fatto sbagliare chi lo legge fra sei mesi.)
   //
   // Se i due dichiarati non ricostruiscono il netto, la differenza e' uno sconto
   // che l'app non ha dichiarato (il 43% di Sans Soucci arrivava con sconto_pct a
