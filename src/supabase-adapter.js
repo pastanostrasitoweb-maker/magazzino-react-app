@@ -622,7 +622,7 @@ async function archivePreparedOrders() {
 
   const { data, error } = await supabase
     .from("ordini")
-    .select("id_ordine, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile, colli")
+    .select("id_ordine, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile, colli, ddt_numero")
     .or("archiviato.is.null,archiviato.eq.false")
     .lt("data_preparato", midnightIso);
   if (error) return failure(error);
@@ -630,8 +630,23 @@ async function archivePreparedOrders() {
   // Solo i PREPARATO si auto-archiviano a mezzanotte. Gli SPEDITI restano
   // nella loro sezione finche' non si preme Archivia (richiesta Luca: la
   // vista degli ordini usciti deve restare consultabile, es. review col team).
+  // CHI E' STATO TIRATO INDIETRO A MANO RESTA DOV'E' (Luca 21/08/2026).
+  // Il corriere non e' passato a caricare, i DDT della notte sono stati riportati
+  // in Preparati perche' la merce e' ancora qui, e trentasette secondi dopo
+  // questa funzione ne ha ri-archiviati cinque da sola: gira a ogni apertura
+  // dell'app e vedeva solo "preparato di ieri, quindi archivialo".
+  //
+  // Il segno di riconoscimento non ha avuto bisogno di una colonna nuova: il
+  // numero di DDT lo stacca SOLO l'archiviazione. Un ordine che ha un numero ma
+  // non e' archiviato e' quindi un ordine che qualcuno ha deliberatamente tirato
+  // indietro. Tornera' in archivio quando lo si archivia davvero, con il numero
+  // che ha gia': la numerazione non fa buchi.
+  // La stessa guardia sta nel lavoro notturno del database
+  // (archive_old_prepared_orders), che e' l'altra strada per cui passa.
   const candidati = (data || []).filter(
-    (r) => String(r.stato || "").trim().toLowerCase() === "preparato"
+    (r) =>
+      String(r.stato || "").trim().toLowerCase() === "preparato" &&
+      String(r.ddt_numero || "").trim() === ""
   );
 
   // IL CANCELLO DEL PAGAMENTO, e sta QUI e non solo sul bottone.
