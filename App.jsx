@@ -1263,7 +1263,7 @@ function BadgePagamento({ order, metodoCliente, onScegli, compatto = false }) {
 // E' una tendina travestita da bollino, non un bottone in piu': la scelta si fa
 // dove la si legge. L'ultima voce aggiunge un negozio nuovo, perche' il secondo
 // punto vendita quasi sempre non esiste ancora nel momento in cui serve.
-function BadgeDestinazione({ order, sedi, scelta, onScegli, onAggiungi, compatto = false }) {
+function BadgeDestinazione({ order, sedi, scelta, onScegli, onAggiungi, ripiego = "", compatto = false }) {
   // Gli ordini archiviati di prima dei codici cliente non hanno un cliente a cui
   // attaccare un negozio: li' il bollino tace, invece di chiedere in rosso una
   // cosa a cui non si puo' rispondere. Sono 151 documenti gia' partiti.
@@ -1283,11 +1283,31 @@ function BadgeDestinazione({ order, sedi, scelta, onScegli, onAggiungi, compatto
   const elenco = sedi || [];
 
   if (!elenco.length) {
+    // NIENTE NEGOZIO REGISTRATO NON VUOL DIRE CHE NON SI SA DOVE SPEDIRE
+    // (Luca 21/08/2026: "perche' risulta che non c'e' mentre sul DDT hai
+    // tutto?"). Se il cliente ha un indirizzo di spedizione in anagrafica, il
+    // documento lo usa e la merce parte: chiedere in rosso "DOVE SPEDIRE?"
+    // e' un allarme per una cosa che non manca. Su SI.RO. SRL l'indirizzo
+    // c'era, scritto per esteso: via del commercio, Romano di Lombardia (BG).
+    // Il rosso resta solo quando davvero non c'e' nessun indirizzo.
+    if (String(ripiego || "").trim()) {
+      return (
+        <button
+          style={{ ...badgeStyle("outline"), ...base, backgroundImage: "none", paddingRight: 10 }}
+          onClick={onAggiungi}
+          title={"Il documento spedisce a: " + ripiego +
+                 "\n(indirizzo dell'anagrafica: nessun negozio registrato a parte)." +
+                 "\nClicca per registrare un negozio."}
+        >
+          📍 {String(ripiego).slice(0, 40)}
+        </button>
+      );
+    }
     return (
       <button
         style={{ ...badgeStyle("danger"), ...base, backgroundImage: "none", paddingRight: 10 }}
         onClick={onAggiungi}
-        title="Nessun negozio registrato per questo cliente: clicca per aggiungerlo"
+        title="Nessun negozio registrato e nessun indirizzo in anagrafica: clicca per metterlo"
       >
         📍 DOVE SPEDIRE?
       </button>
@@ -6604,11 +6624,29 @@ export default function App() {
   // Il bollino della destinazione monta uguale in tutte le viste: lo stesso
   // gesto in Ordini, Preparati, Spediti e Archivio, come chiesto da Luca
   // ("il layout ed i bottoni devono essere uguali per tutti").
+  // Dove il DOCUMENTO manderebbe la merce quando non c'e' un negozio
+  // registrato: e' la stessa catena che usa generaDocumento.
+  const indirizzoDiRipiego = (order) => {
+    const { merged } = effectiveCliente(order);
+    const cli = gammaDiOrdine(order) || {};
+    const perEsteso = String(merged.indirizzo_spedizione || "").trim();
+    if (perEsteso) return perEsteso;
+    const via = String(merged.sede_legale || merged.indirizzo || cli.indirizzo || "").trim();
+    const luogo = [
+      String(merged.cap || cli.cap || order?.cap || "").trim(),
+      String(merged.citta || merged.sede_localita || cli.citta || "").trim(),
+    ].filter(Boolean).join(" ");
+    const prov = String(merged.provincia || merged.sede_provincia || cli.provincia || "").trim();
+    const testo = [via, luogo].filter(Boolean).join(" · ");
+    return testo ? testo + (prov ? ` (${prov})` : "") : "";
+  };
+
   const bollinoDestinazione = (order, compatto = false) => (
     <BadgeDestinazione
       order={order}
       sedi={destinazioniDi(order)}
       scelta={destinazioneDi(order)}
+      ripiego={indirizzoDiRipiego(order)}
       compatto={compatto}
       onScegli={(id) => setOrderDestinazione(order.id, id)}
       onAggiungi={() => openCompletaAnagrafica(order, { nuovaSede: true })}
