@@ -295,7 +295,22 @@ function checkAnagraficaApp(cli, sede) {
     mancanti.push("Orario di scarico (finestra di almeno 3 ore)");
   if (!has(sede && sede.giorno_chiusura) && !has(cli.giorno_chiusura))
     mancanti.push("Giorno di chiusura");
-  if (!has(cli.codice_univoco) && !has(cli.pec)) mancanti.push("Codice univoco o PEC");
+  // DOVE ARRIVA LA FATTURA (regola di Luca, 21/08/2026).
+  // "Il codice destinatario va bene anche 0000000, basta che hai la PEC valida."
+  // Sette zeri NON sono un recapito: sono il modo di dire allo SDI "questo
+  // cliente un canale telematico non me l'ha dato". Con la PEC va bene lo
+  // stesso, perche' la fattura arriva li'. Senza PEC e senza codice vero, la
+  // fattura finisce solo nel cassetto fiscale del cliente, che spesso non la
+  // guarda: la merce l'abbiamo consegnata e il pagamento non parte.
+  const SDI_VUOTO = /^0+$/;
+  const codiceSdiVero = has(cli.codice_univoco) && !SDI_VUOTO.test(String(cli.codice_univoco).trim());
+  if (!codiceSdiVero && !has(cli.pec)) {
+    mancanti.push(
+      has(cli.codice_univoco)
+        ? "PEC (col codice destinatario a zeri la fattura non ha dove arrivare)"
+        : "Codice destinatario o PEC"
+    );
+  }
   if (!has(cli.email)) mancanti.push("Email");
   if (!has(cli.telefono)) mancanti.push("Telefono referente");
   if (!has(cli.metodo_pagamento)) mancanti.push("Metodo di pagamento");
