@@ -1570,6 +1570,15 @@ const ANAG_FIELDS = [
   { key: "partita_iva", label: "Partita IVA" },
   { key: "sede_legale", label: "Sede legale" },
   { key: "cap", label: "CAP" },
+  // CITTA' E PROVINCIA NON C'ERANO (Luca 21/08/2026: "se clicchi non ti da la
+  // possibilita' di inserirli a mano, ed e' un problema perche' citta e
+  // provincia sono fondamentali per lo SDI").
+  // Il bollino rosso le chiedeva, il click apriva questo modulo, e qui non
+  // c'era la casella dove scriverle: un vicolo cieco. La fattura elettronica
+  // pretende il comune e la sigla della provincia, quindi senza queste due
+  // l'ordine non diventa fattura.
+  { key: "citta", label: "Citta' (obbligatoria per la fattura elettronica)" },
+  { key: "provincia", label: "Provincia (sigla, es. RM)" },
   { key: "insegna", label: "Insegna (se diversa)" },
   { key: "orari_consegna", label: "Orario di scarico (finestra min 3 ore)" },
   { key: "giorno_chiusura", label: "Giorno di chiusura" },
@@ -4237,7 +4246,9 @@ export default function App() {
     }
     setSavingAnag(true);
     try {
-      const payload = { chiave, operatore: authUser?.username || "" };
+      // L'ordine viaggia col salvataggio: se il cliente e' nuovo il registro
+      // gli assegna il codice e l'adapter lo scrive su QUESTO ordine.
+      const payload = { chiave, operatore: authUser?.username || "", orderId: String(order.id) };
       for (const f of ANAG_FIELDS) payload[f.key] = anagForm[f.key] ?? "";
       payload.agente_id = anagForm.agente_id ?? "";
       payload.fonte_prezzi = anagForm.fonte_prezzi || "listino";
@@ -4272,6 +4283,26 @@ export default function App() {
           [chiave]: { ...(prev[chiave] || {}), ...payload, ...(res.override || {}), chiave },
         }));
         setAnagOpen(false);
+        // IL CODICE CLIENTE: assegnato, oppure da scegliere a mano.
+        // Non lo si sceglie al posto di nessuno quando il registro ha piu' di un
+        // candidato: su "ROMA SRL" ce n'erano quattro, e uno era un'altra
+        // azienda con un'altra P.IVA (Luca 21/08/2026).
+        if (res.codiceAssegnato) {
+          alert("Codice cliente assegnato dal registro: " + res.codiceAssegnato);
+        } else if (Array.isArray(res.candidatiRegistro) && res.candidatiRegistro.length) {
+          alert(
+            "Citta' e provincia sono salvate.\n\n" +
+              "Il CODICE CLIENTE non l'ho assegnato da solo: a registro ci sono gia' " +
+              res.candidatiRegistro.length + " clienti con un nome simile, e sceglierne uno " +
+              "al posto tuo vorrebbe dire rischiare di attaccare la merce all'azienda sbagliata.\n\n" +
+              res.candidatiRegistro
+                .map((c) => "  " + c.codice + "  " + c.ragione_sociale +
+                            (c.citta ? " · " + c.citta : "") + (c.piva ? " · P.IVA " + c.piva : ""))
+                .join("\n") +
+              "\n\nScrivi la Partita IVA in anagrafica e lo aggancio da solo, " +
+              "oppure dimmi tu quale codice e' quello giusto."
+          );
+        }
       } else {
         alert(
           "Anagrafica non salvata: " + (res?.error || "errore") +

@@ -1383,6 +1383,12 @@ async function logProduzione(params) {
 // i campi passati, cosi' un salvataggio parziale non cancella il resto.
 const OVERRIDE_CLIENTE_FIELDS = [
   "ragione_sociale", "partita_iva", "sede_legale", "cap",
+  // CITTA' E PROVINCIA: obbligatorie per lo SDI (Luca 21/08/2026). La fattura
+  // elettronica vuole l'indirizzo completo, comune e sigla provincia compresi.
+  // Le colonne c'erano gia' in clienti_override, ma non essendo nell'elenco non
+  // venivano MAI salvate: il modulo poteva anche mostrarle, il salvataggio le
+  // buttava via.
+  "citta", "provincia",
   "indirizzo_spedizione", "insegna", "orari_consegna", "giorno_chiusura",
   "codice_univoco", "pec", "email", "telefono", "metodo_pagamento",
   "tipologia", "note",
@@ -1425,6 +1431,74 @@ async function saveClienteOverride(params) {
   }
   row.operatore = p.operatore || "";
   row.aggiornato_il = new Date().toISOString();
+
+  // IL CODICE CLIENTE LO ASSEGNA IL REGISTRO, NON L'OPERATORE.
+  // "Essendo un nuovo cliente il codice cliente lo assegni tu" (Luca
+  // 21/08/2026). Il bollino rosso chiedeva "Codice cliente" e mandava a questo
+  // modulo, dove non c'e' nessuna casella per scriverlo: giustamente, perche'
+  // un codice inventato a mano non e' nel registro e al primo ordine il cliente
+  // verrebbe registrato una seconda volta con un codice diverso.
+  // Qui si fa la stessa cosa che si fa quando un cliente nasce dal pulsante
+  // "Nuovo cliente": si chiede il codice a clienti_master, che riusa quello
+  // esistente se il nome c'e' gia' e ne sforna uno nuovo solo se serve davvero.
+  //
+  // MA SI ASSEGNA SOLO QUANDO NON C'E' DUBBIO. Provandolo su ROMA SRL e' venuto
+  // fuori il pericolo: a registro ci sono CLI-1577 "ROMA SRL" (P.IVA
+  // 13238551009), CLI-137 "OPERA VIVA ROMA SRL", CLI-2012 "TRATTORIA PIZZERIA
+  // ROMA SRL" e PN-000003 "ROMA SRL - RISTORANTE HOTEL LA PERGOLA". L'ordine
+  // parlava dell'Hotel La Pergola, ma il nome scritto sull'ordine e' "ROMA SRL"
+  // e basta: agganciarlo al nome avrebbe attaccato la merce, e domani la
+  // fattura, a un'azienda diversa con un'altra partita IVA.
+  //
+  // Quindi: con la P.IVA si aggancia (quella e' identita', il nome e' solo
+  // conferma). Senza P.IVA si aggancia solo se a registro non somiglia niente,
+  // e in quel caso nasce un codice nuovo. Se ci sono candidati e non c'e' la
+  // P.IVA NON si sceglie: un doppione si fonde a mente fredda, un aggancio
+  // sbagliato lo si scopre dalla fattura del cliente sbagliato.
+  const ragioneReg = String(row.ragione_sociale || "").trim();
+  let codiceAssegnato = null;
+  let candidatiRegistro = null;
+  if (ragioneReg && !String(p.codice_cliente || "").trim()) {
+    const pivaPulita = String(row.partita_iva || "").replace(/\D/g, "");
+    let sicuro = false;
+    if (pivaPulita.length >= 11) {
+      sicuro = true; // la partita IVA identifica: si puo' agganciare
+    } else {
+      // Nessuna P.IVA: si guarda se il registro ha gia' qualcosa che somiglia.
+      const prima = ragioneReg.split(/[\s\-·]+/)[0];
+      const { data: simili } = await supabase
+        .from("clienti_master")
+        .select("codice, ragione_sociale, citta, provincia, piva")
+        .ilike("ragione_sociale", `%${ragioneReg}%`)
+        .limit(6);
+      const { data: simili2 } = await supabase
+        .from("clienti_master")
+        .select("codice, ragione_sociale, citta, provincia, piva")
+        .ilike("ragione_sociale", `%${prima}%`)
+        .limit(6);
+      const tutti = [...(simili || []), ...(simili2 || [])].filter(
+        (x, i, a) => a.findIndex((y) => y.codice === x.codice) === i
+      );
+      if (tutti.length === 0) sicuro = true; // davvero nuovo
+      else candidatiRegistro = tutti;
+    }
+    if (sicuro) {
+      const reg = await assegnaCodiceRegistro(
+        { piva: row.partita_iva, citta: row.citta, provincia: row.provincia,
+          telefono: row.telefono, email: row.email },
+        ragioneReg
+      );
+      if (reg.codice) {
+        codiceAssegnato = reg.codice;
+        row.codice_cliente = reg.codice;
+      }
+      // Se il registro non risponde si salva lo stesso il resto: meglio
+      // un'anagrafica completa senza codice che perdere anche citta' e provincia.
+    }
+  } else if (String(p.codice_cliente || "").trim()) {
+    row.codice_cliente = String(p.codice_cliente).trim();
+  }
+
   const { data, error } = await supabase
     .from("clienti_override")
     .upsert(row, { onConflict: "chiave" })
@@ -1441,6 +1515,17 @@ async function saveClienteOverride(params) {
   // Gli id li manda l'interfaccia, che sa quali ordini sono di questo cliente:
   // la chiave override si costruisce da dati che vivono solo nel frontend
   // (snapshot APP e anagrafiche GAMMA) e qui non si potrebbe rifare uguale.
+  // L'ordine da cui si e' aperta l'anagrafica prende il codice appena
+  // assegnato: e' il filo che lega l'ordine al cliente, e senza quello il
+  // bollino "Codice cliente" resterebbe rosso anche dopo aver salvato.
+  if (codiceAssegnato && String(p.orderId || "").trim()) {
+    await supabase
+      .from("ordini")
+      .update({ id_cliente: codiceAssegnato })
+      .eq("id_ordine", String(p.orderId).trim())
+      .is("id_cliente", null);
+  }
+
   const daRivalorizzare = Array.isArray(p.rivalorizza) ? p.rivalorizza : [];
   const rivalorizzati = [];
   for (const idOrdine of daRivalorizzare) {
@@ -1454,7 +1539,15 @@ async function saveClienteOverride(params) {
     else rivalorizzati.push(id);
   }
 
-  return { success: true, override: data || row, rivalorizzati };
+  // Il dubbio non resta muto: se non si e' potuto assegnare il codice perche' a
+  // registro c'e' piu' di un candidato, si dice chi sono e decide una persona.
+  return {
+    success: true,
+    override: data || row,
+    rivalorizzati,
+    codiceAssegnato,
+    candidatiRegistro,
+  };
 }
 
 // Carica un file (data URL) nel bucket Storage 'documenti' e ritorna l'URL
