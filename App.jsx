@@ -9,6 +9,7 @@ import {
 } from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
+import { CORRIERI } from "./src/logistica/data/corrieri.js";
 import {
   Package,
   ClipboardList,
@@ -857,13 +858,18 @@ function BadgeCorriere({ order, onApri, compatto = false }) {
   };
 
   if (scelto) {
+    // Il ritiro in sede non e' un corriere: niente camion e niente costo
+    // logistico, e si deve capire al primo sguardo (Luca 21/08/2026).
+    const inSede = scelto.toLowerCase() === "ritiro in sede";
     return (
       <button
-        style={{ ...badgeStyle("dark"), ...base }}
+        style={{ ...badgeStyle(inSede ? "outline" : "dark"), ...base }}
         onClick={onApri}
-        title="Corriere scelto. Clicca per cambiarlo."
+        title={inSede
+          ? "Ritira il cliente in sede: nessun costo logistico. Clicca per cambiare."
+          : "Corriere scelto. Clicca per cambiarlo."}
       >
-        🚚 {scelto.toUpperCase()}
+        {inSede ? "🏠 RITIRO IN SEDE" : "🚚 " + scelto.toUpperCase()}
       </button>
     );
   }
@@ -1515,6 +1521,24 @@ function PesoOrdine({ ord, onSalva }) {
 // Corriere fuori elenco. Il motore conosce solo quelli a contratto, ma si
 // spedisce anche col corriere locale, col ritiro del cliente o col mezzo
 // nostro: dev'essere sempre possibile scriverlo.
+// LA LOGISTICA SI SCEGLIE, NON SI SCRIVE (Luca 21/08/2026).
+// "Non possono essere messe a mano ma devono essere selezionate da un menu' a
+// tendina, altrimenti devi interpretarle poi e perdiamo colpi."
+//
+// Col campo libero ogni persona scriveva la sua versione: "Ritiro cliente",
+// "ritiro del cliente", "RITIRO IN SEDE", "cliente ritira". Al momento di
+// contare i costi per corriere, o di controllare la fattura del corriere,
+// quelle righe vanno interpretate una per una.
+//
+// L'elenco e' quello vero del motore logistica, piu' il RITIRO IN SEDE, che non
+// e' un corriere: e' la merce che il cliente viene a prendersi, e non genera
+// nessun costo logistico.
+const RITIRO_IN_SEDE = "Ritiro in sede";
+const SCELTE_CORRIERE = [
+  { gruppo: "Corrieri", voci: CORRIERI.map((c) => c.nome) },
+  { gruppo: "Senza corriere", voci: [RITIRO_IN_SEDE] },
+];
+
 function AltroCorriere({ ord, onSalva }) {
   const [valore, setValore] = useState("");
   const noto = (ord.transport && !ord.transport.errore
@@ -1529,28 +1553,38 @@ function AltroCorriere({ ord, onSalva }) {
       display: "grid", gap: 8,
     }}>
       <div style={{ fontSize: 13, fontWeight: 800, color: "#40516a" }}>
-        Un altro corriere
+        Scegli un'altra logistica
       </div>
       {fuoriElenco ? (
         <div style={{ fontSize: 12.5, color: "#15803d", fontWeight: 700 }}>
-          Adesso l'ordine parte con <b>{ord.courier}</b>, scritto a mano.
+          Adesso l'ordine parte con <b>{ord.courier}</b>
+          {ord.courier === RITIRO_IN_SEDE ? " (nessun costo logistico)." : "."}
         </div>
       ) : (
         <div style={{ fontSize: 12, color: "#8a94a6" }}>
-          Corriere locale, ritiro del cliente, mezzo nostro: scrivilo qui e finisce sul DDT.
+          Il preventivo non copre tutti i casi: qui scegli la logistica dall'elenco,
+          e finisce sul DDT scritta sempre allo stesso modo.
         </div>
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <input
-          style={{ ...inputStyle(), flex: 1, minWidth: 170, height: 42 }}
+        <select
+          style={{ ...inputStyle(), flex: 1, minWidth: 200, height: 42 }}
           value={valore}
-          placeholder="Es. Ritiro del cliente"
           onChange={(e) => setValore(e.target.value)}
-        />
+        >
+          <option value="">— scegli —</option>
+          {SCELTE_CORRIERE.map((g) => (
+            <optgroup key={g.gruppo} label={g.gruppo}>
+              {g.voci.map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
         <button
           style={compactBtnStyle("primary")}
-          disabled={!valore.trim()}
-          onClick={() => { onSalva(ord.id, valore.trim()); setValore(""); }}
+          disabled={!valore}
+          onClick={() => { onSalva(ord.id, valore); setValore(""); }}
         >
           Usa questo
         </button>
