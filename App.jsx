@@ -3950,6 +3950,55 @@ export default function App() {
     return m;
   }, [clients]);
 
+  // L'ANAGRAFICA SI TROVA ANCHE SENZA IL CODICE SULL'ORDINE (Luca 21/08/2026:
+  // "se vedi il DDT c'e' tutto, come e' possibile che mi dai errore?").
+  // Aveva ragione: il documento pesca dal gestionale, il controllo cercava solo
+  // per codice cliente, e 151 ordini archiviati quel codice non ce l'hanno. Cosi'
+  // l'app chiedeva citta' e provincia che erano scritte a due passi.
+  //
+  // Si aggancia per NOME, ma solo quando il nome porta a UN cliente solo: su
+  // "ROMA SRL" il gestionale ne ha tre (Opera Viva, Trattoria Pizzeria, e quella
+  // giusta), e sceglierne uno a caso vorrebbe dire mettere in bolla l'indirizzo
+  // di un'altra azienda. Se sono piu' di uno si lascia il dubbio in piedi.
+  const clientsByName = useMemo(() => {
+    const per = {};
+    for (const c of clients) {
+      const k = String(c.name || "").trim().toLowerCase();
+      if (!k) continue;
+      (per[k] = per[k] || []).push(c);
+    }
+    return per;
+  }, [clients]);
+
+  // Il nome sull'ordine e' spesso quello del gestionale TRONCATO: "FARMACIA
+  // GALERMO" per "FARMACIA GALERMO S.R.L.", "CIMARRA 4" per "CIMARRA 4
+  // S.R.L.S.". E porta in coda la citta' ("GRANOMARE ... · SAN VITO CHIETINO"),
+  // che va tolta prima di confrontare.
+  // Prima si prova il nome preciso, poi quello che INIZIA uguale: su 150 ordini
+  // senza codice ne riconosce 71, e i 2 casi in cui il prefisso porta a piu' di
+  // un cliente restano segnalati, che e' giusto.
+  const nomeOrdinePulito = (order) =>
+    String(order?.customer || "").split("·")[0].trim().toLowerCase();
+
+  const gammaDiOrdine = (order) => {
+    const perCodice = clientsById[String(order?.clientId || "")];
+    if (perCodice) return perCodice;
+    const nome = nomeOrdinePulito(order);
+    if (nome.length < 5) return null;
+    const esatti = clientsByName[nome] || [];
+    if (esatti.length === 1) return esatti[0];
+    if (esatti.length > 1) return null;
+    let trovato = null;
+    for (const c of clients) {
+      const n = String(c.name || "").trim().toLowerCase();
+      if (!n.startsWith(nome)) continue;
+      if (trovato) return null; // piu' di uno: non si sceglie
+      trovato = c;
+    }
+    return trovato;
+  };
+
+
   // Semaforo anagrafica di un ordine.
   // - Ordine dall'APP agenti: checklist COMPLETA (lista Luca) sullo snapshot.
   // - Cliente GAMMA: check sui campi che il gestionale espone (PIVA,
@@ -3960,7 +4009,7 @@ export default function App() {
   // cosi' tipologia e anagrafica completata valgono anche per gli ordini futuri.
   const clientKeyFor = (order) => {
     const app = appAnagrafiche[String(order?.id || "")];
-    const gamma = clientsById[String(order?.clientId || "")];
+    const gamma = gammaDiOrdine(order);
     const piva = String(app?.partita_iva || gamma?.piva || "").replace(/\D/g, "");
     if (piva) return "piva:" + piva;
     const nome = String(app?.ragione_sociale || gamma?.name || order?.customer || "")
@@ -3996,7 +4045,7 @@ export default function App() {
   // Dato cliente EFFETTIVO = base (snapshot APP o GAMMA) + il nostro override.
   const effectiveCliente = (order) => {
     const app = appAnagrafiche[String(order?.id || "")];
-    const gamma = clientsById[String(order?.clientId || "")];
+    const gamma = gammaDiOrdine(order);
     let base = {};
     let fonte = "";
     if (app) {
@@ -4009,6 +4058,12 @@ export default function App() {
         sede_legale: gamma.indirizzo,
         indirizzo: gamma.indirizzo,
         cap: gamma.cap || order?.cap,
+        // CITTA' E PROVINCIA c'erano nel gestionale e si perdevano QUI: questa
+        // copia le dimenticava, e il controllo dei campi mancanti guarda questa
+        // copia mentre il documento legge il gestionale. Da fuori sembrava che
+        // il DDT stampasse dati che l'app diceva mancanti.
+        citta: gamma.citta,
+        provincia: gamma.provincia,
         email: gamma.email,
         telefono: gamma.telefono,
       };
@@ -4033,7 +4088,7 @@ export default function App() {
     const ov = clientiOverride[clientKeyFor(order)];
     if (ov?.tipologia) return ov.tipologia;
     const app = appAnagrafiche[String(order?.id || "")];
-    const gamma = clientsById[String(order?.clientId || "")];
+    const gamma = gammaDiOrdine(order);
     return normalizeTipologia(
       app?.settore || app?.tipologia || app?.canale || app?.categoria || gamma?.category || ""
     );
@@ -4087,11 +4142,15 @@ export default function App() {
   const campiMancantiDDT = (order) => {
     const has = (v) => String(v ?? "").trim() !== "";
     const { merged } = effectiveCliente(order);
-    const cli = clientsById[String(order?.clientId)] || {};
+    const cli = gammaDiOrdine(order) || {};
     const bloccanti = [];
     const daCompletare = [];
 
-    if (!has(order?.clientId)) bloccanti.push("Codice cliente");
+    // IL CODICE CLIENTE: se l'ordine non ce l'ha scritto ma il cliente si
+    // riconosce senza ambiguita' nel gestionale, il codice c'e' e il documento
+    // lo usa. Si segnala solo quando davvero non si sa chi e' (Luca 21/08/2026).
+    const codiceGamma = String(cli.id || cli.codice_cliente || "").trim();
+    if (!has(order?.clientId) && !has(codiceGamma)) bloccanti.push("Codice cliente");
     // L'agente e' fondamentale (Luca 04/08/2026): senza, la provvigione non
     // si sa a chi va e il rapporto col cliente non ha un nome. Vale quello
     // scritto sull'ordine, altrimenti quello del cliente in anagrafica.
@@ -6890,7 +6949,7 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
 
     // Dati destinatario: snapshot APP / GAMMA arricchito col nostro override.
     const app = effectiveCliente(order).merged || {};
-    const cli = clientsById[String(order.clientId)] || {};
+    const cli = gammaDiOrdine(order) || {};
     const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
     // DOVE va la merce: la destinazione scelta per questo ordine, o la
     // predefinita del cliente. Ha via e civico separati, e i suoi orari: un
