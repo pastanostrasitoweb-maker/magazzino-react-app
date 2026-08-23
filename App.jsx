@@ -1648,6 +1648,10 @@ const ANAG_FIELDS = [
   // l'ordine non diventa fattura.
   { key: "citta", label: "Citta' (obbligatoria per la fattura elettronica)" },
   { key: "provincia", label: "Provincia (sigla, es. RM)" },
+  // Solo per i PRIVATI: la fattura elettronica vuole nome e cognome separati, e
+  // da "Maria Teresa De Luca" non si indovinano (Luca 22/08/2026).
+  { key: "nome", label: "Nome (solo se persona fisica)" },
+  { key: "cognome", label: "Cognome (solo se persona fisica)" },
   { key: "insegna", label: "Insegna (se diversa)" },
   { key: "orari_consegna", label: "Orario di scarico (finestra min 3 ore)" },
   { key: "giorno_chiusura", label: "Giorno di chiusura" },
@@ -4349,6 +4353,7 @@ export default function App() {
       merged.fonte_prezzi || (merged.usa_storico === false ? "solo-listino" : "listino")
     );
     form.listino_standard = String(merged.listino_standard ?? "");
+    form.persona_fisica = Boolean(merged.persona_fisica);
     // Gli sconti del cliente, in cascata. Vuoto NON e' zero: vuoto vuol dire
     // "non lo sappiamo" e lascia lavorare lo sconto ricavato dalle fatture,
     // zero vuol dire "prezzo pieno, e' voluto".
@@ -4380,6 +4385,7 @@ export default function App() {
       for (const f of ANAG_FIELDS) payload[f.key] = anagForm[f.key] ?? "";
       payload.agente_id = anagForm.agente_id ?? "";
       payload.fonte_prezzi = anagForm.fonte_prezzi || "listino";
+      payload.persona_fisica = !!anagForm.persona_fisica;
       // Il vecchio booleano si tiene allineato: altri pezzi lo leggono ancora.
       payload.usa_storico = payload.fonte_prezzi !== "solo-listino";
       payload.listino_standard = anagForm.listino_standard ?? "";
@@ -15002,6 +15008,33 @@ ${isConferma
                     preparare si aggiornano da soli.
                   </div>
                 </div>
+
+                {/* PERSONA FISICA O AZIENDA: e' la prima cosa da sapere, perche'
+                    cambia la struttura della fattura elettronica. A un privato
+                    servono Nome e Cognome separati e il solo codice fiscale;
+                    mandarlo come azienda fa scartare il documento dallo SDI
+                    (Luca 22/08/2026, sugli ordini dal sito). */}
+                <label
+                  style={{
+                    display: "flex", alignItems: "center", gap: 9, cursor: "pointer",
+                    border: "1px solid " + (anagForm.persona_fisica ? "#7dd3fc" : "#dbe2ea"),
+                    background: anagForm.persona_fisica ? "#f0f9ff" : "#fff",
+                    borderRadius: 10, padding: "9px 12px", marginBottom: 12,
+                    fontSize: 13, fontWeight: 700, color: anagForm.persona_fisica ? "#0369a1" : "#40516a",
+                  }}
+                  title="Un privato, non un'azienda: la fattura elettronica vuole nome e cognome separati e il solo codice fiscale."
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!anagForm.persona_fisica}
+                    onChange={(e) => setAnagForm((f) => ({ ...f, persona_fisica: e.target.checked }))}
+                    style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#0369a1" }}
+                  />
+                  👤 E' una persona fisica, non un'azienda
+                  <span style={{ fontWeight: 500, color: "#66758b", fontSize: 12 }}>
+                    (in fattura: nome e cognome separati, solo codice fiscale)
+                  </span>
+                </label>
 
                 <div style={{ display: "grid", gridTemplateColumns: isSmallLayout ? "1fr" : "1fr 1fr", gap: 12 }}>
                   {ANAG_FIELDS.map((f) => {

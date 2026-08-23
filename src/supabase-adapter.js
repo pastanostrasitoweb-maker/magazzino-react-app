@@ -1389,6 +1389,9 @@ const OVERRIDE_CLIENTE_FIELDS = [
   // venivano MAI salvate: il modulo poteva anche mostrarle, il salvataggio le
   // buttava via.
   "citta", "provincia",
+  // Persona fisica: nome e cognome separati, che la fattura elettronica vuole
+  // distinti (Luca 22/08/2026).
+  "nome", "cognome",
   "indirizzo_spedizione", "insegna", "orari_consegna", "giorno_chiusura",
   "codice_univoco", "pec", "email", "telefono", "metodo_pagamento",
   "tipologia", "note",
@@ -1419,6 +1422,11 @@ async function saveClienteOverride(params) {
   // "false", che in JavaScript e' vero. Un cliente si ritroverebbe i prezzi
   // sul documento proprio dopo averli tolti.
   if (p.ddt_con_prezzi !== undefined) row.ddt_con_prezzi = !!p.ddt_con_prezzi;
+  // UNA PERSONA NON E' UN'AZIENDA. Cambia la struttura della fattura
+  // elettronica: Nome e Cognome al posto della Denominazione, e solo il codice
+  // fiscale senza partita IVA. Mandare un privato come azienda fa scartare il
+  // documento dallo SDI (Luca 22/08/2026, sugli ordini dal sito).
+  if (p.persona_fisica !== undefined) row.persona_fisica = !!p.persona_fisica;
   // Booleano anche questo: passato da String() diventerebbe "false", che
   // in JavaScript e' vero, e il cliente si ritroverebbe lo storico acceso
   // proprio dopo averlo spento.
