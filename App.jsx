@@ -9680,7 +9680,15 @@ ${isConferma
                     label: "Nuovo cliente", icona: <span style={{ fontSize: 15 }}>＋</span>,
                     onClick: () => { setPage("clienti"); setClienteAperto({ nuovo: true }); },
                   },
-                  isAdmin && {
+                  // LE FOTO DELLE BOLLE SONO DELLA PRODUZIONE (Luca 22/08/2026:
+                  // "perche' la produzione non ha piu' per fare la foto alla
+                  // bolla? dove e' andata a finire").
+                  // Erano loro e solo loro fino al 24/07. Il 04/08, riordinando
+                  // i bottoni in menu, la condizione si e' rovesciata da
+                  // `isProduzione` a `isAdmin`: chi la usa l'ha persa e chi non
+                  // la usa se l'e' ritrovata. Sono diciotto giorni di bolle
+                  // fornitore non fotografate.
+                  (isProduzione || isAdmin) && {
                     label: "Foto bolle", icona: <Camera size={16} />,
                     attivo: page === "foto-bolle", separatoreSopra: true,
                     onClick: () => setPage("foto-bolle"),
