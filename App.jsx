@@ -507,7 +507,14 @@ const DOCUMENTI_NOSTRI_DAL = "2026-08-03";
 // in bolla, e riaprirli adesso non serve a nessuno.
 function colliDaConfermare(order) {
   if (!order) return false;
-  if (order.colliIsManual) return false;
+  // SI GUARDA IL DATO, NON SOLO LA SUA VERSIONE CALCOLATA.
+  // colliIsManual esiste solo sull'ordine passato per ordersWithComputed;
+  // l'archiviazione pescava l'ordine dalla lista grezza, dove quel campo non
+  // c'e' mai, e quindi bloccava SEMPRE ("i colli non sono confermati" anche
+  // quando erano scritti e salvati: Luca 24/08/2026, magazzino fermo).
+  // colliManual invece c'e' in tutte e due: e' il numero scritto a mano.
+  const scrittoAMano = order.colliManual !== null && order.colliManual !== undefined;
+  if (order.colliIsManual || scrittoAMano) return false;
   const data = String(order.date || "").slice(0, 10);
   if (data && data < COLLI_CONFERMATI_DAL) return false;
   return true;
@@ -7783,7 +7790,9 @@ ${isConferma
     // Qui si blocca e non si avvisa soltanto, perche' l'archiviazione e' il punto
     // di non ritorno (Luca 06/08/2026: "metti in modo tale che debba essere
     // inserito bene").
-    const ord = orders.find((o) => String(o.id) === String(orderId));
+    const ord =
+      ordersWithComputed.find((o) => String(o.id) === String(orderId)) ||
+      orders.find((o) => String(o.id) === String(orderId));
     if (ord && pagamentoScoperto(ord)) {
       const attuale = metodoEffettivo(ord.metodoPagamento, metodoDelCliente(ord));
       alert(
