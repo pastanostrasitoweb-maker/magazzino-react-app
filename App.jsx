@@ -3807,6 +3807,8 @@ function DettaglioSolaLettura({ order, assignments, lots }) {
     <div>
       <div style={{ color: "#66758b", fontSize: 13, marginBottom: 10 }}>
         {fmtDate(order.date)} · ID {order.id}
+        {order.agenteNome ? <> · agente <b>{order.agenteNome}</b></> : null}
+        {order.courier || order.courierSpedizione ? <> · {order.courier || order.courierSpedizione}</> : null}
         {order.motivoFermo ? <> · <b style={{ color: "#92400e" }}>Fermo: {order.motivoFermo}</b></> : null}
       </div>
       {order.notes ? (
@@ -11806,6 +11808,8 @@ ${isConferma
                           {order.customer || "Ordine senza nome"}
                         </div>
                         <span style={badgeStyle("warning")}>⛔ Fermo</span>
+                        <BadgeAgente nome={agenteDi(order)} onApri={() => openCompletaAnagrafica(order)} compatto />
+                        <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} compatto />
                         {order.daBollinare ? (
                           <span style={badgeStyle("warning")} title={"Da bollinare: " + order.righeDaBollinare.map((l) => l.productName).join(" · ")}>
                             🏷️ DA BOLLINARE
@@ -11946,6 +11950,13 @@ ${isConferma
                             il corriere della spedizione, e se davvero non c'e'
                             lo si dice in rosso. */}
                         <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} />
+                        {/* L'AGENTE STA ACCANTO AL CORRIERE (Luca 24/08/2026:
+                            "ho bisogno di vedere insieme al corriere i colli e
+                            la consegna anche l'agente assegnato"). Nei Preparati
+                            c'era gia'; qui e in archivio no, ed e' proprio dove
+                            si va a ricontrollare a cose fatte di chi era la
+                            vendita. */}
+                        <BadgeAgente nome={agenteDi(order)} onApri={() => openCompletaAnagrafica(order)} />
                         {bollinoDestinazione(order)}
                         {bollinoPagamento(order)}
                         {order.ddtNumero ? <span style={badgeStyle("outline")}>{order.ddtNumero}</span> : null}
@@ -12628,6 +12639,7 @@ ${isConferma
                                   affatto, e su un documento gia' emesso e'
                                   proprio il dato che si va a ricontrollare. */}
                               <BadgeCorriere order={order} onApri={() => setTransportModalOrderId(order.id)} compatto />
+                              <BadgeAgente nome={agenteDi(order)} onApri={() => openCompletaAnagrafica(order)} compatto />
                               {bollinoDestinazione(order, true)}
                               {/* In archivio il pagamento SI CAMBIA, a differenza
                                   della destinazione: il DDT e' emesso e la merce
