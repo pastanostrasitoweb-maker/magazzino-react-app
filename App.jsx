@@ -3784,6 +3784,96 @@ function ChatPanel({ tabella, authUser, height = "42vh", vuotoLabel = "Nessun me
 }
 
 
+
+// COSA C'E' DENTRO L'ORDINE, senza toccarlo.
+// Luca, 24/08/2026: "ho bisogno di un tasto qui da vedere cosa c'e' dentro
+// l'ordine senza riportare l'ordine in preparati". Prima per guardare le righe
+// di un ordine fermo bisognava rimetterlo tra i Da preparare, cioe' muoverlo
+// per leggerlo. Questa finestra non scrive niente: legge e basta.
+function DettaglioSolaLettura({ order, assignments, lots }) {
+  if (!order) return null;
+  const lotById = Object.fromEntries((lots || []).map((l) => [String(l.id), l]));
+  const righe = [...(order.lines || [])].sort((a, b) => Number(a.rowOrder || 0) - Number(b.rowOrder || 0));
+  let totale = 0;
+
+  return (
+    <div>
+      <div style={{ color: "#66758b", fontSize: 13, marginBottom: 10 }}>
+        {fmtDate(order.date)} · ID {order.id}
+        {order.motivoFermo ? <> · <b style={{ color: "#92400e" }}>Fermo: {order.motivoFermo}</b></> : null}
+      </div>
+      {order.notes ? (
+        <div style={{ marginBottom: 10, padding: "8px 10px", background: "#f8fafc", borderRadius: 10, fontSize: 13, color: "#40516a" }}>
+          {order.notes}
+        </div>
+      ) : null}
+
+      <div style={{ maxHeight: "52vh", overflow: "auto", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+              {["Prodotto", "Ordinati", "Assegnati", "Lotti", "Prezzo"].map((t, i) => (
+                <th key={t} style={{ padding: "8px 10px", textAlign: i > 0 && i < 3 ? "center" : i === 4 ? "right" : "left",
+                  color: "#64748b", fontWeight: 700, borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap" }}>{t}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {righe.map((line) => {
+              const ass = assignments[String(line.lineId)] || [];
+              const assegnati = ass.reduce((s, a) => s + Number(a.qty || 0), 0);
+              const prezzo = line.prezzoUnitario;
+              const netto = prezzo == null ? null
+                : nettoRiga(line.qtyOrdered, prezzo, line.scontoPct, line.sconto2Pct, line.sconto3Pct);
+              if (netto != null) totale += netto;
+              const sconti = [line.scontoPct, line.sconto2Pct, line.sconto3Pct].filter(Boolean);
+              return (
+                <tr key={line.lineId} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "7px 10px" }}>
+                    {line.productName}
+                    {line.isOutsideStock ? (
+                      <span style={{ marginLeft: 6, fontSize: 11, color: "#7c3aed" }}>fuori magazzino</span>
+                    ) : null}
+                  </td>
+                  <td style={{ padding: "7px 10px", textAlign: "center", fontWeight: 800 }}>{line.qtyOrdered}</td>
+                  <td style={{ padding: "7px 10px", textAlign: "center",
+                    color: assegnati >= line.qtyOrdered ? "#059669" : "#b45309", fontWeight: 800 }}>
+                    {assegnati}
+                  </td>
+                  <td style={{ padding: "7px 10px", color: "#475569", fontSize: 12 }}>
+                    {ass.length
+                      ? ass.map((a) => `${lotById[String(a.lotId)]?.lot || a.lotId} (${a.qty})`).join(" · ")
+                      : "—"}
+                  </td>
+                  <td style={{ padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
+                    {prezzo == null ? <span style={{ color: "#b45309" }}>da valorizzare</span> : (
+                      <>
+                        {Number(prezzo).toFixed(2)} €
+                        {sconti.length ? <span style={{ color: "#7c3aed" }}> −{sconti.join("−")}%</span> : null}
+                        <div style={{ color: "#64748b", fontSize: 11.5 }}>{netto.toFixed(2)} €</div>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, fontSize: 13.5 }}>
+        <span style={{ color: "#66758b" }}>
+          {righe.length} righe · {order.totalToAssign || 0} pezzi ancora da assegnare
+        </span>
+        <b>Imponibile {totale.toFixed(2)} €</b>
+      </div>
+      <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 12 }}>
+        Questa finestra non modifica niente: l'ordine resta dov'e'.
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // LE FATTURE DEL PERIODO.
 // Luca, 24/08/2026: "dove vado per generare la fattura senza chiedere a te?".
@@ -4132,6 +4222,7 @@ export default function App() {
   // Archivio: mostra solo gli ordini a cui manca qualcosa per DDT/fattura.
   const [soloIncompleti, setSoloIncompleti] = useState(false);
   const [pannelloFatture, setPannelloFatture] = useState(false);
+  const [ordineDaGuardare, setOrdineDaGuardare] = useState(null);
   // Registro DDT (amministrazione): ricerca per numero, cliente o ordine.
   const [ddtSearch, setDdtSearch] = useState("");
   // Tracciabilita' lotti in Archivio: si cerca un articolo (o un lotto), si
@@ -5100,6 +5191,13 @@ export default function App() {
       if (order.archived) return;
       const st = String(order.status || "").trim().toLowerCase();
       if (st === "preparato" || st === "spedito") return;
+      // L'ORDINE FERMO NON TIENE LA MERCE (Luca 24/08/2026). Un ordine fermo
+      // aspetta un pagamento, un prodotto, una risposta: fino a quando non
+      // riparte la merce che aveva prenotato torna a disposizione di tutti.
+      // Non era teoria: 99 pezzi erano bloccati da ordini fermi dal 31/07.
+      // Le assegnazioni restano scritte (si deve poter tornare indietro),
+      // smettono solo di contare. Stessa regola in v_lotti_disponibilita.
+      if (st === "fermo") return;
 
       (order.lines || []).forEach((line) => {
         openLineIds.add(String(line.lineId));
@@ -5143,10 +5241,11 @@ export default function App() {
       // usciti dal magazzino: archiviati, Preparato e Spedito (per questi la
       // merce e' gia' stata scalata dalla giacenza quando furono preparati,
       // contarli come impegnati li peserebbe due volte). Contano solo gli
-      // ordini ancora aperti (Da preparare, Fermo).
+      // ordini ancora aperti. NON l'ordine fermo: quello e' sospeso e la sua
+      // merce e' di nuovo di tutti (vedi lotAssignedMap).
       if (order.archived) return;
       const st = String(order.status || "").trim().toLowerCase();
-      if (st === "preparato" || st === "spedito") return;
+      if (st === "preparato" || st === "spedito" || st === "fermo") return;
 
       (order.lines || []).forEach((line) => {
         const productKey = String(line.productId);
@@ -7903,6 +8002,24 @@ ${isConferma
     if (!orderId) return;
 
     try {
+      // QUANDO L'ORDINE RIPARTE, LA MERCE POTREBBE NON ESSERCI PIU'.
+      // Mentre era fermo non teneva impegnato niente, quindi qualcun altro puo'
+      // aver preso quei pezzi. Le assegnazioni vecchie che non stanno piu' in
+      // piedi si dicono all'operatore PRIMA di riaprire: e' lui che decide se
+      // riaprire lo stesso e ripescare i lotti, non l'app di nascosto.
+      const { data: fuori, error: errFuori } = await supabase
+        .rpc("assegnazioni_che_non_reggono", { p_id_ordine: String(orderId) });
+      if (!errFuori && (fuori || []).length) {
+        const elenco = fuori
+          .map((x) => `· ${x.descrizione}: ${x.chiesti} dal lotto ${x.codice_lotto}, ne restano ${x.liberi}`)
+          .join("\n");
+        if (!window.confirm(
+          "Mentre l'ordine era fermo la merce e' tornata disponibile, e su queste righe " +
+          "i lotti che aveva prenotato adesso non bastano:\n\n" + elenco +
+          "\n\nRiapro lo stesso? Poi dovrai ripescare i lotti su quelle righe."
+        )) return;
+      }
+
       const result = await callSheetsApi({
         action: "reopenOrder",
         orderId,
@@ -11726,6 +11843,9 @@ ${isConferma
                     </div>
 
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <button style={btnStyle("outline")} onClick={() => setOrdineDaGuardare(order)}>
+                        <Search size={16} /> Vedi l'ordine
+                      </button>
                       <button style={btnStyle("outline")} onClick={() => openEditMotivoFermo(order)}>
                         <Pencil size={16} /> Motivo
                       </button>
@@ -11736,6 +11856,26 @@ ${isConferma
                   </div>
                 ))
               )}
+            </div>
+
+            <Modal
+              open={Boolean(ordineDaGuardare)}
+              title={ordineDaGuardare?.customer || "Ordine"}
+              onClose={() => setOrdineDaGuardare(null)}
+              maxWidth={900}
+            >
+              <DettaglioSolaLettura
+                order={ordineDaGuardare}
+                assignments={assignments}
+                lots={lots}
+              />
+            </Modal>
+
+            <div style={{ marginTop: 18, padding: "12px 14px", background: "#f0fdf4",
+              border: "1px solid #bbf7d0", borderRadius: 12, color: "#166534", fontSize: 13, lineHeight: 1.5 }}>
+              Un ordine fermo <b>non tiene impegnata la merce</b>: quello che aveva prenotato
+              torna disponibile per tutti. Quando riparte, il magazzino ricontrolla che i lotti
+              ci siano ancora.
             </div>
           </div>
         )}
