@@ -2548,6 +2548,9 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
   const salva = async () => {
     setSalvando(true);
     try {
+      // Quante aliquote sono state corrette: serve a dirlo a chi salva, perche'
+      // adesso la correzione non resta sulla riga ma insegna al catalogo.
+      let ivaCorrette = 0;
       for (const l of righe) {
         const p = String(bozza[l.lineId]?.prezzo ?? "").trim();
         const sc = String(bozza[l.lineId]?.sconto ?? "").trim();
@@ -2572,6 +2575,7 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
           iv === ivaPrima &&
           nat === natPrima
         ) continue;
+        if (iv !== ivaPrima && iv !== "" && Number(iv) > 0 && !nat) ivaCorrette += 1;
         await callSheetsApi({
           action: "updateOrderLine",
           payload: JSON.stringify({
@@ -2596,6 +2600,17 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
           action: "updateOrder",
           payload: JSON.stringify({ orderId: order.id, regimeIva: regime }),
         });
+      }
+      // L'ALIQUOTA CORRETTA VALE ANCHE PER I PROSSIMI ORDINI (Luca 24/08/2026:
+      // "quello che e' in rosso registralo per le volte future, altrimenti
+      // stiamo sempre a fare modifiche"). Lo dico, se no sembra la solita
+      // correzione usa e getta e la si rifa' ogni volta.
+      if (ivaCorrette > 0) {
+        alert(
+          ivaCorrette === 1
+            ? "Aliquota corretta e registrata a catalogo: i prossimi ordini di questo articolo la useranno gia' giusta."
+            : `${ivaCorrette} aliquote corrette e registrate a catalogo: i prossimi ordini di questi articoli le useranno gia' giuste.`
+        );
       }
       if (onSalvato) await onSalvato();
     } catch (e) {
