@@ -2674,7 +2674,8 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
               Number(bz.sconto ?? l.scontoPct ?? 0) >= 100 ||
               Number(bz.sconto2 ?? l.sconto2Pct ?? 0) >= 100 ||
               Number(bz.sconto3 ?? l.sconto3Pct ?? 0) >= 100;
-            const senzaPrezzo = !inOmaggio && !(Number(bz.prezzo ?? l.prezzoUnitario) > 0);
+            // Vale anche qui: il negativo dell'abbuono e' un prezzo, non un vuoto.
+            const senzaPrezzo = !inOmaggio && !Number(bz.prezzo ?? l.prezzoUnitario);
             const senzaIva = String(bz.iva ?? (l.ivaPct ?? "")).trim() === "";
             // Avviso dalla valorizzazione: listino e fatture non dicono lo
             // stesso prezzo su questo articolo. Non e' un campo mancante, e'
@@ -4282,7 +4283,10 @@ export default function App() {
       Number(l.scontoPct || 0) >= 100 ||
       Number(l.sconto2Pct || 0) >= 100 ||
       Number(l.sconto3Pct || 0) >= 100;
-    const aZero = righe.filter((l) => !inOmaggioRiga(l) && !(Number(l.prezzoUnitario) > 0));
+    // L'ABBUONO E' UNA RIGA NEGATIVA, NON UNA RIGA SENZA PREZZO (Luca
+    // 22/08/2026). Un importo sotto zero e' voluto: scala il totale. Cercare
+    // "prezzo > 0" lo trattava come un buco da riempire.
+    const aZero = righe.filter((l) => !inOmaggioRiga(l) && !Number(l.prezzoUnitario));
     // CAMPIONATURA GRATUITA: i prezzi a zero sono lo stato GIUSTO, non una
     // mancanza. "Quando e' flaggata campionatura non devono esserci i prezzi,
     // quindi l'errore non dovrebbe esistere" (Luca 17/08/2026, sull'ordine di
@@ -8870,6 +8874,72 @@ ${isConferma
     setEditLineDialogOpen(true);
   };
 
+  // L'ABBUONO: una riga che TOGLIE (Luca 22/08/2026).
+  // "Se vogliamo fare l'abbuono dobbiamo poterlo inserire come riga, deve
+  // scalare il totale e deve avere la sua IVA." Aliquota 4% e tetto di 50 euro,
+  // decisi da lui. Compare sul DDT e in fattura, perche' il cliente deve vedere
+  // perche' paga meno.
+  //
+  // Non e' uno sconto di riga: lo sconto si attacca a una merce e la merce c'e'.
+  // L'abbuono e' una voce a se' ("rimborso scaduti", "merce danneggiata") e va
+  // scritta come tale, se no fra sei mesi nessuno sa perche' quel totale non
+  // torna con le quantita'.
+  const ABBUONO_MAX = 50;
+  const ABBUONO_IVA = 4;
+  const aggiungiAbbuono = async (order) => {
+    if (!order) return;
+    const grezzo = window.prompt(
+      "ABBUONO — quanto togliamo?\n\n" +
+      "Scrivi l'importo in euro, senza segno meno (esempio: 12,50).\n" +
+      "Il massimo e' " + ABBUONO_MAX + " euro. L'IVA e' al " + ABBUONO_IVA + "%."
+    );
+    if (grezzo === null) return;
+    const importo = Number(String(grezzo).replace(",", ".").replace(/[^0-9.]/g, ""));
+    if (!Number.isFinite(importo) || importo <= 0) {
+      alert("Importo non valido: scrivi un numero, per esempio 12,50.");
+      return;
+    }
+    if (importo > ABBUONO_MAX) {
+      alert("L'abbuono massimo e' " + ABBUONO_MAX + " euro. Hai scritto " + fmtEur(importo) + ".");
+      return;
+    }
+    const motivo = String(window.prompt(
+      "Perche' questo abbuono?\n\nFinisce sul documento, quindi lo legge il cliente.\n" +
+      "Esempi: rimborso scaduti, merce danneggiata, arrotondamento."
+    ) || "").trim();
+    if (!motivo) { alert("Serve il motivo: senza, fra sei mesi non si capisce piu'."); return; }
+
+    const nextRowOrder =
+      Math.max(0, ...((order.lines || []).map((l) => Number(l.rowOrder || 0)))) + 1;
+    const lineId = `RIGA-ABBUONO-${Date.now()}`;
+    try {
+      const res = await callSheetsApi({
+        action: "addOrderLine",
+        payload: JSON.stringify({
+          orderId: order.id,
+          lineId,
+          productId: `ABBUONO-${Date.now()}`,
+          productCode: "ABBUONO",
+          productName: `ABBUONO - ${motivo}`,
+          isOutsideStock: true,
+          rowOrder: nextRowOrder,
+          qtyOrdered: 1,
+          prezzoUnitario: -Math.abs(Math.round(importo * 100) / 100),
+          scontoPct: 0,
+          ivaPct: ABBUONO_IVA,
+          prezzoOrigine: "abbuono",
+        }),
+      });
+      if (!res || !res.success) {
+        alert("Abbuono non salvato: " + ((res && res.error) || "errore"));
+        return;
+      }
+      await loadDataFromSheets();
+    } catch (e) {
+      alert("Errore di collegamento nel salvare l'abbuono.");
+    }
+  };
+
   const createOrderLine = async () => {
     if (!isAdmin || !selectedOrder) return;
 
@@ -11218,6 +11288,16 @@ ${isConferma
 
                           <button style={btnStyle("warning")} onClick={() => reopenPreparedOrderForEditing(order.id)}>
                             <Pencil size={16} /> Modifica
+                          </button>
+
+                          {/* L'ABBUONO: una riga che toglie, con la sua IVA al 4%
+                              e il tetto di 50 euro (Luca 22/08/2026). */}
+                          <button
+                            style={btnStyle("outline")}
+                            onClick={() => azioneUnica("abbuono-" + order.id, () => aggiungiAbbuono(order))}
+                            title="Aggiunge una riga in negativo che scala il totale. IVA 4%, massimo 50 euro."
+                          >
+                            − Abbuono
                           </button>
 
                           {order.computedStatus !== "Spedito" ? (

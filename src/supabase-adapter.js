@@ -2175,6 +2175,13 @@ async function addOrderLine(params) {
     riga.sconto2_pct = Number(p.sconto2Pct ?? p.sconto2_pct ?? 0);
     riga.sconto3_pct = Number(p.sconto3Pct ?? p.sconto3_pct ?? 0);
     riga.prezzo_origine = String(p.prezzoOrigine ?? p.prezzo_origine ?? "storico");
+    // L'ALIQUOTA SI PUO' DIRE ALLA NASCITA DELLA RIGA. Serve all'abbuono, che ha
+    // la sua aliquota decisa da noi (4%, Luca 22/08/2026) e non ereditata da un
+    // prodotto, perche' un prodotto non ce l'ha.
+    const ivaNuova = p.ivaPct ?? p.iva_pct;
+    if (ivaNuova !== undefined && ivaNuova !== null && ivaNuova !== "") {
+      riga.iva_pct = Number(ivaNuova);
+    }
   }
 
   const { data, error } = await supabase
