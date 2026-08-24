@@ -29,7 +29,14 @@ import json, re, sys, os
 from datetime import date, timedelta
 from xml.sax.saxutils import escape
 
-DA_NUMERO = int(sys.argv[1]) if len(sys.argv) > 1 else None
+ARGV = [a for a in sys.argv[1:] if not a.startswith('--')]
+DA_NUMERO = int(ARGV[0]) if ARGV else None
+# --ddt 1930[,1931]: genera SOLO quei DDT. Serve per i documenti che arrivano
+# dopo che il blocco del periodo e' gia' stato fatturato: senza filtro il
+# generatore rifarebbe da capo anche le fatture gia' inviate.
+SOLO = set()
+for a in sys.argv[1:]:
+    if a.startswith('--ddt='): SOLO |= {x.strip() for x in a[6:].split(',') if x.strip()}
 DEST = '/Users/lucadelfanti/Desktop/AI /Second Brain/Departments/amministrazione/allegati/fatture-xml'
 d = json.load(open('/tmp/dati-xml.json'))
 norm = lambda s: re.sub(r'\D', '', str(s or ''))
@@ -56,6 +63,15 @@ def spezza_nome(intero, nome, cognome):
     return ' '.join(pezzi[:-1]), pezzi[-1], True
 
 def anagrafica_cliente(a):
+    # UN CLIENTE ESTERO NON HA UNA PARTITA IVA ITALIANA (La Bottega Gluten Free
+    # SAGL di Lugano, 24/08/2026). L'identificativo va scritto col prefisso del
+    # suo paese, non con IT: con IT lo SDI cerca quel numero nell'anagrafe
+    # tributaria italiana, non lo trova e scarta. E il codice fiscale italiano
+    # non ce l'ha: quel campo non si mette proprio.
+    if a['estero']:
+        return ('<IdFiscaleIVA><IdPaese>%s</IdPaese><IdCodice>%s</IdCodice></IdFiscaleIVA>'
+                '<Anagrafica><Denominazione>%s</Denominazione></Anagrafica></DatiAnagrafici>'
+                % (a['nazione'], a['piva'] or '99999999999', escape(a['denom'][:80])))
     if not a['persona']:
         return ('<IdFiscaleIVA><IdPaese>IT</IdPaese><IdCodice>%s</IdCodice></IdFiscaleIVA>'
                 '<CodiceFiscale>%s</CodiceFiscale>'
@@ -95,6 +111,7 @@ def anagrafica(o):
                if (c.get('ragione_sociale') or '').strip().lower().startswith(nome.lower()) and len(nome) >= 5]
         if len(cand) == 1: g = cand[0]
     sib = SIBILL.get(norm(a.get('partita_iva')) or norm(g.get('piva'))) or {}
+    naz = (a.get('nazione') or 'IT').strip().upper()[:2] or 'IT'
     return {
         'sdi_sibill': (sib.get('sdi') or '').strip(),
         'denom': a.get('ragione_sociale') or g.get('ragione_sociale') or nome,
@@ -116,7 +133,12 @@ def anagrafica(o):
                           a.get('provincia') or g.get('provincia')),
         'cap':   norm(a.get('cap') or g.get('cap'))[:5],
         'citta': (a.get('citta') or g.get('citta') or '').strip(),
-        'prov':  (a.get('provincia') or g.get('provincia') or '').strip()[:2],
+        # La provincia esiste in Italia. Per un cliente estero il campo si
+        # omette: "LUGANO" troncato a "LU" farebbe risultare Lucca.
+        'prov':  ((a.get('provincia') or g.get('provincia') or '').strip()[:2]
+                  if naz == 'IT' else ''),
+        'nazione': naz,
+        'estero':  naz != 'IT',
         'sdi':   (a.get('codice_univoco') or '').strip(),
         'pec':   (a.get('pec') or '').strip(),
         # UNA PERSONA NON E' UN'AZIENDA (Luca 22/08/2026). La fattura elettronica
@@ -175,14 +197,17 @@ def sel():
         n = str(o['ddt_numero'] or '').strip()
         imp = float(o['totale_imponibile'] or 0)
         if not data or data < '2026-08-03' or not n: continue
+        if SOLO and n not in SOLO: continue
         if (o['campionatura'] and imp == 0) or n in ELIOR: continue
         a = anagrafica(o)
         if a['persona']:
             # a un privato serve il CODICE FISCALE (16 caratteri), non la P.IVA
             if not re.fullmatch(r'[A-Z0-9]{16}', (a['cf'] or '').upper()): continue
-        elif len(a['piva']) != 11:
+        elif not a['estero'] and len(a['piva']) != 11:
             continue
-        if not a['citta'] or not a['prov']: continue
+        # La provincia si pretende in Italia. Un cliente estero non ce l'ha e
+        # non deve averla: basta la citta' e la nazione.
+        if not a['citta'] or (not a['prov'] and not a['estero']): continue
         # IL METODO DI PAGAMENTO DEVE DIRE QUANDO SI INCASSA.
         # Sull'ordine puo' non esserci: vale quello dell'anagrafica del cliente,
         # come nel magazzino. Ma se non e' una forma leggibile (es. "Da
@@ -201,6 +226,16 @@ def sel():
     out.sort(key=lambda r: (r[0], int(r[1])))
     return out
 
+# Perche' l'IVA non si applica. Lo SDI accetta la fattura anche senza, ma chi la
+# legge (e chi la controlla) deve trovare scritto l'articolo.
+UE = {'AT','BE','BG','CY','CZ','DE','DK','EE','ES','FI','FR','GR','HR','HU','IE',
+      'IT','LT','LU','LV','MT','NL','PL','PT','RO','SE','SI','SK'}
+
+RIF_NORMA = {
+    'N3.1': 'Operazione non imponibile art. 8 DPR 633/72',
+    'N3.2': 'Cessione intracomunitaria art. 41 DL 331/93',
+}
+
 def q(v, dec=2):
     return ('%.' + str(dec) + 'f') % round(float(v or 0) + 1e-9, dec)
 
@@ -214,17 +249,42 @@ def fattura(numero, data_doc, o, a, righe):
     if not cand and re.fullmatch(r'[A-Za-z0-9]{7}', a.get('sdi_sibill') or '') and a['sdi_sibill'] != '0000000':
         cand = a['sdi_sibill']
     dest = cand or (a['sdi'] if re.fullmatch(r'[A-Za-z0-9]{7}', a['sdi'] or '') else '0000000')
+    # Il cliente estero non e' sullo SDI: la fattura si deposita e basta, e il
+    # recapito e' la sigla convenzionale XXXXXXX. La copia di cortesia gliela
+    # mandiamo noi via email.
+    if a['estero']: dest = 'XXXXXXX'
     pec = a['pec'] if dest == '0000000' and a['pec'] else ''
     L = []
     imponibili = {}
-    for i, r in enumerate(sorted(righe, key=lambda x: x['ordine_riga'] or 0), 1):
+    # ordine_riga e' testo nel database: ordinato per alfabeto la riga 40 finisce
+    # prima della 5. Le righe della fattura vanno nell'ordine del documento.
+    for i, r in enumerate(sorted(righe, key=lambda x: float(x['ordine_riga'] or 0)), 1):
         qta = float(r['quantita_ordinata'] or 0); pu = float(r['prezzo_unitario'] or 0)
         sc = [float(r.get(k) or 0) for k in ('sconto_pct','sconto2_pct','sconto3_pct')]
         netto = qta * pu
         for s in sc: netto *= (1 - s/100)
         al = float(r['iva_pct'] or 0)
-        imponibili.setdefault(al, 0.0)
-        imponibili[al] += netto
+        # UNA RIGA A ZERO DEVE DIRE PERCHE'. Aliquota 0 senza natura non
+        # esiste per lo SDI: e' il caso dell'export (N3.1, la merce esce
+        # dall'Italia e l'IVA non si applica). La natura la scrive il
+        # magazzino sulla riga, qui si riporta e basta: non si inventa.
+        nat = (r.get('natura_iva') or '').strip().upper()
+        if al == 0 and not nat:
+            raise ValueError('riga "%s" a IVA zero senza natura: lo SDI la scarta'
+                             % (r['descrizione_prodotto'] or '')[:40])
+        if al != 0: nat = ''
+        # LA NATURA DEVE ESSERE COERENTE CON DOVE VA LA MERCE. N3.2 e' la
+        # cessione intracomunitaria: verso la Svizzera non esiste, e' export
+        # (N3.1). Due righe della Bottega di Lugano erano state inserite cosi'
+        # (24/08/2026): stessa fattura, stesso camion, due nature diverse.
+        if nat == 'N3.2' and a['nazione'] not in UE:
+            raise ValueError('riga "%s": natura N3.2 (intra-UE) verso %s che non e nell Unione'
+                             % ((r['descrizione_prodotto'] or '')[:40], a['nazione']))
+        if nat in ('N3.1','N3.2') and not a['estero']:
+            raise ValueError('riga "%s": natura %s su un cliente italiano'
+                             % ((r['descrizione_prodotto'] or '')[:40], nat))
+        imponibili.setdefault((al, nat), 0.0)
+        imponibili[(al, nat)] += netto
         sconti = ''.join(
             '<ScontoMaggiorazione><Tipo>SC</Tipo><Percentuale>%s</Percentuale></ScontoMaggiorazione>' % q(s)
             for s in sc if s)
@@ -232,8 +292,9 @@ def fattura(numero, data_doc, o, a, righe):
             '<DettaglioLinee><NumeroLinea>%d</NumeroLinea>'
             '<Descrizione>%s</Descrizione><Quantita>%s</Quantita>'
             '<PrezzoUnitario>%s</PrezzoUnitario>%s<PrezzoTotale>%s</PrezzoTotale>'
-            '<AliquotaIVA>%s</AliquotaIVA></DettaglioLinee>'
-            % (i, escape((r['descrizione_prodotto'] or '').strip()[:1000]), q(qta,2), q(pu,4), sconti, q(netto), q(al)))
+            '<AliquotaIVA>%s</AliquotaIVA>%s</DettaglioLinee>'
+            % (i, escape((r['descrizione_prodotto'] or '').strip()[:1000]), q(qta,2), q(pu,4), sconti, q(netto), q(al),
+               ('<Natura>%s</Natura>' % nat) if nat else ''))
     # LA RIGA DESCRITTIVA RESTA SUL DDT E NON ENTRA IN FATTURA (Luca
     # 22/08/2026: "ok nel DDT ma nella fattura la riga descrittiva deve
     # scomparire"). E' un'istruzione per chi consegna ("accettare il titolo cosi'
@@ -243,15 +304,18 @@ def fattura(numero, data_doc, o, a, righe):
     # (Luca 22/08/2026): se su un'aliquota toglie piu' di quanto c'e', il
     # riepilogo IVA uscirebbe negativo e la fattura non sta in piedi. Meglio non
     # generarla e dirlo, che mandarla e vedersela tornare indietro.
-    negative = [al for al, v in imponibili.items() if v < 0]
+    negative = [k[0] for k, v in imponibili.items() if v < 0]
     if negative:
         raise ValueError('aliquota %s sotto zero: l abbuono supera la merce' %
                          ', '.join(q(a) for a in negative))
     riep = ''.join(
-        '<DatiRiepilogo><AliquotaIVA>%s</AliquotaIVA><ImponibileImporto>%s</ImponibileImporto>'
-        '<Imposta>%s</Imposta><EsigibilitaIVA>I</EsigibilitaIVA></DatiRiepilogo>'
-        % (q(al), q(v), q(v*al/100)) for al, v in sorted(imponibili.items()))
-    tot = sum(v*(1+al/100) for al, v in imponibili.items())
+        '<DatiRiepilogo><AliquotaIVA>%s</AliquotaIVA>%s<ImponibileImporto>%s</ImponibileImporto>'
+        '<Imposta>%s</Imposta>%s<EsigibilitaIVA>I</EsigibilitaIVA></DatiRiepilogo>'
+        % (q(al), ('<Natura>%s</Natura>' % nat) if nat else '', q(v), q(v*al/100),
+           ('<RiferimentoNormativo>%s</RiferimentoNormativo>' % RIF_NORMA[nat])
+           if nat in RIF_NORMA else '')
+        for (al, nat), v in sorted(imponibili.items()))
+    tot = sum(v*(1+al/100) for (al, nat), v in imponibili.items())
     metodo = o.get('metodo_pagamento') or ''
     scad = scadenza(metodo, data_doc)
     x = ['<?xml version="1.0" encoding="UTF-8"?>',
@@ -271,8 +335,15 @@ def fattura(numero, data_doc, o, a, righe):
       '<Comune>ROMA</Comune><Provincia>RM</Provincia><Nazione>IT</Nazione></Sede></CedentePrestatore>',
       '<CessionarioCommittente><DatiAnagrafici>',
       anagrafica_cliente(a),
-      '<Sede><Indirizzo>%s</Indirizzo><CAP>%s</CAP><Comune>%s</Comune><Provincia>%s</Provincia><Nazione>IT</Nazione></Sede>'
-        % (escape(a['via'][:60] or 'N.D.'), a['cap'] or '00000', escape(a['citta'][:60]), a['prov']),
+      # Il CAP della fattura elettronica e' di cinque cifre e basta: quello
+      # svizzero ne ha quattro (6962) e il tracciato lo rifiuta, quindi per
+      # l'estero si scrive 00000, che e' la convenzione.
+      '<Sede><Indirizzo>%s</Indirizzo><CAP>%s</CAP><Comune>%s</Comune>%s<Nazione>%s</Nazione></Sede>'
+        % (escape(a['via'][:60] or 'N.D.'),
+           ('00000' if a['estero'] else (a['cap'] or '00000')),
+           escape(a['citta'][:60]),
+           ('<Provincia>%s</Provincia>' % a['prov']) if a['prov'] else '',
+           a['nazione']),
       '</CessionarioCommittente></FatturaElettronicaHeader>',
       '<FatturaElettronicaBody><DatiGenerali>',
       '<DatiGeneraliDocumento><TipoDocumento>TD24</TipoDocumento><Divisa>EUR</Divisa>',

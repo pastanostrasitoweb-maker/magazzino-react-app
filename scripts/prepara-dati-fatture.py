@@ -31,10 +31,15 @@ d = {
  'ordini': tutte('ordini?select=id_ordine,ddt_numero,cliente,id_cliente,totale_imponibile,'
                  'campionatura,data_preparato,data_ordine,metodo_pagamento,regime_iva,nota_ddt&archiviato=eq.true'),
  'ov':     tutte('clienti_override?select=ragione_sociale,partita_iva,citta,provincia,cap,sede_legale,'
-                 'codice_univoco,pec,codice_cliente,persona_fisica,nome,cognome'),
+                 'codice_univoco,pec,codice_cliente,persona_fisica,nome,cognome,nazione,metodo_pagamento'),
+ # Il metodo di pagamento gia' ridotto alla forma canonica DAL DATABASE: e' la
+ # stessa regola che usa il magazzino, e senza di lei la fattura non sa quando
+ # si incassa e non si genera.
+ 'metodi': tutte('metodi_fattura?select=ddt_numero,effettivo,canonico'),
  'gest':   tutte('clienti_gestionale?select=codice_cliente,ragione_sociale,piva,codice_fiscale,citta,provincia,cap,indirizzo'),
  'righe':  tutte('righe_ordine?select=id_ordine,ordine_riga,descrizione_prodotto,quantita_ordinata,'
                  'prezzo_unitario,sconto_pct,sconto2_pct,sconto3_pct,iva_pct,natura_iva'),
 }
 json.dump(d, open('/tmp/dati-xml.json', 'w'))
+json.dump({str(m['ddt_numero']).strip(): m for m in d.pop('metodi')}, open('/tmp/metodi.json', 'w'))
 print('letti: ' + ' · '.join('%s %d' % (k, len(v)) for k, v in d.items()))

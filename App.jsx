@@ -6,8 +6,10 @@ import {
   nettoRiga,
   impostaOperatore,
   storicoStatiOrdine,
+  supabase,
 } from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
+import { selezionaFatture, xmlFattura, zipDiFile, nomeFile } from "./src/fatture.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
 import { CORRIERI } from "./src/logistica/data/corrieri.js";
 import {
@@ -36,6 +38,7 @@ import {
   Truck,
   ChevronDown,
   MoreHorizontal,
+  FileText,
 } from "lucide-react";
 
 // Storico: backend Apps Script (JSONP) usato fino al 2026-06-09, ora sostituito
@@ -3780,6 +3783,206 @@ function ChatPanel({ tabella, authUser, height = "42vh", vuotoLabel = "Nessun me
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// LE FATTURE DEL PERIODO.
+// Luca, 24/08/2026: "dove vado per generare la fattura senza chiedere a te?".
+// Qui. Il pannello legge i DDT archiviati, dice quali sono fatturabili e con
+// che motivo gli altri no, e scarica uno zip di XML da trascinare in Sibill.
+//
+// Il numero di partenza NON si digita a caso: lo propone il registro delle
+// fatture gia' generate (ultimo emesso + 1). Un numero doppio o un buco nella
+// serie e' un problema fiscale, non un fastidio.
+function PannelloFatture({ onChiudi }) {
+  const [stato, setStato] = useState("carico");
+  const [errore, setErrore] = useState("");
+  const [sel, setSel] = useState(null);
+  const [daNumero, setDaNumero] = useState("");
+  const [mostra, setMostra] = useState("pronte");
+  const [fatto, setFatto] = useState(null);
+  // Un click, una azione: tre click hanno gia' creato quattro ordini veri.
+  const { esegui, attive } = useUnaAzioneAllaVolta();
+
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      try {
+        // PostgREST taglia a mille righe SENZA dirlo: si pagina sempre.
+        const tutte = async (tabella, campi, filtro) => {
+          const out = [];
+          for (let da = 0; ; da += 1000) {
+            let query = supabase.from(tabella).select(campi).range(da, da + 999);
+            if (filtro) query = filtro(query);
+            const { data, error } = await query;
+            if (error) throw new Error(`${tabella}: ${error.message}`);
+            out.push(...(data || []));
+            if ((data || []).length < 1000) return out;
+          }
+        };
+        const [ordini, ov, gest, righe, metodi, fatte, recapiti] = await Promise.all([
+          tutte("ordini", "id_ordine,ddt_numero,cliente,id_cliente,totale_imponibile,campionatura,data_preparato,data_ordine",
+            (q) => q.eq("archiviato", true)),
+          tutte("clienti_override", "ragione_sociale,partita_iva,citta,provincia,cap,sede_legale,codice_univoco,pec,codice_cliente,persona_fisica,nome,cognome,nazione"),
+          tutte("clienti_gestionale", "codice_cliente,ragione_sociale,piva,codice_fiscale,citta,provincia,cap,indirizzo"),
+          tutte("righe_ordine", "id_ordine,ordine_riga,descrizione_prodotto,quantita_ordinata,prezzo_unitario,sconto_pct,sconto2_pct,sconto3_pct,iva_pct,natura_iva"),
+          tutte("metodi_fattura", "ddt_numero,effettivo,canonico"),
+          tutte("fatture_generate", "ddt_numero,numero,data_fattura,cliente,totale,fuori_app"),
+          tutte("recapiti_sdi", "piva,sdi,pec"),
+        ]);
+        if (!vivo) return;
+        const r = selezionaFatture({ ordini, ov, gest, righe, metodi, fatte, recapiti });
+        setSel(r);
+        setDaNumero(String(r.prossimoNumero));
+        setStato("pronto");
+      } catch (e) {
+        if (vivo) { setErrore(String(e.message || e)); setStato("errore"); }
+      }
+    })();
+    return () => { vivo = false; };
+  }, []);
+
+  const genera = () => esegui("genera-fatture", async () => {
+    const partenza = Number(daNumero);
+    if (!Number.isInteger(partenza) || partenza <= 0) {
+      alert("Il numero della prima fattura deve essere un numero intero.");
+      return;
+    }
+    if (partenza !== sel.prossimoNumero &&
+        !window.confirm(
+          `Il registro dice che la prossima fattura e' la ${sel.prossimoNumero}, tu hai scritto ${partenza}.\n` +
+          `Un numero doppio o un buco nella serie e' un problema fiscale. Vai avanti lo stesso?`)) return;
+
+    const file = [];
+    const registro = [];
+    const nonRiuscite = [];
+    let numero = partenza;
+    for (const p of sel.pronte) {
+      try {
+        const { xml, totale } = xmlFattura(numero, p.data, p.ordine, p.a, p.righe);
+        file.push({ nome: nomeFile(numero), contenuto: xml });
+        registro.push({ ddt_numero: p.ddt, numero, data_fattura: p.data, cliente: p.cliente, totale: Number(totale.toFixed(2)), fuori_app: false });
+        numero += 1;
+      } catch (e) {
+        // La fattura che non sta in piedi non si genera e non consuma un
+        // numero: si dice cos'ha che non va e si va avanti con le altre.
+        nonRiuscite.push({ ddt: p.ddt, cliente: p.cliente, motivo: String(e.message || e) });
+      }
+    }
+    if (!file.length) { alert("Non c'e' niente da generare."); return; }
+
+    // PRIMA SI SCRIVE IL REGISTRO, POI SI SCARICA. Se il registro non prende
+    // (rete, permessi) i file non escono: meglio nessuna fattura che una
+    // fattura fuori registro, che il mese prossimo verrebbe rifatta col numero
+    // di un'altra.
+    const { error } = await supabase.from("fatture_generate").insert(registro);
+    if (error) { alert("Le fatture NON sono state generate: il registro non ha accettato la scrittura.\n\n" + error.message); return; }
+
+    const blob = zipDiFile(file);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fatture-${partenza}-${numero - 1}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    setFatto({ quante: file.length, da: partenza, a: numero - 1, nonRiuscite,
+      totale: registro.reduce((s, r) => s + r.totale, 0) });
+  });
+
+  if (stato === "carico") return <div style={{ padding: 24, color: "#66758b" }}>Leggo i documenti…</div>;
+  if (stato === "errore") return <div style={{ padding: 24, color: "#b91c1c" }}>Non riesco a leggere: {errore}</div>;
+
+  const lordo = sel.pronte.reduce((s, p) => s + p.imponibile, 0);
+  const elenco = mostra === "pronte" ? sel.pronte : mostra === "escluse" ? sel.escluse : sel.gia;
+
+  if (fatto) {
+    return (
+      <div style={{ padding: 4 }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: "#065f46", marginBottom: 8 }}>
+          Generate {fatto.quante} fatture, dalla {fatto.da} alla {fatto.a}, per {fatto.totale.toFixed(2)} €.
+        </div>
+        <div style={{ color: "#66758b", fontSize: 13.5, lineHeight: 1.6 }}>
+          Lo zip e' nella cartella dei download: aprilo e trascina gli XML dentro Sibill.
+          I DDT sono segnati come fatturati e non usciranno piu' in questo elenco.
+        </div>
+        {fatto.nonRiuscite.length ? (
+          <div style={{ marginTop: 14, border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 12, padding: 12 }}>
+            <b style={{ color: "#7f1d1d" }}>{fatto.nonRiuscite.length} non sono uscite:</b>
+            {fatto.nonRiuscite.map((x) => (
+              <div key={x.ddt} style={{ fontSize: 13, marginTop: 4 }}>DDT {x.ddt} · {x.cliente} — {x.motivo}</div>
+            ))}
+          </div>
+        ) : null}
+        <button style={{ ...btnStyle("primary"), marginTop: 16 }} onClick={onChiudi}>Chiudi</button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 12.5, color: "#66758b", marginBottom: 4 }}>Numero della prima fattura</div>
+          <input style={{ ...inputStyle(), width: 130 }} value={daNumero}
+            onChange={(e) => setDaNumero(e.target.value.replace(/\D/g, ""))} inputMode="numeric" />
+        </div>
+        <div style={{ fontSize: 12.5, color: "#66758b", paddingBottom: 12 }}>
+          L'ultima generata e' la <b>{sel.prossimoNumero - 1}</b>. Le fatture prendono la data del loro DDT.
+        </div>
+        <div style={{ flex: 1 }} />
+        <button
+          style={btnStyle("primary", !sel.pronte.length || attive["genera-fatture"])}
+          disabled={!sel.pronte.length || Boolean(attive["genera-fatture"])}
+          onClick={genera}
+        >
+          {attive["genera-fatture"] ? "Genero…" : `Genera ${sel.pronte.length} fatture`}
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        {[["pronte", `Da fatturare (${sel.pronte.length})`],
+          ["escluse", `Fuori, e perche' (${sel.escluse.length})`],
+          ["gia", `Gia' fatturate (${sel.gia.length})`]].map(([id, testo]) => (
+          <button key={id} style={btnStyle(mostra === id ? "primary" : "outline")} onClick={() => setMostra(id)}>{testo}</button>
+        ))}
+      </div>
+
+      {mostra === "pronte" ? (
+        <div style={{ fontSize: 13.5, color: "#334155", marginBottom: 8 }}>
+          Imponibile totale <b>{lordo.toFixed(2)} €</b>, numeri dalla {Number(daNumero) || sel.prossimoNumero} alla{" "}
+          {(Number(daNumero) || sel.prossimoNumero) + sel.pronte.length - 1}.
+        </div>
+      ) : null}
+
+      <div style={{ maxHeight: "48vh", overflow: "auto", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <tbody>
+            {elenco.map((r) => (
+              <tr key={r.ddt} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "#64748b" }}>{r.data || "—"}</td>
+                <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>DDT <b>{r.ddt}</b></td>
+                <td style={{ padding: "7px 10px" }}>{r.cliente}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
+                  {r.numero ? <span style={{ color: "#065f46" }}>fattura {r.numero}</span>
+                    : r.fuori_app ? <span style={{ color: "#64748b" }}>fatturata a parte</span>
+                    : (Number(r.imponibile) || Number(r.totale) || 0).toFixed(2) + " €"}
+                </td>
+                {mostra === "escluse" ? (
+                  <td style={{ padding: "7px 10px", color: "#b45309", maxWidth: 300 }}>{r.motivo}</td>
+                ) : null}
+              </tr>
+            ))}
+            {!elenco.length ? (
+              <tr><td style={{ padding: 16, color: "#94a3b8" }}>Niente qui.</td></tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [page, setPage] = useState("ordini");
   const [orders, setOrders] = useState([]);
@@ -3928,6 +4131,7 @@ export default function App() {
   const [nuovoCodiceCliente, setNuovoCodiceCliente] = useState(null);
   // Archivio: mostra solo gli ordini a cui manca qualcosa per DDT/fattura.
   const [soloIncompleti, setSoloIncompleti] = useState(false);
+  const [pannelloFatture, setPannelloFatture] = useState(false);
   // Registro DDT (amministrazione): ricerca per numero, cliente o ordine.
   const [ddtSearch, setDdtSearch] = useState("");
   // Tracciabilita' lotti in Archivio: si cerca un articolo (o un lotto), si
@@ -11871,10 +12075,26 @@ ${isConferma
                   Tutti i DDT emessi, dal più recente. {loadingArchive ? "Carico…" : ""}
                 </div>
               </div>
-              <button style={btnStyle("outline", loadingArchive)} disabled={loadingArchive} onClick={loadArchivedOrders}>
-                <RefreshCw size={18} /> {loadingArchive ? "Carico…" : "Aggiorna"}
-              </button>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {isAdmin ? (
+                  <button style={btnStyle("primary")} onClick={() => setPannelloFatture(true)}>
+                    <FileText size={18} /> Genera fatture
+                  </button>
+                ) : null}
+                <button style={btnStyle("outline", loadingArchive)} disabled={loadingArchive} onClick={loadArchivedOrders}>
+                  <RefreshCw size={18} /> {loadingArchive ? "Carico…" : "Aggiorna"}
+                </button>
+              </div>
             </div>
+
+            <Modal
+              open={pannelloFatture}
+              title="Fatture elettroniche da trascinare in Sibill"
+              onClose={() => setPannelloFatture(false)}
+              maxWidth={860}
+            >
+              {pannelloFatture ? <PannelloFatture onChiudi={() => setPannelloFatture(false)} /> : null}
+            </Modal>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
               <div style={{

@@ -47,6 +47,11 @@ const supabase = createClient(SUPABASE_URL || "", SUPABASE_ANON_KEY || "", {
   global: { headers: testataOperatore },
 });
 
+// Il client nudo, per chi deve leggere tabelle che l'adapter non conosce
+// (la generazione delle fatture legge anagrafiche, righe e registri tutti
+// insieme, e passarle una per una da qui sarebbe solo giro lungo).
+export { supabase };
+
 // ---------- helpers ----------
 
 const boolToSiNo = (v) => (v === true ? "SI" : "NO");
