@@ -462,6 +462,14 @@ async function bulkLoad() {
   const clienti = [...clientiLocali];
   try {
     const codici = new Set(clientiLocali.map((c) => String(c.Codice_Cliente_TS || "")));
+    // UN CLIENTE, UNA RIGA NEL SELETTORE. Il cliente creato dall'app sta sia
+    // nella tabella clienti sia nel registro (il registro gli ha dato il
+    // codice): senza questo filtro compariva DUE volte per ogni creazione, e
+    // coi click ripetuti si arrivava alle "6-7 copie" viste da Luca (24/08).
+    const idVisti = new Set(clientiLocali.map((c) => String(c.ID_Cliente)));
+    const pivaViste = new Set(
+      clientiLocali.map((c) => String(c.PIVA || "").replace(/\D/g, "")).filter((x) => x.length === 11)
+    );
     const PAGE = 1000;
     for (let from = 0; from < 20000; from += PAGE) {
       const { data, error } = await supabase
@@ -474,6 +482,9 @@ async function bulkLoad() {
         const cod = String(r.codice || "");
         if (!cod || !r.ragione_sociale) continue;
         if (r.codice_gestionale && codici.has(String(r.codice_gestionale))) continue;
+        if (idVisti.has(cod)) continue;
+        const pivaReg = String(r.piva || "").replace(/\D/g, "");
+        if (pivaReg.length === 11 && pivaViste.has(pivaReg)) continue;
         clienti.push({
           ID_Cliente: cod,
           Ragione_Sociale: r.citta ? `${r.ragione_sociale} · ${r.citta}` : r.ragione_sociale,
@@ -2577,6 +2588,42 @@ async function createCliente(params) {
   const p = parsePayload(params);
   const ragione = (p.ragioneSociale || p.ragione_sociale || p.nome || "").trim();
   if (!ragione) return { success: false, error: "Ragione sociale mancante" };
+
+  // CREARE DUE VOLTE LO STESSO CLIENTE NON DEVE ESSERE POSSIBILE (Luca
+  // 24/08/2026: "continua a crearne tipo 6-7 copie"). Se un cliente con la
+  // stessa P.IVA o con lo stesso identico nome esiste gia', si RESTITUISCE
+  // quello: niente codice nuovo, niente riga nuova. Il doppio click, il
+  // ritentativo per la rete lenta e il collega che lo ricrea perche' non lo
+  // trova diventano tutti la stessa cosa: il cliente che c'era gia'.
+  const pivaPulita = String(p.piva || "").replace(/\D/g, "");
+  const nomePulito = ragione.toLowerCase().replace(/\s+/g, " ");
+  {
+    let esistente = null;
+    if (pivaPulita.length === 11) {
+      const r = await supabase.from("clienti").select("*").eq("piva", pivaPulita).limit(1);
+      if (!r.error && r.data && r.data.length) esistente = r.data[0];
+      if (!esistente) {
+        const m = await supabase.from("clienti_master").select("codice, ragione_sociale")
+          .eq("piva", pivaPulita).limit(1);
+        if (!m.error && m.data && m.data.length) {
+          return { success: true, esistente: true, codice: String(m.data[0].codice),
+                   cliente: { id_cliente: String(m.data[0].codice), ragione_sociale: m.data[0].ragione_sociale } };
+        }
+      }
+    }
+    if (!esistente) {
+      const r = await supabase.from("clienti").select("*").ilike("ragione_sociale", ragione).limit(5);
+      if (!r.error && r.data) {
+        esistente = r.data.find(
+          (c) => String(c.ragione_sociale || "").toLowerCase().replace(/\s+/g, " ") === nomePulito
+        ) || null;
+      }
+    }
+    if (esistente) {
+      return { success: true, esistente: true, cliente: esistente,
+               codice: String(esistente.id_cliente), codiceNuovo: false };
+    }
+  }
 
   let idCliente = p.id || p.idCliente || "";
   let codiceNuovo = false;

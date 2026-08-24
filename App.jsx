@@ -2607,6 +2607,18 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
 
   const valorizzato = righe.some((l) => l.prezzoUnitario != null);
 
+  // CAMPIONATURA GRATUITA: l'ordine e' un regalo, i prezzi a zero sono lo
+  // stato giusto (Luca 24/08/2026: "l'app non deve richiedere il prezzo:
+  // l'ordine e' gratis"). Niente riquadro rosso, niente "metti i prezzi".
+  if (order.campionatura && !Number(order.totaleImponibile || 0) && !valorizzato) {
+    return (
+      <div style={{ border: "1px solid #ddd6fe", background: "#f5f3ff", borderRadius: 14,
+        padding: 12, color: "#5b21b6", fontWeight: 800, fontSize: 13.5 }}>
+        🎁 Campionatura gratuita: nessun prezzo da mettere.
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -4231,6 +4243,7 @@ export default function App() {
   // Archivio: mostra solo gli ordini a cui manca qualcosa per DDT/fattura.
   const [soloIncompleti, setSoloIncompleti] = useState(false);
   const [pannelloFatture, setPannelloFatture] = useState(false);
+  const [impegnatoDi, setImpegnatoDi] = useState(null);
   const [ordineDaGuardare, setOrdineDaGuardare] = useState(null);
   // Registro DDT (amministrazione): ricerca per numero, cliente o ordine.
   const [ddtSearch, setDdtSearch] = useState("");
@@ -5317,8 +5330,15 @@ export default function App() {
           category: product?.category || "",
           expiry: lot.expiry ? String(lot.expiry).slice(0, 10) : "",
           loaded: Number(info.total ?? lot.loadedQty ?? 0),
-          committed: Number(info.assigned ?? 0),
-          available: Number(info.assignable ?? 0),
+          // IL LOTTO NON SI IMPEGNA PRIMA DELLA PREPARAZIONE (Luca 24/08/2026:
+          // "mi deve impegnare solo ed esclusivamente l'articolo e non i lotti
+          // fino a quando non vengono assegnati e preparati"). L'assegnazione
+          // di un ordine ancora da preparare e' una proposta di prelievo, non
+          // merce prenotata: l'impegno vive sul PRODOTTO (somma degli ordini
+          // aperti), il lotto resta a giacenza piena finche' la merce non esce.
+          // Alla preparazione lo scarico riduce la giacenza, e i conti tornano.
+          committed: 0,
+          available: Number(info.total ?? lot.loadedQty ?? 0),
         };
       })
       .filter((row) => row.loaded > 0 || row.committed > 0)
@@ -6555,7 +6575,7 @@ export default function App() {
     return r;
   };
 
-  const creaClienteScheda = async (f) => {
+  const creaClienteScheda = (f) => azioneUnica("crea-cliente", async () => {
     // Prima il codice: senza codice il cliente e' invisibile al CRM e allo
     // storico, e il DDT non si puo' emettere. Se questo passo non riesce non si
     // scrive niente da nessuna parte.
@@ -6586,7 +6606,40 @@ export default function App() {
     // Si resta dentro la scheda, adesso in modifica, cosi' la sede si aggiunge
     // subito senza cercare il cliente nell'elenco.
     setClienteAperto({ idAppena: idNuovo, chiave });
-  };
+  });
+
+  // La creazione dal flusso ORDINE: stessa scheda completa, ma il cliente
+  // appena creato finisce selezionato sull'ordine che si stava caricando.
+  const creaClienteDaOrdine = (f) => azioneUnica("crea-cliente", async () => {
+    const res = await callSheetsApi({
+      action: "createCliente",
+      payload: JSON.stringify({
+        ragioneSociale: f.ragione_sociale,
+        piva: f.partita_iva,
+        codiceFiscale: f.codice_fiscale,
+        codiceDestinatarioTs: f.codice_univoco,
+        categoria: f.tipologia,
+        note: f.note,
+      }),
+    });
+    if (!res || !res.success) {
+      alert("Cliente NON creato: " + ((res && res.error) || "errore"));
+      return;
+    }
+    const idNuovo = String((res.cliente && res.cliente.id_cliente) || res.codice || "");
+    const chiave = chiaveAnagrafica({ name: f.ragione_sociale, piva: f.partita_iva }, f.partita_iva);
+    if (chiave) await salvaSchedaOverride(chiave, f);
+    await loadDataFromSheets();
+    setNewOrderClientId(idNuovo);
+    setNewOrderCustomer(f.ragione_sociale);
+    setClientDialogOpen(false);
+    alert(
+      (res.esistente
+        ? `Questo cliente esisteva gia' con il codice ${idNuovo}: uso quello, nessuna copia creata.`
+        : `Cliente creato con il codice ${idNuovo}.`) +
+      "\n\nE' gia' selezionato sull'ordine."
+    );
+  });
 
   const salvaClienteScheda = async (cliente, f) => {
     const chiave = chiaveAnagrafica(cliente, f.partita_iva);
@@ -10379,6 +10432,13 @@ ${isConferma
                             nome={agenteDi(selectedOrder)}
                             onApri={() => openCompletaAnagrafica(selectedOrder)}
                           />
+                          {/* CAMPIONATURA E PEDANA SI DICHIARANO QUI (Luca
+                              24/08/2026): "deve apparire in fase di inserimento
+                              d'ordine, non quando sono gia' preparati". Prima le
+                              due spunte comparivano solo nei Preparati, cioe'
+                              quando la merce era gia' pronta. */}
+                          {spuntaCampionatura(selectedOrder, true)}
+                          {spuntaPedanaFrozen(selectedOrder, true)}
                           {/* Il badge del pagamento E' il comando: dice lo stato
                               (compreso lo scaduto calcolato dal Cashflow) e si
                               apre per cambiarlo. Prima erano tre cose separate,
@@ -13203,8 +13263,23 @@ ${isConferma
                         <div style={{ textAlign: "right", color: "#07153a", fontWeight: 800 }}>{group.totalLoaded}</div>
                       )}
                       {!isSmallLayout && (
-                        <div style={{ textAlign: "right", color: group.totalCommitted > 0 ? "#b45309" : "#9aa7b8", fontWeight: 800 }}>
-                          {group.totalCommitted}
+                        <div style={{ textAlign: "right" }}>
+                          {/* L'IMPEGNATO SI APRE (Luca 24/08/2026: "mi dai la
+                              possibilita' di cliccare gli impegnati e capire
+                              dove sono impegnati? spesso non ci torna dove
+                              stanno"). Cliccando si vede ordine per ordine. */}
+                          {group.totalCommitted > 0 ? (
+                            <button
+                              style={{ background: "none", border: "1px dashed #d97706", borderRadius: 8,
+                                color: "#b45309", fontWeight: 800, cursor: "pointer", padding: "2px 10px", fontSize: 14 }}
+                              title="Clicca per vedere in quali ordini e' impegnato"
+                              onClick={() => setImpegnatoDi(group.productId)}
+                            >
+                              {group.totalCommitted}
+                            </button>
+                          ) : (
+                            <span style={{ color: "#9aa7b8", fontWeight: 800 }}>0</span>
+                          )}
                         </div>
                       )}
 
@@ -14362,134 +14437,29 @@ ${isConferma
 
         <Modal
           open={clientDialogOpen}
-          title="Anagrafica clienti"
+          title="Nuovo cliente"
           onClose={() => setClientDialogOpen(false)}
-          maxWidth={760}
+          maxWidth={860}
         >
-          <div style={{ display: "grid", gap: 16 }}>
-            <div style={{
-              border: "1px solid #dbe2ea", borderRadius: 12, padding: 14,
-              display: "grid", gap: 10, background: "#f8fafc",
-            }}>
-              <div style={{ fontSize: 16, fontWeight: 800 }}>
-                {editingClientId ? "Modifica cliente" : "Nuovo cliente"}
-              </div>
-              {nuovoCodiceCliente ? (
-                <div style={{
-                  border: "1px solid #86efac", background: "#f0fdf4", borderRadius: 10,
-                  padding: "10px 12px", display: "flex", alignItems: "center", gap: 10,
-                }}>
-                  <div style={{ flex: 1, fontSize: 13, color: "#14532d" }}>
-                    <b>{nuovoCodiceCliente.nome}</b> salvato.{" "}
-                    {nuovoCodiceCliente.nuovo ? "Codice assegnato" : "Codice gia' a registro"}:{" "}
-                    <span style={{
-                      fontFamily: "ui-monospace, monospace", fontWeight: 800, fontSize: 15,
-                      background: "#dcfce7", padding: "2px 8px", borderRadius: 6,
-                    }}>{nuovoCodiceCliente.codice}</span>
-                  </div>
-                  <button
-                    style={{ ...btnStyle("outline"), height: 30, padding: "0 12px", fontSize: 12, borderRadius: 8 }}
-                    onClick={() => setNuovoCodiceCliente(null)}
-                  >Chiudi</button>
-                </div>
-              ) : null}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div>
-                  <label style={labelStyle()}>Ragione sociale</label>
-                  <input
-                    style={inputStyle()}
-                    value={clientForm.ragioneSociale}
-                    onChange={(e) => setClientForm((f) => ({ ...f, ragioneSociale: e.target.value }))}
-                    placeholder="Es. Farmacia Rossi srl"
-                  />
-                </div>
-                <div>
-                  <label style={labelStyle()}>Categoria (canale)</label>
-                  <input
-                    list="client-categories"
-                    style={inputStyle()}
-                    value={clientForm.categoria}
-                    onChange={(e) => setClientForm((f) => ({ ...f, categoria: e.target.value }))}
-                    placeholder="GDO, Farmacia, Horeca..."
-                  />
-                  <datalist id="client-categories">
-                    {clientCategories.map((cat) => <option key={cat} value={cat} />)}
-                  </datalist>
-                </div>
-                <div>
-                  <label style={labelStyle()}>Codice cliente GAMMA</label>
-                  <input
-                    style={inputStyle()}
-                    value={clientForm.codiceClienteTs}
-                    onChange={(e) => setClientForm((f) => ({ ...f, codiceClienteTs: e.target.value }))}
-                    placeholder="Codice anagrafica GAMMA"
-                  />
-                </div>
-                <div>
-                  <label style={labelStyle()}>Partita IVA</label>
-                  <input
-                    style={inputStyle()}
-                    value={clientForm.piva}
-                    onChange={(e) => setClientForm((f) => ({ ...f, piva: e.target.value }))}
-                  />
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 10 }}>
-                <button style={btnStyle("primary", savingClient)} disabled={savingClient} onClick={saveClient}>
-                  {editingClientId ? "Salva modifiche" : "Aggiungi cliente"}
-                </button>
-                {editingClientId ? (
-                  <button style={btnStyle("outline")} onClick={startNewClient}>Annulla modifica</button>
-                ) : null}
-              </div>
-            </div>
-
-            <input
-              style={inputStyle()}
-              value={clientSearch}
-              onChange={(e) => setClientSearch(e.target.value)}
-              placeholder="Cerca cliente per nome, categoria o codice..."
+          {/* UNA SOLA PORTA DI CREAZIONE (Luca 24/08/2026): "se vado su clienti
+              e faccio nuovo cliente, quella e' la schermata giusta. Non dare la
+              possibilita' di creare un cliente direttamente sull'ordine con due
+              tre campi che poi andranno integrati". Questo modale apriva un
+              mini-form con 5 campi: ora apre LA STESSA scheda completa della
+              sezione Clienti. L'unica differenza e' cosa succede dopo: il
+              cliente appena creato viene selezionato sull'ordine che si stava
+              caricando, invece di restare aperto in scheda. */}
+          {clientDialogOpen ? (
+            <SchedaCliente
+              cliente={null}
+              override={null}
+              sedi={[]}
+              agenti={agenti}
+              listini={listiniPrezzi}
+              onCrea={creaClienteDaOrdine}
+              onChiudi={() => setClientDialogOpen(false)}
             />
-
-            <div style={{ maxHeight: 320, overflowY: "auto", display: "grid", gap: 6 }}>
-              {activeClients
-                .filter((c) => {
-                  const q = clientSearch.trim().toLowerCase();
-                  if (!q) return true;
-                  return [c.name, c.category, c.codeTs, c.piva].join(" ").toLowerCase().includes(q);
-                })
-                .map((c) => (
-                  <div key={c.id} style={{
-                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                    border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 12px",
-                  }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {c.name}
-                      </div>
-                      <div style={{ fontSize: 12, color: "#64748b" }}>
-                        {c.category || "senza categoria"}
-                        {c.codeTs ? ` · GAMMA ${c.codeTs}` : " · no codice GAMMA"}
-                        {c.source === "seed" ? " · da ordini" : ""}
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                      <button style={{ ...btnStyle("outline"), padding: "4px 10px", fontSize: 13 }} onClick={() => startEditClient(c)}>
-                        Modifica
-                      </button>
-                      <button style={{ ...btnStyle("outline"), padding: "4px 10px", fontSize: 13, color: "#b91c1c" }} onClick={() => deactivateClient(c)}>
-                        Disattiva
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              {activeClients.length === 0 ? (
-                <div style={{ color: "#64748b", fontSize: 14, padding: 8 }}>
-                  Nessun cliente in anagrafica. Aggiungine uno qui sopra.
-                </div>
-              ) : null}
-            </div>
-          </div>
+          ) : null}
         </Modal>
 
         <Modal
@@ -15329,6 +15299,69 @@ ${isConferma
         </Modal>
 
         <Modal
+              open={Boolean(impegnatoDi)}
+              title="Dove e' impegnato"
+              onClose={() => setImpegnatoDi(null)}
+              maxWidth={720}
+            >
+              {(() => {
+                if (!impegnatoDi) return null;
+                const prod = products.find((pr) => String(pr.id) === String(impegnatoDi));
+                const righe = [];
+                for (const o of orders) {
+                  if (o.archived) continue;
+                  const st = String(o.status || "").trim().toLowerCase();
+                  if (st === "preparato" || st === "spedito" || st === "fermo") continue;
+                  for (const l of o.lines || []) {
+                    if (String(l.productId) !== String(impegnatoDi)) continue;
+                    const q = Number(l.qtyOrdered || 0);
+                    if (q > 0) righe.push({ ordine: o, qta: q });
+                  }
+                }
+                const tot = righe.reduce((sum, r) => sum + r.qta, 0);
+                return (
+                  <div>
+                    <div style={{ fontWeight: 900, color: "#07153a", marginBottom: 4 }}>
+                      {prod?.name || "Prodotto"} · impegnati {tot}
+                    </div>
+                    <div style={{ color: "#66758b", fontSize: 12.5, marginBottom: 10 }}>
+                      Gli ordini aperti che tengono impegnato questo articolo. I fermi non
+                      contano, i preparati hanno gia' scaricato. Clicca un ordine per aprirlo.
+                    </div>
+                    {righe.length === 0 ? (
+                      <div style={{ color: "#94a3b8", padding: 8 }}>Nessun ordine aperto lo impegna.</div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {righe.map((r, i) => (
+                          <button
+                            key={r.ordine.id + "-" + i}
+                            style={{ display: "flex", gap: 10, alignItems: "center", textAlign: "left",
+                              border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 12px",
+                              background: "#fff", cursor: "pointer", fontSize: 13.5 }}
+                            onClick={() => {
+                              setImpegnatoDi(null);
+                              setSelectedOrderId(String(r.ordine.id));
+                              setPage("ordini");
+                            }}
+                          >
+                            <b style={{ color: "#07153a", flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+                              {r.ordine.customer || r.ordine.id}
+                            </b>
+                            <span style={{ color: "#64748b", whiteSpace: "nowrap" }}>{fmtDate(r.ordine.date)}</span>
+                            <span style={badgeStyle(r.ordine.status === "Fermo" ? "warning" : "outline")}>
+                              {r.ordine.status || "Da preparare"}
+                            </span>
+                            <b style={{ color: "#b45309", whiteSpace: "nowrap" }}>{r.qta} pz</b>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </Modal>
+
+        <Modal
           open={anagOpen}
           title="🗂️ Completa anagrafica cliente"
           onClose={() => setAnagOpen(false)}
@@ -15345,9 +15378,31 @@ ${isConferma
                 </div>
 
                 {order ? (
-                  <div style={{ color: "#66758b", fontSize: 13 }}>
+                  <div style={{ color: "#66758b", fontSize: 13, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     Cliente: <b style={{ color: "#07153a" }}>{order.customer || "—"}</b>
-                    {a ? <span style={{ marginLeft: 8, ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline") }}>{a.label}</span> : null}
+                    {a ? <span style={{ ...badgeStyle(a.stato === "ok" ? "success" : a.stato === "ko" ? "danger" : "outline") }}>{a.label}</span> : null}
+                    {/* LA VIA MAESTRA (Luca 24/08/2026): "quando ti manca un
+                        campo mi rimandi direttamente alla pagina completa: da
+                        la' si risolve tutto e le volte successive non mi
+                        richiedi le informazioni". */}
+                    {(() => {
+                      const cli = clients.find((c) => String(c.id) === String(order.clientId)) ||
+                        clients.find((c) => String(c.name || "").trim().toLowerCase() ===
+                          String(order.customer || "").split("·")[0].trim().toLowerCase());
+                      if (!cli) return null;
+                      return (
+                        <button
+                          style={{ ...btnStyle("outline"), padding: "4px 10px", fontSize: 12.5, marginLeft: "auto" }}
+                          onClick={() => {
+                            setAnagOpen(false);
+                            setClienteAperto({ cliente: cli, chiave: chiaveAnagrafica(cli) });
+                            setPage("clienti");
+                          }}
+                        >
+                          Apri la scheda completa →
+                        </button>
+                      );
+                    })()}
                   </div>
                 ) : null}
 
