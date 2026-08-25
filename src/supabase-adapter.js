@@ -2249,6 +2249,35 @@ async function addOrderLine(params) {
   };
 }
 
+// Togliere una riga di ABBUONO. Solo quella: le righe di merce non si
+// cancellano da qui (si modificano le quantita'), e una riga con assegnazioni
+// addosso lascerebbe orfane le prenotazioni sui lotti.
+async function deleteOrderLine(params) {
+  const p = parsePayload(params);
+  const lineId = String(p.lineId || p.id_riga || "").trim();
+  if (!lineId) return { success: false, error: "lineId mancante" };
+
+  const r = await supabase
+    .from("righe_ordine")
+    .select("id_riga, id_prodotto, prezzo_origine, descrizione_prodotto")
+    .eq("id_riga", lineId)
+    .maybeSingle();
+  if (r.error) return failure(r.error);
+  if (!r.data) return { success: false, error: "Riga inesistente" };
+
+  const eAbbuono =
+    String(r.data.prezzo_origine || "") === "abbuono" ||
+    String(r.data.id_prodotto || "").startsWith("ABBUONO-") ||
+    /^ABBUONO\b/i.test(String(r.data.descrizione_prodotto || ""));
+  if (!eAbbuono) {
+    return { success: false, error: "Da qui si tolgono solo gli abbuoni, non le righe di merce." };
+  }
+
+  const del = await supabase.from("righe_ordine").delete().eq("id_riga", lineId);
+  if (del.error) return failure(del.error);
+  return { success: true };
+}
+
 async function updateOrderLine(params) {
   const p = parsePayload(params);
   const idRiga = p.lineId || p.idRiga || p.ID_Riga;
@@ -3363,6 +3392,8 @@ export async function callSheetsApi(params = {}) {
         return await addOrderLine(params);
       case "updateOrderLine":
         return await updateOrderLine(params);
+      case "deleteOrderLine":
+        return await deleteOrderLine(params);
       case "deleteLine":
         return await deleteLine(params);
       case "deleteAssignment":

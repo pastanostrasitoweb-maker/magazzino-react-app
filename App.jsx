@@ -529,6 +529,50 @@ function chiaveDaAnagrafica(piva, nome) {
   return n ? "nome:" + n : "";
 }
 
+// L'ABBUONO, SEMPRE IN VISTA. Non e' un articolo: e' uno sconto in euro che il
+// cliente vede sul documento. Se c'e' si legge quant'e' e perche'; se non c'e'
+// si puo' metterlo, in qualunque momento della vita dell'ordine.
+function BollinoAbbuono({ order, onAggiungi, onTogli }) {
+  const righe = (order?.lines || []).filter((l) => rigaAbbuono(l));
+  const totale = righe.reduce(
+    (s, l) => s + Math.abs(Number(l.prezzoUnitario || 0) * Number(l.qtyOrdered || 1)), 0
+  );
+  if (!righe.length) {
+    return (
+      <button
+        style={{ ...compactBtnStyle("outline") }}
+        onClick={onAggiungi}
+        title="Sconto in euro sul totale, non un articolo. IVA 4%, massimo 50 euro."
+      >
+        − Abbuono
+      </button>
+    );
+  }
+  return (
+    <span
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 8, padding: "4px 10px",
+        borderRadius: 999, border: "1px solid #fca5a5", background: "#fef2f2",
+        color: "#b91c1c", fontWeight: 800, fontSize: 12.5,
+      }}
+      title={righe.map((l) => String(l.productName || "").replace(/^ABBUONO\s*-\s*/i, "")).join(" · ")}
+    >
+      − {fmtEur(totale)} € di abbuono
+      <span style={{ fontWeight: 600, opacity: 0.85 }}>
+        {righe.map((l) => String(l.productName || "").replace(/^ABBUONO\s*-\s*/i, "")).join(" · ")}
+      </span>
+      {onTogli ? (
+        <button
+          style={{ background: "none", border: "none", color: "#b91c1c", cursor: "pointer",
+            fontWeight: 900, fontSize: 14, padding: 0, lineHeight: 1 }}
+          title="Togli l'abbuono"
+          onClick={() => onTogli(righe[righe.length - 1])}
+        >×</button>
+      ) : null}
+    </span>
+  );
+}
+
 // L'ordine ha i colli ancora da confermare? Vale solo da COLLI_CONFERMATI_DAL in
 // poi: sugli ordini di prima il numero automatico e' quello che e' gia' finito
 // in bolla, e riaprirli adesso non serve a nessuno.
@@ -1926,6 +1970,22 @@ function productStockModeLabel(product) {
 }
 
 const OUTSIDE_STOCK_PRODUCT_ID = "FUORI_MAGAZZINO";
+
+// L'ABBUONO NON E' UN ARTICOLO (Luca 24/08/2026: "e' un abbuono economico da
+// fare al cliente, non devi considerarlo come articolo; se va in preparato si
+// comporta come un articolo, mentre non deve").
+//
+// Nasceva con productId "ABBUONO-<timestamp>", che NON inizia per
+// FUORI_MAGAZZINO: quindi l'app lo trattava come merce vera e gli chiedeva il
+// lotto, lo contava come un pezzo da assegnare e come un collo in piu' in
+// bolla. Da qui si riconosce, e da qui in poi sta fuori da tutto quello che
+// riguarda la merce: lotti, colli, peso, pezzi da preparare.
+function rigaAbbuono(line) {
+  const cod = String(line?.productCode || "").trim().toUpperCase();
+  const id = String(line?.productId || "");
+  return cod === "ABBUONO" || id.startsWith("ABBUONO-") ||
+    String(line?.prezzoOrigine || "") === "abbuono";
+}
 
 function isOutsideStockLine(line) {
   return (
@@ -4644,7 +4704,7 @@ export default function App() {
     // L'ABBUONO E' UNA RIGA NEGATIVA, NON UNA RIGA SENZA PREZZO (Luca
     // 22/08/2026). Un importo sotto zero e' voluto: scala il totale. Cercare
     // "prezzo > 0" lo trattava come un buco da riempire.
-    const aZero = righe.filter((l) => !inOmaggioRiga(l) && !Number(l.prezzoUnitario));
+    const aZero = righe.filter((l) => !rigaAbbuono(l) && !inOmaggioRiga(l) && !Number(l.prezzoUnitario));
     // CAMPIONATURA GRATUITA: i prezzi a zero sono lo stato GIUSTO, non una
     // mancanza. "Quando e' flaggata campionatura non devono esserci i prezzi,
     // quindi l'errore non dovrebbe esistere" (Luca 17/08/2026, sull'ordine di
@@ -5519,7 +5579,8 @@ export default function App() {
         // e selezionare il lotto. Escluse le righe fuori magazzino e i codici
         // a lotto facoltativo (HORECA, BIS): se c'e' un lotto lo si usa,
         // altrimenti si movimenta senza lotto.
-        const requiresLots = !outsideStock && !lotOptional;
+        const abbuono = rigaAbbuono(line);
+        const requiresLots = !abbuono && !outsideStock && !lotOptional;
 
         const assignedFromAssignments = (assignments[line.lineId] || []).reduce(
           (sum, assignment) => sum + assignment.qty,
@@ -5528,10 +5589,13 @@ export default function App() {
 
         const assignedQty = assignedFromAssignments;
 
-        const qtyToAssign = Math.max(0, line.qtyOrdered - assignedQty);
+        // L'abbuono non ha niente da preparare: non e' merce.
+        const qtyToAssign = abbuono ? 0 : Math.max(0, line.qtyOrdered - assignedQty);
 
-        const weightKg = Number(product?.weightKg || 0);
-        return { ...line, assignedQty, qtyToAssign, requiresLots, isOutsideStock: outsideStock, lotOptional, weightKg, category: String(product?.category || "") };
+        const weightKg = abbuono ? 0 : Number(product?.weightKg || 0);
+        return { ...line, assignedQty, qtyToAssign, requiresLots, abbuono,
+          isOutsideStock: outsideStock || abbuono, lotOptional, weightKg,
+          category: abbuono ? "" : String(product?.category || "") };
       });
 
       const totalToAssign = lines.reduce((sum, line) => sum + line.qtyToAssign, 0);
@@ -5568,8 +5632,11 @@ export default function App() {
 
       // Colli: suggerito = somma delle quantità di tutte le righe. Se l'utente ha
       // inserito un valore manuale (colliManual) quello prevale.
+      // I COLLI SONO SCATOLE: l'abbuono non e' una scatola. Contarlo faceva
+      // partire in bolla un collo in piu' di quelli veri, ed e' il numero su
+      // cui il corriere fattura.
       const colliSuggested = lines.reduce(
-        (sum, line) => sum + Number(line.qtyOrdered || 0),
+        (sum, line) => sum + (line.abbuono ? 0 : Number(line.qtyOrdered || 0)),
         0
       );
       const colli =
@@ -9362,6 +9429,26 @@ ${isConferma
     }
   };
 
+  // Togliere l'abbuono: e' una decisione commerciale, si deve poter disfare.
+  const togliAbbuono = async (order, riga) => {
+    if (!order || !riga) return;
+    const quanto = fmtEur(Math.abs(Number(riga.prezzoUnitario || 0) * Number(riga.qtyOrdered || 1)));
+    if (!window.confirm(`Tolgo l'abbuono di ${quanto} € da questo ordine?`)) return;
+    try {
+      const res = await callSheetsApi({
+        action: "deleteOrderLine",
+        payload: JSON.stringify({ lineId: riga.lineId }),
+      });
+      if (!res || !res.success) {
+        alert("Abbuono non tolto: " + ((res && res.error) || "errore"));
+        return;
+      }
+      await loadDataFromSheets();
+    } catch (e) {
+      alert("Errore di collegamento nel togliere l'abbuono.");
+    }
+  };
+
   const createOrderLine = async () => {
     if (!isAdmin || !selectedOrder) return;
 
@@ -10476,6 +10563,16 @@ ${isConferma
                               quando la merce era gia' pronta. */}
                           {spuntaCampionatura(selectedOrder, true)}
                           {spuntaPedanaFrozen(selectedOrder, true)}
+                          {/* L'ABBUONO SI METTE QUANDO SI CARICA L'ORDINE (Luca
+                              24/08/2026: "inserire l'abbuono in fase di
+                              caricamento ordine e dallo in visualizzazione
+                              sempre"). Prima stava solo nei Preparati, cioe'
+                              quando l'ordine era gia' pronto. */}
+                          <BollinoAbbuono
+                            order={selectedOrder}
+                            onAggiungi={() => azioneUnica("abbuono-" + selectedOrder.id, () => aggiungiAbbuono(selectedOrder))}
+                            onTogli={(l) => azioneUnica("togli-abbuono-" + l.lineId, () => togliAbbuono(selectedOrder, l))}
+                          />
                           {/* Il badge del pagamento E' il comando: dice lo stato
                               (compreso lo scaduto calcolato dal Cashflow) e si
                               apre per cambiarlo. Prima erano tre cose separate,
@@ -11719,15 +11816,11 @@ ${isConferma
                             <Pencil size={16} /> Modifica
                           </button>
 
-                          {/* L'ABBUONO: una riga che toglie, con la sua IVA al 4%
-                              e il tetto di 50 euro (Luca 22/08/2026). */}
-                          <button
-                            style={btnStyle("outline")}
-                            onClick={() => azioneUnica("abbuono-" + order.id, () => aggiungiAbbuono(order))}
-                            title="Aggiunge una riga in negativo che scala il totale. IVA 4%, massimo 50 euro."
-                          >
-                            − Abbuono
-                          </button>
+                          <BollinoAbbuono
+                            order={order}
+                            onAggiungi={() => azioneUnica("abbuono-" + order.id, () => aggiungiAbbuono(order))}
+                            onTogli={(l) => azioneUnica("togli-abbuono-" + l.lineId, () => togliAbbuono(order, l))}
+                          />
 
                           {order.computedStatus !== "Spedito" ? (
                             <button
