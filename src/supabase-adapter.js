@@ -706,6 +706,21 @@ async function archivePreparedOrders() {
 
   const scoperti = [];
   const senzaColli = [];
+  const prezzoTradito = [];
+  // Chi ha prezzi diversi da quelli concordati dall'agente: lo dice il
+  // guardiano nel database, cosi' la regola e' una sola.
+  const traditi = new Set();
+  try {
+    const tr = await supabase
+      .from("v_ordini_prezzo_tradito")
+      .select("id_ordine, scarto_totale");
+    for (const t of tr.data || []) {
+      if (Math.abs(Number(t.scarto_totale || 0)) > 0.5) traditi.add(String(t.id_ordine));
+    }
+  } catch (_) {
+    // guardiano non raggiungibile: non si blocca l'archiviazione per questo,
+    // il cancello del database interviene comunque.
+  }
   const toArchive = [];
   for (const r of candidati) {
     const data0 = String(r.data_ordine || r.data_preparato || "").slice(0, 10);
@@ -734,7 +749,24 @@ async function archivePreparedOrders() {
       senzaColli.push(r.id_ordine);
       continue;
     }
+    // IL PREZZO CONCORDATO DALL'AGENTE E' UN ACCORDO COL CLIENTE. Se quello
+    // scritto nel magazzino non coincide, l'ordine resta fra i Preparati:
+    // archiviarlo vorrebbe dire emettere un documento con un prezzo che il
+    // cliente non ha mai accettato (Il Celiaco, DDT 1908: 43 EUR in piu').
+    // Anche qui il controllo sta nell'adapter E nel database, perche'
+    // l'archiviazione notturna parte da sola.
+    if (traditi.has(String(r.id_ordine))) {
+      prezzoTradito.push(r.id_ordine);
+      continue;
+    }
     toArchive.push(r.id_ordine);
+  }
+
+  if (prezzoTradito.length) {
+    console.warn(
+      `Archiviazione: ${prezzoTradito.length} ordini restano in Preparati, prezzi diversi da quelli concordati dall'agente`,
+      prezzoTradito
+    );
   }
 
   if (senzaColli.length) {
