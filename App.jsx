@@ -502,6 +502,33 @@ const COLLI_CONFERMATI_DAL = "2026-08-17";
 // Un avviso che nessuno puo' togliere non e' un avviso, e' rumore.
 const DOCUMENTI_NOSTRI_DAL = "2026-08-03";
 
+// LA CHIAVE DELL'ANAGRAFICA. Una sola regola, usata ovunque: se cambia da un
+// punto all'altro, il dato salvato ieri oggi non si trova piu' e l'app lo
+// richiede daccapo (Luca 24/08/2026: "se te la modifico quando sta in ordine
+// perche' manca qualcosa, poi te la devi ricordare per sempre").
+//
+// UNA PARTITA IVA SEGNAPOSTO NON E' UNA CHIAVE. Nel registro 1.028 clienti
+// hanno "00000000000" al posto della P.IVA: con la vecchia regola finivano
+// TUTTI sulla stessa anagrafica, e chi sistemava l'indirizzo di uno lo
+// scriveva addosso agli altri mille. Vale come chiave solo un identificativo
+// vero: almeno 8 caratteri e non tutti zeri.
+// Solo cifre, come fa il database (regexp_replace(piva,'\D','','g')): se le due
+// normalizzazioni divergono, la chiave scritta dal trigger e quella cercata
+// dall'app non coincidono e il dato sparisce.
+function pivaUsabile(raw) {
+  const pulita = String(raw ?? "").replace(/\D/g, "");
+  if (pulita.length < 8) return "";
+  if (/^0+$/.test(pulita)) return "";
+  return pulita;
+}
+
+function chiaveDaAnagrafica(piva, nome) {
+  const p = pivaUsabile(piva);
+  if (p) return "piva:" + p;
+  const n = String(nome || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return n ? "nome:" + n : "";
+}
+
 // L'ordine ha i colli ancora da confermare? Vale solo da COLLI_CONFERMATI_DAL in
 // poi: sugli ordini di prima il numero automatico e' quello che e' gia' finito
 // in bolla, e riaprirli adesso non serve a nessuno.
@@ -4382,11 +4409,10 @@ export default function App() {
   const clientKeyFor = (order) => {
     const app = appAnagrafiche[String(order?.id || "")];
     const gamma = gammaDiOrdine(order);
-    const piva = String(app?.partita_iva || gamma?.piva || "").replace(/\D/g, "");
-    if (piva) return "piva:" + piva;
-    const nome = String(app?.ragione_sociale || gamma?.name || order?.customer || "")
-      .trim().toLowerCase().replace(/\s+/g, " ");
-    return nome ? "nome:" + nome : "";
+    return chiaveDaAnagrafica(
+      app?.partita_iva || gamma?.piva,
+      app?.ragione_sociale || gamma?.name || order?.customer
+    );
   };
 
   const destinazioniDi = (order) => {
@@ -6554,12 +6580,8 @@ export default function App() {
   // ---- SEZIONE CLIENTI ----
   // La chiave dell'anagrafica arricchita, per un CLIENTE (non per un ordine):
   // stessa regola di clientKeyFor, che pero' parte da un ordine.
-  const chiaveAnagrafica = (cli, pivaScritta) => {
-    const piva = String(pivaScritta ?? cli?.piva ?? "").replace(/\D/g, "");
-    if (piva) return "piva:" + piva;
-    const nome = String(cli?.name || "").trim().toLowerCase().replace(/\s+/g, " ");
-    return nome ? "nome:" + nome : "";
-  };
+  const chiaveAnagrafica = (cli, pivaScritta) =>
+    chiaveDaAnagrafica(pivaScritta ?? cli?.piva, cli?.name);
 
   const [clientiCerca, setClientiCerca] = useState("");
   const [clienteAperto, setClienteAperto] = useState(null); // {cliente} oppure {nuovo:true}
