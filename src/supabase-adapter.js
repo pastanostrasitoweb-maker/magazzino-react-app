@@ -1520,23 +1520,48 @@ async function saveClienteOverride(params) {
     if (pivaPulita.length >= 11) {
       sicuro = true; // la partita IVA identifica: si puo' agganciare
     } else {
-      // Nessuna P.IVA: si guarda se il registro ha gia' qualcosa che somiglia.
-      const prima = ragioneReg.split(/[\s\-·]+/)[0];
+      // COMANDA IL CODICE CLIENTE, E IL NOME ESATTO E' UN CODICE (Luca
+      // 25/08/2026: "segui sempre il codice cliente, non e' possibile che
+      // vengano sovrapposte anagrafiche diverse tra loro").
+      //
+      // Qui si cercavano i "simili" con la PRIMA PAROLA del nome: per
+      // "VITTORIO POGGI" si cercava "VITTORIO" e uscivano Vittorio Zulian e
+      // Vittorio Quagliata, che non c'entrano niente. Peggio: fra i candidati
+      // compariva PN-000030 VITTORIO POGGI, cioe' proprio il cliente che si
+      // stava salvando, e il codice non veniva assegnato lo stesso.
+      //
+      // Adesso: se a registro c'e' UNA corrispondenza ESATTA sul nome, quello
+      // e' il cliente e il codice e' il suo. Si chiede solo quando davvero non
+      // si sa, e non si cerca piu' per nome proprio.
+      const stessoNome = (x) =>
+        String(x.ragione_sociale || "").trim().toLowerCase().replace(/\s+/g, " ") ===
+        ragioneReg.toLowerCase().replace(/\s+/g, " ");
+
       const { data: simili } = await supabase
         .from("clienti_master")
         .select("codice, ragione_sociale, citta, provincia, piva")
         .ilike("ragione_sociale", `%${ragioneReg}%`)
-        .limit(6);
-      const { data: simili2 } = await supabase
-        .from("clienti_master")
-        .select("codice, ragione_sociale, citta, provincia, piva")
-        .ilike("ragione_sociale", `%${prima}%`)
-        .limit(6);
-      const tutti = [...(simili || []), ...(simili2 || [])].filter(
+        .limit(10);
+      const tutti = (simili || []).filter(
         (x, i, a) => a.findIndex((y) => y.codice === x.codice) === i
       );
-      if (tutti.length === 0) sicuro = true; // davvero nuovo
-      else candidatiRegistro = tutti;
+      const esatti = tutti.filter(stessoNome);
+
+      if (esatti.length === 1) {
+        // E' lui: stesso nome, identico. Il codice e' gia' a registro, e va
+        // scritto sull'anagrafica: trovarlo e non salvarlo sarebbe come non
+        // averlo trovato.
+        codiceAssegnato = String(esatti[0].codice);
+        row.codice_cliente = codiceAssegnato;
+      } else if (esatti.length > 1) {
+        // Due clienti con lo STESSO identico nome: qui si sceglie a mano, ed e'
+        // giusto chiederlo (due negozi con la stessa insegna esistono).
+        candidatiRegistro = esatti;
+      } else if (tutti.length === 0) {
+        sicuro = true; // davvero nuovo
+      } else {
+        candidatiRegistro = tutti;
+      }
     }
     if (sicuro) {
       const reg = await assegnaCodiceRegistro(
