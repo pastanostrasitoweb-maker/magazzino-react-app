@@ -13200,6 +13200,16 @@ ${isConferma
                     {cli ? `Scheda di ${cli.name}` : "Crea nuovo cliente"}
                   </div>
                   <SchedaCliente
+                    /* LA SCHEDA SI RIFA' DA CAPO PER OGNI CLIENTE.
+                       I campi si calcolano al montaggio (useState con
+                       inizializzatore): senza questa key React riusa la stessa
+                       scheda quando si passa da un cliente all'altro senza
+                       chiuderla, e restano a schermo i dati del precedente.
+                       Luca, 25/08/2026: "dentro Antonino Sacchinello hai messo
+                       l'anagrafica di Angela Tagliabue". Nel database erano
+                       giuste e separate: era la scheda a non aggiornarsi, e
+                       salvando avrebbe scritto i dati di uno sull'altro. */
+                    key={chiave || (cli ? String(cli.id) : "nuovo")}
                     cliente={cli}
                     override={clientiOverride[chiave] || null}
                     sedi={cli ? (destinazioni[String(cli.id)] || []) : []}
@@ -15625,6 +15635,7 @@ ${isConferma
           maxWidth={640}
         >
           {(() => {
+            /* Anche qui il form vive di stato proprio: si rifa' per ordine. */
             const order = orders.find((o) => String(o.id) === String(anagOrderId));
             const a = order ? anagraficaFor(order) : null;
             const mancantiSet = new Set(a?.mancanti || []);
