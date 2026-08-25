@@ -126,6 +126,19 @@ BEGIN
        -- diventati 346,83 EUR invece di 206,03. Se il prezzo dall'app manca
        -- (zero) la riga si valorizza lo stesso: li' non c'e' niente da salvare.
        AND (COALESCE(ri.prezzo_origine, '') <> 'app' OR COALESCE(ri.prezzo_unitario, 0) = 0)
+       -- E SOPRATTUTTO: SE L'ORDINE VIENE DALL'APP AGENTI, NON SI RIPREZZA.
+       -- Il marchio 'app' sulla riga non bastava: dopo una rivalorizzazione la
+       -- riga diventa 'listino_cliente' e da quel momento e' scoperta per
+       -- sempre. Su Il Celiaco (DDT 1908, 24/08/2026) l'agente aveva venduto a
+       -- cascata 40+5 (= 43%), l'anagrafica del cliente aveva uno sconto 35%
+       -- scritto a mano, e il ricalcolo ha fatto vincere l'anagrafica: 43 EUR
+       -- di troppo a carico del cliente su un documento gia' emesso.
+       -- Il prezzo dell'agente e' un accordo col cliente: non lo si corregge
+       -- con una formula, lo si cambia a mano se serve.
+       AND NOT EXISTS (
+             SELECT 1 FROM ordini_agenti oa
+              WHERE oa.id_ordine_magazzino = p_id_ordine
+                AND COALESCE(oa.totale, 0) > 0)
   LOOP
     v_prezzo := NULL; v_sconto := NULL; v_fonte := NULL;
 

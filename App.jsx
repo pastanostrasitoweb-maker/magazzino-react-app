@@ -529,6 +529,106 @@ function chiaveDaAnagrafica(piva, nome) {
   return n ? "nome:" + n : "";
 }
 
+// LA FINESTRA DELL'ABBUONO. Importo, motivo e ALIQUOTA, che si sceglie da una
+// lista chiusa come il metodo di pagamento: a campo libero la stessa cosa
+// finisce scritta in quattro modi e i conti dell'IVA non tornano.
+const ABBUONO_MAX = 50;
+const ABBUONO_ALIQUOTE = [4, 10, 22];
+
+function FinestraAbbuono({ order, onSalva, onChiudi }) {
+  const [importo, setImporto] = useState("");
+  const [motivo, setMotivo] = useState("");
+  // Si propone l'aliquota che l'ordine usa di piu': un abbuono che rimborsa
+  // merce al 10% deve togliere IVA al 10%, se no il conto non torna. Resta
+  // una proposta: la sceglie chi fa l'abbuono.
+  const [iva, setIva] = useState(() => {
+    const conta = new Map();
+    for (const l of order?.lines || []) {
+      if (rigaAbbuono(l)) continue;
+      const a = Number(l.ivaPct);
+      if (!Number.isFinite(a) || a <= 0) continue;
+      conta.set(a, (conta.get(a) || 0) + 1);
+    }
+    const piuUsata = [...conta.entries()].sort((x, y) => y[1] - x[1])[0];
+    return String(piuUsata ? piuUsata[0] : 4);
+  });
+  const [salvando, setSalvando] = useState(false);
+
+  const n = Number(String(importo).replace(",", ".").replace(/[^0-9.]/g, ""));
+  const valido = Number.isFinite(n) && n > 0 && n <= ABBUONO_MAX && motivo.trim().length > 0;
+  const imposta = valido ? (n * Number(iva)) / 100 : 0;
+
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div style={{ color: "#66758b", fontSize: 13, lineHeight: 1.5 }}>
+        Uno sconto in euro sul totale di <b style={{ color: "#07153a" }}>{order?.customer || order?.id}</b>.
+        Non e' un articolo: non entra nei colli, non chiede lotti, non si prepara.
+        Il massimo e' {ABBUONO_MAX} €.
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <label style={labelStyle()}>Quanto togliamo (€)</label>
+          <input
+            style={{ ...inputStyle(), width: 140 }}
+            value={importo}
+            inputMode="decimal"
+            placeholder="12,50"
+            onChange={(e) => setImporto(e.target.value)}
+          />
+        </div>
+        <div>
+          <label style={labelStyle()}>Aliquota IVA</label>
+          <select style={{ ...inputStyle(), width: 140 }} value={iva} onChange={(e) => setIva(e.target.value)}>
+            {ABBUONO_ALIQUOTE.map((a) => (
+              <option key={a} value={a}>{a}%</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <label style={labelStyle()}>Perche'</label>
+          <input
+            style={inputStyle()}
+            value={motivo}
+            placeholder="rimborso scaduti, merce danneggiata, arrotondamento"
+            onChange={(e) => setMotivo(e.target.value)}
+          />
+        </div>
+      </div>
+
+      {n > ABBUONO_MAX ? (
+        <div style={{ color: "#b91c1c", fontSize: 13, fontWeight: 700 }}>
+          Il massimo e' {ABBUONO_MAX} €: hai scritto {fmtEur(n)} €.
+        </div>
+      ) : null}
+
+      <div style={{
+        border: "1px solid #fca5a5", background: "#fef2f2", borderRadius: 12,
+        padding: 12, color: "#b91c1c", fontSize: 13.5, fontWeight: 700,
+      }}>
+        {valido
+          ? <>In fattura: − {fmtEur(n)} € di imponibile e − {fmtEur(imposta)} € di IVA al {iva}%. Il cliente paga {fmtEur(n + imposta)} € in meno.</>
+          : "Scrivi importo e motivo: il motivo finisce sul documento, lo legge il cliente."}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+        <button style={btnStyle("outline")} onClick={onChiudi}>Annulla</button>
+        <button
+          style={btnStyle("primary", !valido || salvando)}
+          disabled={!valido || salvando}
+          onClick={async () => {
+            setSalvando(true);
+            try { await onSalva({ importo: n, motivo: motivo.trim(), iva }); }
+            finally { setSalvando(false); }
+          }}
+        >
+          {salvando ? "Salvo…" : "Applica l'abbuono"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // L'ABBUONO, SEMPRE IN VISTA. Non e' un articolo: e' uno sconto in euro che il
 // cliente vede sul documento. Se c'e' si legge quant'e' e perche'; se non c'e'
 // si puo' metterlo, in qualunque momento della vita dell'ordine.
@@ -4346,6 +4446,7 @@ export default function App() {
   const [soloIncompleti, setSoloIncompleti] = useState(false);
   const [pannelloFatture, setPannelloFatture] = useState(false);
   const [impegnatoDi, setImpegnatoDi] = useState(null);
+  const [abbuonoPer, setAbbuonoPer] = useState(null);
   const [ordineDaGuardare, setOrdineDaGuardare] = useState(null);
   // Registro DDT (amministrazione): ricerca per numero, cliente o ordine.
   const [ddtSearch, setDdtSearch] = useState("");
@@ -9373,31 +9474,11 @@ ${isConferma
   // L'abbuono e' una voce a se' ("rimborso scaduti", "merce danneggiata") e va
   // scritta come tale, se no fra sei mesi nessuno sa perche' quel totale non
   // torna con le quantita'.
-  const ABBUONO_MAX = 50;
-  const ABBUONO_IVA = 4;
-  const aggiungiAbbuono = async (order) => {
-    if (!order) return;
-    const grezzo = window.prompt(
-      "ABBUONO — quanto togliamo?\n\n" +
-      "Scrivi l'importo in euro, senza segno meno (esempio: 12,50).\n" +
-      "Il massimo e' " + ABBUONO_MAX + " euro. L'IVA e' al " + ABBUONO_IVA + "%."
-    );
-    if (grezzo === null) return;
-    const importo = Number(String(grezzo).replace(",", ".").replace(/[^0-9.]/g, ""));
-    if (!Number.isFinite(importo) || importo <= 0) {
-      alert("Importo non valido: scrivi un numero, per esempio 12,50.");
-      return;
-    }
-    if (importo > ABBUONO_MAX) {
-      alert("L'abbuono massimo e' " + ABBUONO_MAX + " euro. Hai scritto " + fmtEur(importo) + ".");
-      return;
-    }
-    const motivo = String(window.prompt(
-      "Perche' questo abbuono?\n\nFinisce sul documento, quindi lo legge il cliente.\n" +
-      "Esempi: rimborso scaduti, merce danneggiata, arrotondamento."
-    ) || "").trim();
-    if (!motivo) { alert("Serve il motivo: senza, fra sei mesi non si capisce piu'."); return; }
+  // Si apre la finestra: importo, motivo e ALIQUOTA da scegliere.
+  const aggiungiAbbuono = (order) => { if (order) setAbbuonoPer(order); };
 
+  const salvaAbbuono = async (order, { importo, motivo, iva }) => {
+    if (!order) return;
     const nextRowOrder =
       Math.max(0, ...((order.lines || []).map((l) => Number(l.rowOrder || 0)))) + 1;
     const lineId = `RIGA-ABBUONO-${Date.now()}`;
@@ -9415,7 +9496,12 @@ ${isConferma
           qtyOrdered: 1,
           prezzoUnitario: -Math.abs(Math.round(importo * 100) / 100),
           scontoPct: 0,
-          ivaPct: ABBUONO_IVA,
+          // L'ALIQUOTA LA SCEGLIE CHI FA L'ABBUONO (Luca 24/08/2026:
+          // "ricordati anche dell'IVA sull'abbuono, che dobbiamo
+          // selezionarla noi"). Prima era fissa al 4%: su un abbuono che
+          // rimborsa merce al 10% toglieva meno IVA di quanta ne era stata
+          // addebitata, e il conto non tornava.
+          ivaPct: Number(iva),
           prezzoOrigine: "abbuono",
         }),
       });
@@ -9423,6 +9509,7 @@ ${isConferma
         alert("Abbuono non salvato: " + ((res && res.error) || "errore"));
         return;
       }
+      setAbbuonoPer(null);
       await loadDataFromSheets();
     } catch (e) {
       alert("Errore di collegamento nel salvare l'abbuono.");
@@ -15426,6 +15513,21 @@ ${isConferma
               </div>
             );
           })()}
+        </Modal>
+
+        <Modal
+          open={Boolean(abbuonoPer)}
+          title="− Abbuono"
+          onClose={() => setAbbuonoPer(null)}
+          maxWidth={680}
+        >
+          {abbuonoPer ? (
+            <FinestraAbbuono
+              order={ordersWithComputed.find((o) => String(o.id) === String(abbuonoPer.id)) || abbuonoPer}
+              onSalva={(dati) => salvaAbbuono(abbuonoPer, dati)}
+              onChiudi={() => setAbbuonoPer(null)}
+            />
+          ) : null}
         </Modal>
 
         <Modal
