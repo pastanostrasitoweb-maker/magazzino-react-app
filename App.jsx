@@ -1107,11 +1107,21 @@ function SchedaCliente({
       if (!base.codice_fiscale) base.codice_fiscale = cliente.codiceFiscale || "";
       if (!base.email) base.email = cliente.email || "";
       if (!base.telefono) base.telefono = cliente.telefono || "";
-      if (!base.sede_localita) base.sede_localita = cliente.citta || "";
-      if (!base.sede_provincia) base.sede_provincia = cliente.provincia || "";
-      if (!base.sede_cap) base.sede_cap = cliente.cap || "";
+      if (!base.citta) base.citta = cliente.citta || "";
+      if (!base.provincia) base.provincia = cliente.provincia || "";
+      if (!base.cap) base.cap = cliente.cap || "";
       if (!base.codice_univoco) base.codice_univoco = cliente.codiceDestinatarioTs || "";
     }
+    // RECUPERO DAL VECCHIO SCHEMA. Fino al 25/08/2026 questa scheda scriveva
+    // sede_via/sede_civico/sede_cap/sede_localita/sede_provincia, colonne che i
+    // documenti non leggono. Quello che era stato compilato li' non si butta:
+    // se le colonne buone sono vuote, si riempiono con quelle vecchie.
+    if (!base.sede_legale) {
+      base.sede_legale = [ov.sede_via, ov.sede_civico].filter(Boolean).join(" ").trim();
+    }
+    if (!base.cap) base.cap = String(ov.sede_cap ?? "");
+    if (!base.citta) base.citta = String(ov.sede_localita ?? "");
+    if (!base.provincia) base.provincia = String(ov.sede_provincia ?? "");
     base.tipologia = String(ov.tipologia || (cliente ? normalizeTipologia(cliente.category) : "") || "");
     base.metodo_pagamento = String(ov.metodo_pagamento || "");
     base.agente_nome = String(ov.agente_nome || "");
@@ -1217,11 +1227,20 @@ function SchedaCliente({
               <label style={{ ...labelStyle(), fontSize: 11 }}>Agente *</label>
               <select style={{ ...inputStyle(), height: 38 }} value={f.agente_nome} onChange={set("agente_nome")}>
                 <option value="">— scegli —</option>
-                {(agenti || []).map((a, i) => (
-                  <option key={`${a.id || a.nome || a.name || "ag"}-${i}`} value={a.nome || a.name || ""}>
-                    {a.nome || a.name}
-                  </option>
-                ))}
+                {/* L'adapter manda Nome e Agente_Id MAIUSCOLI (Agente_Id, Nome),
+                    qui si leggeva solo a.nome minuscolo: 63 agenti diventavano
+                    63 righe vuote, e sembrava che non si potesse scegliere
+                    nessuno (Luca 25/08/2026). Si accettano tutte e due le
+                    scritture, cosi' non dipende da chi ha riempito la lista. */}
+                {(agenti || [])
+                  .map((a) => ({
+                    id: a.Agente_Id || a.agente_id || a.id || "",
+                    nome: a.Nome || a.nome || a.name || "",
+                  }))
+                  .filter((a) => a.nome)
+                  .map((a, i) => (
+                    <option key={`${a.id || a.nome}-${i}`} value={a.nome}>{a.nome}</option>
+                  ))}
               </select>
             </div>
             <div style={{ flex: "1 1 140px" }}>
@@ -1346,13 +1365,19 @@ const CAMPI_SCHEDA = [
     ],
   },
   {
+    // UN DATO, UNA COLONNA (Luca 25/08/2026: "se si modifica da una parte si
+    // modifica anche sull'altra versione, altrimenti e' inutile").
+    // Questa scheda scriveva sede_via/sede_cap/sede_localita/sede_provincia,
+    // il modale sull'ordine scriveva sede_legale/cap/citta/provincia: due
+    // colonne diverse per lo stesso dato. Le fatture, i DDT e il ponte leggono
+    // la SECONDA coppia, quindi quello che si compilava qui non arrivava sui
+    // documenti e l'app lo richiedeva daccapo.
     titolo: "Sede legale",
     campi: [
-      { key: "sede_via", label: "Via", largo: true },
-      { key: "sede_civico", label: "Civico" },
-      { key: "sede_cap", label: "CAP" },
-      { key: "sede_localita", label: "Localita'" },
-      { key: "sede_provincia", label: "Provincia" },
+      { key: "sede_legale", label: "Via e civico", largo: true, obbligatorio: true },
+      { key: "cap", label: "CAP" },
+      { key: "citta", label: "Citta'" },
+      { key: "provincia", label: "Provincia" },
     ],
   },
   {
