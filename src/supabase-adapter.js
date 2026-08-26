@@ -1508,7 +1508,11 @@ async function saveClienteOverride(params) {
     row[f] = grezzo === "" ? null : Number(grezzo);
     if (Number.isNaN(row[f])) row[f] = null;
   }
-  row.operatore = p.operatore || "";
+  // Se il chiamante non dice chi e', vale chi e' loggato: senza un nome la
+  // conferma dell'anagrafica viene scartata dal trigger, e il lavoro di chi
+  // apre e controlla le schede sparisce (Luca 26/08/2026: "abbiamo allineato
+  // tutto e me li ridici da sistemare").
+  row.operatore = p.operatore || operatoreCorrente || "";
   row.aggiornato_il = new Date().toISOString();
 
   // IL CODICE CLIENTE LO ASSEGNA IL REGISTRO, NON L'OPERATORE.

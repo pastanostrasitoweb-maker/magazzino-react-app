@@ -7303,7 +7303,7 @@ export default function App() {
     try {
       const r = await callSheetsApi({
         action: "saveClienteOverride",
-        payload: JSON.stringify({ chiave, ddt_con_prezzi: !!attivo, operatore: authUser?.user || "" }),
+        payload: JSON.stringify({ chiave, ddt_con_prezzi: !!attivo, operatore: authUser?.username || "" }),
       });
       if (!r || !r.success) {
         setClientiOverride(prima);
