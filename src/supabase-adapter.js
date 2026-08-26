@@ -302,6 +302,44 @@ function valorizzaRigaApp(r) {
     }
   }
 
+  // L'APP DI OGGI MANDA UN SOLO SCONTO DICHIARATO (`sconto_pct`): l'extra
+  // dell'agente o la promo di riga. Lo sconto del livello cliente e' dentro
+  // `prezzo_finale` ma non e' dichiarato, e `prezzo_unitario` NON contiene la
+  // promo: il ramo qui sotto, ricostruendo da prezzo_unitario, la perdeva.
+  // Maison Della Salute 26/08/2026: promo 50% e omaggi 100% spariti dal DDT,
+  // il cliente avrebbe pagato 102,62 euro piu' del concordato. Il guardiano
+  // l'ha fermato, ma il prezzo deve nascere giusto, non essere fermato dopo.
+  // Qui: il dichiarato va nel secondo sconto, il primo si ricava dal rapporto
+  // finale/listino. Se la moltiplicazione non ridà il finale al centesimo,
+  // si lascia fare ai rami successivi.
+  if (finalePezzo !== null && listinoPezzo > 0) {
+    // L'app manda 5.000000000000004: nella colonna sconti va scritto 5.
+    const scDich = Math.round(Number(r.sconto_pct || 0) * 100) / 100;
+    if (scDich === 100) {
+      // Omaggio: netto zero comunque, ma il listino resta scritto e lo
+      // sconto sta nella sua colonna, come vuole la regola di Luca.
+      return {
+        qty: aCartoni ? colli : pezzi,
+        prezzo: Math.round(listinoPezzo * pezziCollo * 10000) / 10000,
+        sconto: 0,
+        sconto2: 100,
+      };
+    }
+    if (scDich > 0 && scDich < 100) {
+      const resto = 1 - scDich / 100;
+      const sc1 = Math.round((1 - finalePezzo / listinoPezzo / resto) * 10000) / 100;
+      const netto = listinoPezzo * pezziCollo * (1 - sc1 / 100) * resto;
+      if (sc1 >= 0 && sc1 < 100 && Math.abs(netto - finalePezzo * pezziCollo) < 0.01) {
+        return {
+          qty: aCartoni ? colli : pezzi,
+          prezzo: Math.round(listinoPezzo * pezziCollo * 10000) / 10000,
+          sconto: sc1,
+          sconto2: scDich,
+        };
+      }
+    }
+  }
+
   if (listinoPezzo > 0 && prezzoPezzo > 0 && listinoPezzo >= prezzoPezzo) {
     const lordo = Math.round(listinoPezzo * pezziCollo * 10000) / 10000;
     const cascata = (a, b) => 1 - (1 - a / 100) * (1 - b / 100);
