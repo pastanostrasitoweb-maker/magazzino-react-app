@@ -8397,6 +8397,31 @@ ${isConferma
   const markOrderPrepared = async () => {
     if (!selectedOrder) return;
 
+    // UN SALVATAGGIO ANCORA IN CORSO NON E' UN SALVATAGGIO FATTO (Luca
+    // 26/08/2026: "Salvataggio..." ancora acceso in foto, e prepara_ordine ha
+    // trovato una riga con 1 pezzo assegnato su 3). L'interfaccia mostrava la
+    // riga come completa perche' l'assegnazione era gia' scritta OTTIMISTICAMENTE
+    // a schermo, ma la richiesta al server non era ancora tornata: "Prepara" ha
+    // guardato lo stato vero, non quello ottimistico, ed erano due cose diverse.
+    // Meglio dirlo chiaro qui che lasciare arrivare l'errore criptico dal database.
+    if (
+      String(savingAssignmentLineId || "") &&
+      (selectedOrder.lines || []).some((l) => String(l.lineId) === String(savingAssignmentLineId))
+    ) {
+      alert(
+        "C'e' ancora un'assegnazione lotto in salvataggio su questo ordine.\n\n" +
+        "Aspetta che finisca (il bottone smette di dire \"Salvataggio...\"), poi riprova."
+      );
+      return;
+    }
+    if (savingLotOnFly) {
+      alert(
+        "C'e' ancora un lotto in creazione su questo ordine.\n\n" +
+        "Aspetta che finisca, poi riprova."
+      );
+      return;
+    }
+
     if (selectedOrder.totalToAssign > 0) {
       alert("Prima assegna tutti i lotti dell'ordine.");
       return;

@@ -42,9 +42,24 @@ export function impostaOperatore(nome) {
   operatoreCorrente = String(nome || "");
 }
 
+// UNA RICHIESTA NON PUO' RESTARE APPESA PER SEMPRE (Luca 26/08/2026,
+// screenshot con "Salvataggio..." ancora acceso: un'assegnazione lotto era
+// rimasta in sospeso, la riga sembrava completa nell'interfaccia ma il server
+// non aveva mai ricevuto o mai risposto, e "Prepara ordine" ha trovato lo
+// stato vero: 1 pezzo assegnato su 3). Su una rete lenta o instabile (un
+// iPad in magazzino, non un ufficio) una fetch puo' restare "in volo" senza
+// mai risolversi ne' fallire: senza timeout lo stato ottimistico dell'app
+// resta un fantasma, e chi guarda lo schermo non ha modo di saperlo. Dopo 20
+// secondi si arrende e fa scattare il rollback che il chiamante gia' prevede.
+const fetchConTimeout = (url, opzioni = {}) => {
+  const controllo = new AbortController();
+  const timeout = setTimeout(() => controllo.abort(), 20000);
+  return fetch(url, { ...opzioni, signal: controllo.signal }).finally(() => clearTimeout(timeout));
+};
+
 const supabase = createClient(SUPABASE_URL || "", SUPABASE_ANON_KEY || "", {
   auth: { persistSession: false, autoRefreshToken: false },
-  global: { headers: testataOperatore },
+  global: { headers: testataOperatore, fetch: fetchConTimeout },
 });
 
 // Il client nudo, per chi deve leggere tabelle che l'adapter non conosce
