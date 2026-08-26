@@ -5311,6 +5311,12 @@ export default function App() {
       // a mano, altrimenti "Aggiorna" lascia indietro proprio i contatori che
       // uno guarda per capire se e' cambiato qualcosa.
       loadOrdiniApp().catch(() => {});
+      // Anche la lista rossa dei clienti da confermare: restava quella caricata
+      // all'apertura, e dopo le conferme del 26/08 il pannello diceva ancora 69
+      // (Luca: "allinea tutto lo abbiamo gia' fatto prima!"). Da qui passa
+      // anche il salvataggio della scheda, quindi confermare un cliente lo
+      // toglie dal rosso senza dover premere niente.
+      caricaDaConfermare();
       if (page === "archivio" || page === "ddt") {
         await loadArchivedOrders();
       }
@@ -5338,6 +5344,9 @@ export default function App() {
   const loadArchivedOrders = async () => {
     if (loadingArchive) return;
     setLoadingArchive(true);
+    // Il bottone "Aggiorna" dell'Archivio deve rinfrescare anche la lista
+    // rossa, non solo lo storico ordini.
+    caricaDaConfermare();
     try {
       const res = await callSheetsApi({
         action: "getOrdiniArchiviati",
