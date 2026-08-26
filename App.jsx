@@ -4510,7 +4510,10 @@ export default function App() {
     try {
       const { data, error } = await supabase
         .from("v_clienti_da_confermare")
-        .select("chiave, codice_cliente, ragione_sociale, metodo_pagamento, agente_nome, mancano, ultimo_ordine, gia_confermato, codice_r")
+        .select("chiave, codice_cliente, ragione_sociale, metodo_pagamento, agente_nome, mancano, ultimo_ordine, gia_confermato, codice_r, pagamento_da_sistemare")
+        // Il pagamento in cima: blocca la fattura e falsa il Cashflow, viene
+        // prima di una provincia mancante.
+        .order("pagamento_da_sistemare", { ascending: false })
         .order("ultimo_ordine", { ascending: false, nullsFirst: false });
       if (!error) setDaConfermare(data || []);
     } catch (_) { /* la lista e' un aiuto, non deve fermare l'archivio */ }
@@ -12811,7 +12814,14 @@ ${isConferma
                 <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
                   <div style={{ flex: 1, minWidth: 260, fontSize: 13.5, lineHeight: 1.5, color: "#7f1d1d" }}>
                     <b style={{ fontSize: 15 }}>
-                      {daConfermare.length} clienti che hanno ordinato dal 03/08 da sistemare
+                      {daConfermare.filter((c) => c.pagamento_da_sistemare).length > 0 ? (
+                        <>
+                          {daConfermare.filter((c) => c.pagamento_da_sistemare).length} clienti col
+                          PAGAMENTO da sistemare (in cima, sfondo rosso)
+                        </>
+                      ) : (
+                        <>{daConfermare.length} clienti che hanno ordinato dal 03/08 da sistemare</>
+                      )}
                     </b>
                     <div style={{ fontSize: 12.5, opacity: 0.85, marginTop: 2 }}>
                       Apri la scheda, controlla i dati e salva: da quel momento il cliente e'
@@ -12829,7 +12839,10 @@ ${isConferma
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <tbody>
                       {daConfermare.map((c) => (
-                        <tr key={c.chiave} style={{ borderBottom: "1px solid #fee2e2" }}>
+                        <tr key={c.chiave} style={{
+                          borderBottom: "1px solid #fee2e2",
+                          background: c.pagamento_da_sistemare ? "#fee2e2" : undefined,
+                        }}>
                           <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "#64748b" }}>
                             {c.ultimo_ordine ? fmtDate(c.ultimo_ordine) : "—"}
                           </td>
@@ -12845,7 +12858,11 @@ ${isConferma
                             {/* CONFERMATO NON VUOL DIRE COMPLETO: chi e' gia' passato
                                 sotto le mani di qualcuno ma ha ancora buchi resta qui,
                                 ed e' il caso peggiore perche' sembra a posto. */}
-                            {c.gia_confermato ? (
+                            {c.pagamento_da_sistemare ? (
+                              <b style={{ color: "#b91c1c" }}>
+                                PAGAMENTO: c'è "{c.metodo_pagamento || "niente"}", non dice quando si incassa
+                              </b>
+                            ) : c.gia_confermato ? (
                               <b>già confermato, ma manca ancora: {(c.mancano || []).join(" · ")}</b>
                             ) : (c.mancano || []).length ? (
                               (c.mancano || []).join(" · ")
