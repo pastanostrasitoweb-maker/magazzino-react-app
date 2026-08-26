@@ -1042,11 +1042,29 @@ function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva, apriNuovaSubi
 //   scelto      -> nome del corriere, scuro
 //   suggerito   -> proposta del preventivo col costo, da confermare
 //   mancante    -> rosso, e cliccarlo apre le opzioni
+// Trova nel preventivo l'opzione del corriere REALMENTE scelto. Non si ripiega
+// mai sul consigliato: mostrare il prezzo di un corriere accanto al nome di un
+// altro e' peggio che non mostrare niente (Luca 26/08/2026: "se cambi il
+// metodo di consegna non ricalcola il prezzo").
+function opzioneDelCorriere(transport, nomeCorriere) {
+  if (!transport || transport.errore || !nomeCorriere) return null;
+  const cerca = String(nomeCorriere).trim().toLowerCase();
+  const tutte = [transport.consigliato, ...(transport.alternative || [])].filter(Boolean);
+  return (
+    tutte.find((o) => String(o.corriere || "").trim().toLowerCase() === cerca) ||
+    tutte.find((o) => String(o.corriereId || "").trim().toLowerCase() === cerca) ||
+    null
+  );
+}
+
 function BadgeCorriere({ order, onApri, compatto = false }) {
   const scelto = String(order?.courier || order?.courierSpedizione || "").trim();
   const suggerito = order?.transport && !order.transport.errore
     ? order.transport.consigliato
     : null;
+  // Il prezzo deve stare accanto alla logistica anche DOPO che il corriere e'
+  // stato scelto, e deve essere il prezzo di quel corriere li'.
+  const suo = opzioneDelCorriere(order?.transport, scelto);
 
   const base = {
     border: "1px solid #cfd8e6", cursor: onApri ? "pointer" : "default",
@@ -1066,6 +1084,14 @@ function BadgeCorriere({ order, onApri, compatto = false }) {
           : "Corriere scelto. Clicca per cambiarlo."}
       >
         {inSede ? "🏠 RITIRO IN SEDE" : "🚚 " + scelto.toUpperCase()}
+        {!inSede && suo && (
+          <span style={{ fontWeight: 700, marginLeft: 6 }}>· {fmtEur(suo.totale)} €</span>
+        )}
+        {!inSede && !suo && order?.transport && !order.transport.errore && (
+          <span style={{ marginLeft: 6, opacity: 0.85 }} title="Questo corriere non ha listino per questa destinazione: il costo non e' calcolabile.">
+            · senza listino qui
+          </span>
+        )}
       </button>
     );
   }
@@ -5753,7 +5779,13 @@ export default function App() {
       ).trim();
       const transport =
         pesoTotale > 0 && capDest
-          ? calcolaPreventivo({ peso: pesoTotale, cap: capDest, temperatura })
+          ? calcolaPreventivo({
+              peso: pesoTotale,
+              cap: capDest,
+              temperatura,
+              // serve per le quotazioni Stef dedicate a un singolo cliente
+              cliente: order.customer
+            })
           : { errore: !capDest ? "CAP destinazione mancante" : "Peso ordine 0" };
 
       // Colli: suggerito = somma delle quantità di tutte le righe. Se l'utente ha
