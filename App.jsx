@@ -4499,6 +4499,30 @@ export default function App() {
   const [impegnatoDi, setImpegnatoDi] = useState(null);
   const [abbuonoPer, setAbbuonoPer] = useState(null);
   const [ordineDaGuardare, setOrdineDaGuardare] = useState(null);
+  // I CLIENTI ANCORA DA CONFERMARE (Luca 26/08/2026: "dammeli in rosso da
+  // modificare in archivio"). Sono quelli che hanno ordinato dal 03/08 e che
+  // nessuna persona ha ancora verificato: finche' restano qui, non sappiamo
+  // se la loro anagrafica e' giusta o solo popolata.
+  const [daConfermare, setDaConfermare] = useState([]);
+  // I confermati, per codice cliente: serve a mostrare il bollino R sulla scheda.
+  const [confermati, setConfermati] = useState({});
+  const caricaDaConfermare = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("v_clienti_da_confermare")
+        .select("chiave, codice_cliente, ragione_sociale, metodo_pagamento, agente_nome, mancano, ultimo_ordine")
+        .order("ultimo_ordine", { ascending: false, nullsFirst: false });
+      if (!error) setDaConfermare(data || []);
+    } catch (_) { /* la lista e' un aiuto, non deve fermare l'archivio */ }
+    try {
+      const { data } = await supabase
+        .from("clienti_confermati")
+        .select("codice_cliente, codice_r, confermato_il, confermato_da");
+      const per = {};
+      for (const c of data || []) if (c.codice_cliente) per[String(c.codice_cliente)] = c;
+      setConfermati(per);
+    } catch (_) { /* senza bollino si lavora lo stesso */ }
+  }, []);
   // Registro DDT (amministrazione): ricerca per numero, cliente o ordine.
   const [ddtSearch, setDdtSearch] = useState("");
   // Tracciabilita' lotti in Archivio: si cerca un articolo (o un lotto), si
@@ -5329,6 +5353,7 @@ export default function App() {
   // Il registro ha bisogno dello stesso caricamento: i DDT stanno quasi tutti
   // su ordini archiviati, e serve avere anche righe e lotti per ristampare.
   useEffect(() => {
+    if (page === "archivio" || page === "clienti") caricaDaConfermare();
     if ((page === "archivio" || page === "ddt") && !archivedLoaded && !loadingArchive) {
       loadArchivedOrders();
     }
@@ -12759,6 +12784,66 @@ ${isConferma
               </button>
             </div>
 
+            {daConfermare.length > 0 ? (
+              <div style={{
+                border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 14,
+                padding: 14, marginBottom: 16,
+              }}>
+                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 260, fontSize: 13.5, lineHeight: 1.5, color: "#7f1d1d" }}>
+                    <b style={{ fontSize: 15 }}>
+                      {daConfermare.length} clienti hanno ordinato dal 03/08 e non sono ancora confermati
+                    </b>
+                    <div style={{ fontSize: 12.5, opacity: 0.85, marginTop: 2 }}>
+                      Apri la scheda, controlla i dati e salva: da quel momento il cliente e'
+                      confermato e il suo codice porta la <b>R</b>. Finche' resta qui, l'anagrafica
+                      e' popolata ma nessuno l'ha verificata.
+                    </div>
+                  </div>
+                  <button style={btnStyle("outline")} onClick={caricaDaConfermare}>
+                    <RefreshCw size={16} /> Aggiorna elenco
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 12, maxHeight: "34vh", overflow: "auto",
+                  border: "1px solid #fecaca", borderRadius: 10, background: "#fff" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <tbody>
+                      {daConfermare.map((c) => (
+                        <tr key={c.chiave} style={{ borderBottom: "1px solid #fee2e2" }}>
+                          <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "#64748b" }}>
+                            {c.ultimo_ordine ? fmtDate(c.ultimo_ordine) : "—"}
+                          </td>
+                          <td style={{ padding: "7px 10px", whiteSpace: "nowrap",
+                            fontFamily: "ui-monospace, monospace", color: "#b91c1c" }}>
+                            {c.codice_cliente || "senza codice"}
+                          </td>
+                          <td style={{ padding: "7px 10px", fontWeight: 700, color: "#07153a" }}>
+                            {c.ragione_sociale}
+                          </td>
+                          <td style={{ padding: "7px 10px", color: "#b45309", fontSize: 12.5 }}>
+                            {(c.mancano || []).length ? (c.mancano || []).join(" · ") : "da verificare"}
+                          </td>
+                          <td style={{ padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
+                            <button
+                              style={{ ...compactBtnStyle("outline") }}
+                              onClick={() => {
+                                const cli = clients.find((x) => String(x.id) === String(c.codice_cliente));
+                                setClienteAperto(cli ? { cliente: cli, chiave: c.chiave } : { chiave: c.chiave });
+                                setPage("clienti");
+                              }}
+                            >
+                              Apri e conferma →
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
             {archivioIncompleti.bloccanti + archivioIncompleti.daCompletare > 0 ? (
               <div style={{
                 border: "1px solid " + (archivioIncompleti.bloccanti ? "#fecaca" : "#fde68a"),
@@ -13254,6 +13339,22 @@ ${isConferma
                 <div style={{ marginTop: 16, paddingTop: 16, borderTop: "2px solid #e6ebf2" }}>
                   <div style={{ fontSize: 16, fontWeight: 800, color: "#07153a", marginBottom: 10 }}>
                     {cli ? `Scheda di ${cli.name}` : "Crea nuovo cliente"}
+                    {/* IL BOLLINO R: questo cliente e' stato guardato in faccia
+                        da una persona (Luca 26/08/2026). Il codice nel database
+                        resta CLI-1234 - e' l'aggancio di ordini, fatture e CRM -
+                        e la R e' l'etichetta che si legge accanto. */}
+                    {cli && confermati[String(cli.id)] ? (
+                      <span
+                        style={{ marginLeft: 10, ...badgeStyle("success"), fontFamily: "ui-monospace, monospace" }}
+                        title={`Confermato il ${fmtDate(confermati[String(cli.id)].confermato_il)} da ${confermati[String(cli.id)].confermato_da}`}
+                      >
+                        {confermati[String(cli.id)].codice_r || `${cli.id}-R`}
+                      </span>
+                    ) : cli ? (
+                      <span style={{ marginLeft: 10, ...badgeStyle("warning") }}>
+                        da confermare
+                      </span>
+                    ) : null}
                   </div>
                   <SchedaCliente
                     /* LA SCHEDA SI RIFA' DA CAPO PER OGNI CLIENTE.
