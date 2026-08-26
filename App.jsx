@@ -4838,6 +4838,25 @@ export default function App() {
     }
     if (!order?.colliIsManual) daCompletare.push("Colli non confermati");
 
+    // LOGISTICA: quello che impedisce di sapere quanto e' costata la consegna
+    // (Luca 26/08/2026: "tutto quello che non ti torna, mettimi la modifica da
+    // fare in rosso sull'archivio ordini"). Senza peso il motore non quota,
+    // senza CAP nemmeno, e un corriere che non copre quella destinazione
+    // significa o assegnazione sbagliata o listino incompleto: in tutti e tre
+    // i casi la spedizione resta fuori dal controllo della fattura corriere.
+    const pesoSped = Number(order?.pesoTotale ?? order?.pesoManuale ?? 0);
+    const inSede = String(order?.courier || "").trim().toLowerCase() === "ritiro in sede";
+    if (!inSede) {
+      if (!(pesoSped > 0)) bloccanti.push("Peso spedizione (senza non si calcola il costo)");
+      const corriereSped = String(order?.courier || order?.courierSpedizione || "").trim();
+      const t = order?.transport;
+      if (corriereSped && t && !t.errore && !opzioneDelCorriere(t, corriereSped)) {
+        bloccanti.push(
+          `${corriereSped} non copre questa destinazione: verificare l'assegnazione`
+        );
+      }
+    }
+
     // IL METODO DI PAGAMENTO BLOCCA (Luca 06/08/2026: "metti in modo tale che
     // debba essere inserito bene").
     //

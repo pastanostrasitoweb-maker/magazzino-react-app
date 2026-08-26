@@ -55,13 +55,24 @@ function giorniBiotuscia(cap) {
   return mask
 }
 
+// Il calendario Stef nasce dal loro file, che per la CITTA' di Roma usa il
+// codice generico 00100 invece dei CAP veri (00118-00199). Senza questo
+// ripiego ogni consegna a Roma centro risulta "non servita", e sul frozen il
+// motore scartava Stef su tutta la citta'. Stessa radice del prezzo, che
+// infatti si legge per provincia (vedi `data/stef-lazio.js`).
+function giorniStef(cap) {
+  if (GIORNI_STEF[cap]) return GIORNI_STEF[cap]
+  if (/^001\d\d$/.test(cap) && GIORNI_STEF['00100']) return GIORNI_STEF['00100']
+  return 0
+}
+
 // Bitmask dei giorni in cui il corriere consegna a quel CAP. 0 = non servito.
 export function giorniConsegna(corriereId, cap) {
   const c = normalizza(cap)
   switch (corriereId) {
     case 'stef':
     case 'stef-surgelati':
-      return GIORNI_STEF[c] || 0
+      return giorniStef(c)
     case 'poste-fresh':
       return GIORNI_POSTE[c] || 0
     case 'biotuscia':
