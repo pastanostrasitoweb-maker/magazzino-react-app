@@ -4510,7 +4510,7 @@ export default function App() {
     try {
       const { data, error } = await supabase
         .from("v_clienti_da_confermare")
-        .select("chiave, codice_cliente, ragione_sociale, metodo_pagamento, agente_nome, mancano, ultimo_ordine")
+        .select("chiave, codice_cliente, ragione_sociale, metodo_pagamento, agente_nome, mancano, ultimo_ordine, gia_confermato, codice_r")
         .order("ultimo_ordine", { ascending: false, nullsFirst: false });
       if (!error) setDaConfermare(data || []);
     } catch (_) { /* la lista e' un aiuto, non deve fermare l'archivio */ }
@@ -12811,7 +12811,7 @@ ${isConferma
                 <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
                   <div style={{ flex: 1, minWidth: 260, fontSize: 13.5, lineHeight: 1.5, color: "#7f1d1d" }}>
                     <b style={{ fontSize: 15 }}>
-                      {daConfermare.length} clienti hanno ordinato dal 03/08 e non sono ancora confermati
+                      {daConfermare.length} clienti che hanno ordinato dal 03/08 da sistemare
                     </b>
                     <div style={{ fontSize: 12.5, opacity: 0.85, marginTop: 2 }}>
                       Apri la scheda, controlla i dati e salva: da quel momento il cliente e'
@@ -12834,14 +12834,24 @@ ${isConferma
                             {c.ultimo_ordine ? fmtDate(c.ultimo_ordine) : "—"}
                           </td>
                           <td style={{ padding: "7px 10px", whiteSpace: "nowrap",
-                            fontFamily: "ui-monospace, monospace", color: "#b91c1c" }}>
-                            {c.codice_cliente || "senza codice"}
+                            fontFamily: "ui-monospace, monospace",
+                            color: c.gia_confermato ? "#166534" : "#b91c1c" }}>
+                            {c.gia_confermato ? (c.codice_r || c.codice_cliente) : (c.codice_cliente || "senza codice")}
                           </td>
                           <td style={{ padding: "7px 10px", fontWeight: 700, color: "#07153a" }}>
                             {c.ragione_sociale}
                           </td>
                           <td style={{ padding: "7px 10px", color: "#b45309", fontSize: 12.5 }}>
-                            {(c.mancano || []).length ? (c.mancano || []).join(" · ") : "da verificare"}
+                            {/* CONFERMATO NON VUOL DIRE COMPLETO: chi e' gia' passato
+                                sotto le mani di qualcuno ma ha ancora buchi resta qui,
+                                ed e' il caso peggiore perche' sembra a posto. */}
+                            {c.gia_confermato ? (
+                              <b>già confermato, ma manca ancora: {(c.mancano || []).join(" · ")}</b>
+                            ) : (c.mancano || []).length ? (
+                              (c.mancano || []).join(" · ")
+                            ) : (
+                              "da verificare"
+                            )}
                           </td>
                           <td style={{ padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
                             <button
