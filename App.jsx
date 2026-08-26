@@ -6176,13 +6176,12 @@ export default function App() {
         }
       }
 
-      // Calcolo qty totale da assegnare alla coppia (riga, lotto target):
-      // se esiste gia' un'assegnazione su questa riga per questo lotto,
-      // sommo la nuova qty (l'rpc/adapter fa upsert, quindi devo passare il totale).
-      const currentAssignedOnThisLot = (assignments[line.lineId] || [])
-        .filter((a) => String(a.lotId) === String(targetLotId))
-        .reduce((s, a) => s + Number(a.qty || 0), 0);
-      const totalQty = currentAssignedOnThisLot + qtyN;
+      // QUI SI MANDA LA QUANTITA' NUOVA, NON IL TOTALE. Prima questo flusso
+      // sommava da solo leggendo lo stato locale, mentre gli altri due punti
+      // dell'app mandavano il delta: tre chiamanti, due convenzioni diverse, e
+      // il database che sostituiva invece di sommare. Adesso somma la funzione
+      // del database (p_aggiungi), che vede lo stato vero e non quello a
+      // schermo. Vedi sql/assegna_lotto_somma.sql.
 
       // Assegna (allowNegative=true: il lotto puo' andare in negativo dopo
       // prepara_ordine se la giacenza fisica e' inferiore a quanto assegnato).
@@ -6191,7 +6190,7 @@ export default function App() {
         payload: JSON.stringify({
           lineId: String(line.lineId),
           lotId: String(targetLotId),
-          qty: totalQty,
+          qty: qtyN,
           operatore: existingLot ? "lotto al volo (accorpato)" : "lotto al volo",
           allowNegative: true,
         }),

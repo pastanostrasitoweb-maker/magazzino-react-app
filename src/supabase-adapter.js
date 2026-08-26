@@ -918,11 +918,19 @@ async function assignLot(params) {
 
   // Sempre via rpc (atomica, con lock del lotto). allowNegative passa il flag
   // p_allow_negative=true alla rpc, che salta il check disponibilita.
+  //
+  // p_aggiungi: assegnare due volte lo STESSO lotto sulla stessa riga deve
+  // SOMMARE (Luca 26/08/2026: due chip "2608236 x1" e "2608236 x2" a schermo,
+  // ma nel database una riga sola da 2, e l'ordine non si preparava). Chi
+  // manda gia' il totale calcolato (il "lotto al volo") passa aggiungi=false;
+  // chi manda la quantita' nuova - cioe' i due flussi normali - passa true.
+  const aggiungi = p.aggiungi === undefined ? true : !!p.aggiungi;
   const { data, error } = await supabase.rpc("assegna_lotto", {
     p_id_riga: String(idRiga),
     p_id_lotto: String(idLotto),
     p_quantita: quantita,
     p_operatore: String(operatore),
+    p_aggiungi: aggiungi,
     p_allow_negative: !!allowNegative,
   });
   if (error) return failure(error);
