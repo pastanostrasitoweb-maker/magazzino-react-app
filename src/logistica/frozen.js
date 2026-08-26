@@ -117,6 +117,34 @@ export function corriereAmmetteFrozen(corriereId, cap) {
 
 // VERDETTO DI ZONA: il frozen è ordinabile per quel CAP?
 // Basta che un corriere refrigerato consegni entro 3 giorni, ritirando lun-ven.
+// LA PEDANA FROZEN (Luca 17/08/2026).
+//
+// Tutto quello che sta sopra e' il gelo che viaggia A COLLO: dentro una
+// spedizione refrigerata, nel poly box col ghiaccio secco. Il ghiaccio tiene tre
+// giorni, e dove il corriere non ce la fa il gelo non si puo' vendere.
+//
+// La PEDANA e' l'altra strada: il camion di Stef surgelati sta a -18 per tutto il
+// viaggio, quindi il ghiaccio secco non c'entra e il limite dei tre giorni non
+// esiste. Serve solo che Stef surgelati arrivi in quel CAP.
+//
+// Luca: "il concetto dei polybox dal momento che scegli la logistica frozen non
+// esiste piu', perche' ovviamente deve essere tutto frozen dentro la pedana".
+// Sono due modi alternativi, non due modi che si sommano: o si compone il poly
+// box, o si caricano cartoni su una pedana surgelata.
+export function pedanaFrozenAmmessa(cap) {
+  const c = normalizza(cap)
+  const mask = giorniConsegna('stef-surgelati', c)
+  return {
+    cap: c,
+    ammessa: mask > 0,
+    corriere: 'stef-surgelati',
+    giorni: elencoGiorni(mask),
+    motivo: mask > 0
+      ? null
+      : 'Stef surgelati non consegna a questo CAP: la pedana surgelata non ci arriva.'
+  }
+}
+
 export function frozenAmmesso(cap) {
   const c = normalizza(cap)
   const dettaglio = ['stef', 'brt-fresh', 'biotuscia', 'poste-fresh']

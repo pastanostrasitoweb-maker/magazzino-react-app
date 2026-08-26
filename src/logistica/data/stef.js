@@ -52,9 +52,23 @@ export const PARAMETRI_STEF = {
 }
 
 import { regioneDaCap } from './regioni.js'
+import { costoStefLazio } from './stef-lazio.js'
+import { costoStefDedicato } from './stef-dedicati.js'
 
-// Prezzo consegna Stef per (cap, peso). null se regione non mappata.
-export function costoStef(cap, peso) {
+// Prezzo consegna Stef per (cap, peso, cliente). null se regione non mappata.
+//
+// Ordine di precedenza, dal piu' specifico al piu' generico:
+//   1. quotazione dedicata al cliente (dal 03.08.2026)
+//   2. quotazione Lazio per provincia (dal 03.08.2026)
+//   3. griglia nazionale del contratto 2023
+// Le prime due non hanno il minimo tassabile di 25 kg, la terza si': e' la
+// ragione per cui esistono.
+export function costoStef(cap, peso, cliente) {
+  const ded = costoStefDedicato(cliente, peso)
+  if (ded) return ded
+  const laz = costoStefLazio(cap, peso)
+  if (laz) return laz
+
   const regione = regioneDaCap(cap)
   if (!regione || !GRIGLIA_STEF[regione]) return null
   const g = GRIGLIA_STEF[regione]

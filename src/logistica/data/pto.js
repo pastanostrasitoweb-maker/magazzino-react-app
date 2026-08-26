@@ -94,7 +94,7 @@ export const COSTI_FROZEN = {
 // Biotuscia usa il suo listino REALE per zona (data/biotuscia.js): copertura
 // regionale, fuori areale ritorna null e il preventivo lo esclude. Gli altri
 // corrieri usano ancora le TARIFFE placeholder demo finche non arriva l'Excel.
-export function costoConsegna(corriereId, cap, peso) {
+export function costoConsegna(corriereId, cap, peso, cliente) {
   if (corriereId === 'biotuscia') {
     const b = costoBiotuscia(cap, peso)
     if (!b) return null
@@ -118,12 +118,12 @@ export function costoConsegna(corriereId, cap, peso) {
     }
   }
   if (corriereId === 'stef') {
-    const b = costoStef(cap, peso)
+    const b = costoStef(cap, peso, cliente)
     if (!b) return null
     return {
       prezzo: b.prezzo,
       giorni: b.giorni,
-      zona: b.regione,
+      zona: b.dedicato ? `${b.regione} · dedicata` : b.provincia || b.regione,
       scaglione: { label: `${b.modo} · tass. ${b.pesoTassato}kg` }
     }
   }

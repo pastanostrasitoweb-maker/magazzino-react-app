@@ -92,7 +92,7 @@ export function previsioneConsegna(dataOrdineISO, corriereId, giorniTransito) {
 
 // Calcola tutte le opzioni per un ordine. Ritorna:
 // { consigliato, alternative, temperatura, imballo } oppure { errore }.
-export function calcolaPreventivo({ peso, cap, temperatura, box }) {
+export function calcolaPreventivo({ peso, cap, temperatura, box, cliente }) {
   const kg = Number(peso) || 0
   if (!cap) return { errore: 'CAP destinazione mancante' }
   if (kg <= 0) return { errore: 'Peso ordine mancante' }
@@ -123,7 +123,7 @@ export function calcolaPreventivo({ peso, cap, temperatura, box }) {
   for (const c of ammessi) {
     // sul frozen restano solo i corrieri che rispettano la regola di zona
     if (isFrozenCollo && !corriereAmmetteFrozen(c.id, cap)) continue
-    const cons = costoConsegna(c.id, cap, kg)
+    const cons = costoConsegna(c.id, cap, kg, cliente)
     if (!cons) continue // corriere senza listino per quella zona
     const componenti = {
       consegna: cons.prezzo,
@@ -160,8 +160,8 @@ export function calcolaPreventivo({ peso, cap, temperatura, box }) {
 // da un altro: si dichiara. Su un centro di costo un prezzo attribuito al
 // vettore sbagliato falsa il confronto con la fattura, che è il motivo per cui
 // esiste tutto il resto.
-export function costoSpedizione({ corriereId, peso, cap, temperatura, box }) {
-  const p = calcolaPreventivo({ peso, cap, temperatura, box })
+export function costoSpedizione({ corriereId, peso, cap, temperatura, box, cliente }) {
+  const p = calcolaPreventivo({ peso, cap, temperatura, box, cliente })
   if (p.errore) return null
   const tutte = [p.consigliato, ...p.alternative]
   const esatto = tutte.find((o) => o.corriereId === corriereId)
