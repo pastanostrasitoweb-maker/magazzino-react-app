@@ -7827,13 +7827,24 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
     let imponibileSenzaIva = 0;
     const righeHtml = (order.lines || [])
       .map((line) => {
+        // L'ABBUONO SI VEDE SULLA BOLLA (Luca 27/08/2026: "altrimenti il
+        // cliente pensa che non l'abbiamo applicato"). Non e' merce, quindi
+        // niente codice grezzo e niente quantita'; ma l'IMPORTO si stampa
+        // sempre, anche sui DDT senza prezzi: uno sconto che non si vede
+        // e' uno sconto negato. Prima l'importo negativo cadeva nella
+        // guardia "prezzo > 0" e usciva come "da definire".
+        const abb = rigaAbbuono(line);
+        const importoAbbuono = abb
+          ? Number(line.prezzoUnitario || 0) * Number(line.qtyOrdered || 1)
+          : 0;
         // Codice interno REALE del prodotto (dal catalogo), non l'id/riga.
         const prod = products.find((p) => String(p.id) === String(line.productId));
-        const codice =
-          prod?.code ||
-          line.productCode ||
-          (String(line.productId).startsWith("FUORI_MAGAZZINO") ? "" : line.productId) ||
-          "";
+        const codice = abb
+          ? ""
+          : prod?.code ||
+            line.productCode ||
+            (String(line.productId).startsWith("FUORI_MAGAZZINO") ? "" : line.productId) ||
+            "";
         // Lotto + scadenza assegnati, riportati nella descrizione.
         const lottiParts = (assignments[line.lineId] || [])
           .map((a) => {
@@ -7845,8 +7856,12 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
           })
           .filter(Boolean);
         const lottoStr = lottiParts.join(" · ");
-        const descr = esc(line.productName || "") + (lottoStr ? ` — Lotto: ${esc(lottoStr)}` : "");
-        const base = `<td>${esc(codice)}</td><td>${descr}</td><td style="text-align:right">${line.qtyOrdered}</td>`;
+        const descr = esc(line.productName || "") +
+          (lottoStr ? ` — Lotto: ${esc(lottoStr)}` : "") +
+          // Sul DDT senza prezzi l'importo dell'abbuono va nella descrizione:
+          // e' l'unico posto dove il cliente puo' leggerlo.
+          (abb && !conPrezzi ? ` — ${eur(importoAbbuono)} €` : "");
+        const base = `<td>${esc(codice)}</td><td>${descr}</td><td style="text-align:right">${abb ? "" : line.qtyOrdered}</td>`;
         if (!conPrezzi) return `<tr>${base}</tr>`;
 
         const prezzo = Number(line.prezzoUnitario || 0);
@@ -7870,8 +7885,8 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
         }
         // Prezzo mancante: si scrive "da definire", non zero. Uno zero su un
         // documento consegnato al cliente sembra merce regalata.
-        const cellaPrezzo = prezzo > 0 ? eur(prezzo) : "da definire";
-        const cellaTotale = prezzo > 0 ? eur(totale) : "—";
+        const cellaPrezzo = abb || prezzo > 0 ? eur(prezzo) : "da definire";
+        const cellaTotale = abb || prezzo > 0 ? eur(totale) : "—";
         // L'aliquota su OGNI riga: sullo stesso documento convivono il 4% e
         // il 10%, e chi controlla la fattura deve vedere quale sta dove senza
         // ricostruirlo. Se manca si scrive, non si mette un valore di ripiego.

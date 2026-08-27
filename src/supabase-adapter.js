@@ -701,7 +701,12 @@ async function archivePreparedOrders() {
 
   const { data, error } = await supabase
     .from("ordini")
-    .select("id_ordine, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile, colli, ddt_numero")
+    // id_cliente DEVE esserci: senza, il ripiego sul metodo dell'anagrafica
+    // era morto (codiciCandidati sempre vuoto) e un ordine col metodo grezzo
+    // restava in Preparati anche col cliente corretto. BIOCELIA, 27/08/2026:
+    // "TRANSFER" sull'ordine, "Bonifico 30 gg fine mese" sul cliente, e il
+    // cancello la segnalava lo stesso.
+    .select("id_ordine, id_cliente, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile, colli, ddt_numero")
     .or("archiviato.is.null,archiviato.eq.false")
     .lt("data_preparato", midnightIso);
   if (error) return failure(error);
