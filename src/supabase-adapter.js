@@ -2969,7 +2969,7 @@ async function spostaOrdineInOrdini(params) {
   const lines = (src.righe || []).map((r, i) => {
     const magId = r.id_prodotto_magazzino;
     const productId = magId != null && magId !== "" ? String(magId) : `FUORI_MAGAZZINO-${r.codice || i}`;
-    // CARTONE BOLLATO (Luca 2026-07-30): la merce sotto i 30 giorni si regala
+    // CARTONE BOLLATO (Luca 2026-07-30, soglia a 33 gg dal 27/08): la merce corta si regala
     // e va BOLLINATA prima di partire. Il marker deve dirlo esplicitamente,
     // con lotto e giorni residui: spostato l'ordine in preparazione, questa
     // riga e' l'unica cosa che l'operatore vede.

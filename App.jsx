@@ -1947,12 +1947,13 @@ function riduciImmagine(file, maxLato = 1400, qualita = 0.7) {
 // ---- BOLLINO SCADENZA SUI LOTTI (Luca 2026-07-31) ----
 // Serve a vedere a colpo d'occhio, nella vista magazzino, cosa resta davvero
 // vendibile a PREZZO PIENO e cosa invece e' ormai da bollinare.
-// Regola cartoni bollati: sotto i 30 giorni di vita residua il lotto non si
-// vende, si regala. Fra 30 e 45 giorni e' in avvicinamento: si segnala prima,
+// Regola cartoni bollati: sotto i 33 giorni di vita residua il lotto non si
+// vende, si regala (soglia portata da 30 a 33, Luca 27/08/2026). Fra 33 e 45
+// giorni e' in avvicinamento: si segnala prima,
 // cosi' ci si organizza (e' il "ormai da bollinare").
 // Guardia sui dati sporchi: scadenza assente o con anno < 2020 (es. il lotto
 // "000000") NON e' attendibile -> nessun bollino, non si declassa niente.
-const GIORNI_BOLLATO = 30;
+const GIORNI_BOLLATO = 33;
 const GIORNI_PREAVVISO_BOLLATO = 45;
 
 function bollinoScadenza(expiry, oggiMs) {
@@ -5782,7 +5783,7 @@ export default function App() {
   }, [products, magazzinoRows, productCommittedMap]);
 
   // ---- CARTONI BOLLATI (regola Luca 2026-07-28) ----
-  // Un lotto sotto i 30 giorni di vita residua e' "bollato": non si vende, si
+  // Un lotto sotto i 33 giorni di vita residua e' "bollato": non si vende, si
   // regala (l'app agenti lo offre come omaggio oltre i 10 cartoni ordinati).
   // Questa e' la riga bollati dell'operatore: cosa sta scadendo, quanto ne
   // resta e quanti cartoni interi si possono ancora dare via.
@@ -13877,7 +13878,7 @@ ${isConferma
                                   bol.tipo === "scaduto"
                                     ? "Lotto scaduto: va distrutto, non si regala"
                                     : bol.tipo === "bollato"
-                                    ? "Sotto i 30 giorni: non si vende a prezzo pieno, si regala come omaggio"
+                                    ? `Sotto i ${GIORNI_BOLLATO} giorni: non si vende a prezzo pieno, si regala come omaggio`
                                     : "In avvicinamento ai 30 giorni: presto sarà da bollinare"
                                 }
                               >
