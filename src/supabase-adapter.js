@@ -2434,6 +2434,9 @@ async function updateOrderLine(params) {
   if (p.qtyOrdered !== undefined) patch.quantita_ordinata = Number(p.qtyOrdered);
   if (p.quantita !== undefined) patch.quantita_ordinata = Number(p.quantita);
   if (p.productName !== undefined) patch.descrizione_prodotto = p.productName;
+  // Il cartone bollinato generico diventa l'articolo del lotto scelto: e'
+  // l'unico caso in cui una riga cambia prodotto.
+  if (p.productId !== undefined) patch.id_prodotto = String(p.productId);
   if (p.descrizione !== undefined) patch.descrizione_prodotto = p.descrizione;
   if (p.rowOrder !== undefined) patch.ordine_riga = Number(p.rowOrder);
   // Prezzo e sconto sempre correggibili a mano: se li tocchi, l'origine diventa manuale.
