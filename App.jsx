@@ -1447,8 +1447,9 @@ function BadgePagamento({ order, metodoCliente, onScegli, compatto = false }) {
   const attuale = metodoEffettivo(order?.metodoPagamento, metodoCliente);
   const leggibile = metodoLeggibile(attuale);
   const daSistemare = pagamentoDaSistemare(order, metodoCliente);
-  // Da dove arriva: serve saperlo, perche' cambiarlo qui vale solo per QUESTO
-  // ordine, mentre quello dell'anagrafica vale per tutti i suoi.
+  // Da dove arriva: serve saperlo. Correggere da qui sovrascrive anche
+  // l'anagrafica del cliente (Luca 25/08: "ogni modifica che faccio vale per
+  // quell'ordine e per quelli futuri") e il cliente risulta verificato (la R).
   const dallAnagrafica = !metodoLeggibile(order?.metodoPagamento) && metodoLeggibile(metodoCliente);
   const base = {
     fontSize: compatto ? 11.5 : 12.5, whiteSpace: "nowrap",
@@ -1469,7 +1470,7 @@ function BadgePagamento({ order, metodoCliente, onScegli, compatto = false }) {
           ? (attuale
               ? `"${attuale}" non dice quando si incassa: la scadenza a Cashflow e' messa a caso. Scegli il metodo giusto.`
               : "Metodo di pagamento mancante: la scadenza a Cashflow e' messa a caso.")
-          : `${attuale}${dallAnagrafica ? " (dall'anagrafica del cliente)" : ""} — la scadenza si calcola da qui. Cambiandolo qui vale solo per questo ordine.`
+          : `${attuale}${dallAnagrafica ? " (dall'anagrafica del cliente)" : ""} — la scadenza si calcola da qui. Cambiandolo qui vale per questo ordine E per i prossimi del cliente.`
       }
       onChange={(e) => { if (e.target.value) onScegli(e.target.value); }}
     >
@@ -7373,7 +7374,9 @@ export default function App() {
     try {
       const r = await callSheetsApi({
         action: "impostaMetodoPagamento",
-        payload: JSON.stringify({ orderId, metodo }),
+        // La firma: chi corregge dal bottone rosso e' una persona che ha
+        // verificato, e la conferma del cliente (la R) parte a suo nome.
+        payload: JSON.stringify({ orderId, metodo, operatore: authUser?.username || "" }),
       });
       if (!r || !r.success) {
         setOrders(prima);

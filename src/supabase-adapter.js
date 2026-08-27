@@ -3424,6 +3424,7 @@ export async function callSheetsApi(params = {}) {
         const { data, error } = await supabase.rpc("imposta_metodo_pagamento", {
           p_id_ordine: idOrdine,
           p_metodo: metodo,
+          p_operatore: String(pm.operatore || "").trim(),
         });
         if (error) return failure(error);
         const r = Array.isArray(data) ? data[0] : data;
