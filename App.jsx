@@ -5260,6 +5260,58 @@ export default function App() {
   const responsiveProductColumns = isIPadLayout ? "1fr" : "repeat(2, minmax(0, 1fr))";
   const responsiveOrderLineColumns = isSmallLayout ? "1fr" : "1fr 140px 110px";
 
+  // IL NODO VIVO. Dopo un'operazione (lotto assegnato, abbuono, unione,
+  // valorizzazione, evasione) cambiano solo ordini attivi, lotti e
+  // assegnazioni: ~300 righe. Prima ogni salvataggio ricaricava il mondo
+  // intero, anagrafiche comprese (registro da 2.216 clienti + 1.559
+  // destinazioni + 673 schede): ~5.500 righe scaricate per rileggere 30
+  // ordini. Le anagrafiche restano in memoria e si riaggiornano all'avvio,
+  // dal bottone Aggiorna e al salvataggio di una scheda cliente.
+  // Niente spinner a tutta pagina: il refresh e' piccolo e silenzioso.
+  const loadDatiVivi = async () => {
+    try {
+      await callSheetsApi({ action: "archivePreparedOrders" }).catch(() => null);
+      const raw = await callSheetsApi({ action: "getDatiVivi" });
+
+      const safeProducts = normalizeProducts(raw.prodotti || []);
+      const safeLots = normalizeLots(raw.lotti || [], safeProducts);
+      const normalizedOrders = normalizeOrders(raw.ordini || []);
+      const normalizedLines = normalizeOrderLines(raw.righeOrdine || [], safeProducts);
+      const mergedOrders = buildOrdersWithLines(normalizedOrders, normalizedLines);
+      const normalizedAssignments = normalizeAssignments(
+        raw.assegnazioniLotti || [],
+        normalizedLines,
+        safeLots
+      );
+
+      setProducts(safeProducts);
+      setLots(safeLots);
+      setOrders(mergedOrders);
+      setAppAnagrafiche(raw.anagraficheApp || {});
+      setAssignments(normalizedAssignments);
+      setArchivedLoaded(false);
+      // Stessa regola del caricamento pieno: si resta sull'ordine che si
+      // stava guardando, si cambia solo se non c'e' piu'.
+      setSelectedOrderId((prec) => {
+        const esiste = prec && mergedOrders.some((o) => String(o.id) === String(prec));
+        return esiste ? prec : (mergedOrders[0]?.id ?? "");
+      });
+      setSelectedLineId((precLinea) => {
+        const tutte = mergedOrders.flatMap((o) => o.lines || []);
+        const esiste = precLinea && tutte.some((l) => String(l.lineId) === String(precLinea));
+        return esiste ? precLinea : (mergedOrders[0]?.lines?.[0]?.lineId ?? "");
+      });
+      loadOrdiniApp().catch(() => {});
+      if (page === "archivio" || page === "ddt") {
+        await loadArchivedOrders();
+      }
+    } catch (e) {
+      // Se il nodo vivo non si carica, si torna al giro completo: piu' lento
+      // ma non lascia mai l'app con dati a meta'.
+      await loadDataFromSheets();
+    }
+  };
+
   const loadDataFromSheets = async () => {
     setLoadingData(true);
     setLoadError("");
@@ -5420,7 +5472,7 @@ export default function App() {
         return;
       }
       await loadOrdiniApp();
-      await loadDataFromSheets();
+      await loadDatiVivi();
       setPage("ordini");
       setSelectedOrderId(res.idOrdine || "");
     } finally {
@@ -5453,11 +5505,20 @@ export default function App() {
   // alimentano il badge pagamento auto. Refresh ogni 10 minuti; se le
   // tabelle mancano o la rete cade, i badge restano manuali (niente rotture).
   useEffect(() => {
+    let matcherPronto = false;
     const carica = async () => {
       try {
-        const res = await callSheetsApi({ action: "getSituazioneGestionale" });
+        // La prima volta scarica tutto (scaduto + anagrafica per il matcher);
+        // ai giri successivi solo lo scaduto: l'anagrafica del gestionale non
+        // cambia ogni dieci minuti e sono ~2.000 righe risparmiate a giro.
+        const res = await callSheetsApi({ action: "getSituazioneGestionale", soloScaduti: matcherPronto });
         if (res?.success) {
-          setGestionale({ scaduti: res.scaduti || {}, matcher: buildPaymentMatcher(res.anagrafica) });
+          if (matcherPronto) {
+            setGestionale((prev) => (prev ? { ...prev, scaduti: res.scaduti || {} } : prev));
+          } else {
+            setGestionale({ scaduti: res.scaduti || {}, matcher: buildPaymentMatcher(res.anagrafica) });
+            matcherPronto = true;
+          }
         }
       } catch (_) { /* badge restano manuali */ }
     };
@@ -6260,7 +6321,7 @@ export default function App() {
         targetLotId = created.idLotto || created.id_lotto;
         if (!targetLotId) {
           alert("Lotto creato ma id mancante. Ricarico i dati e riprova.");
-          await loadDataFromSheets();
+          await loadDatiVivi();
           return;
         }
       }
@@ -6290,12 +6351,12 @@ export default function App() {
             (assigned?.error || "sconosciuto") +
             "\nIl lotto resta caricato col valore inserito. Puoi assegnarlo manualmente."
         );
-        await loadDataFromSheets();
+        await loadDatiVivi();
         return;
       }
 
       // 3) Refresh dati e chiusura dialog.
-      await loadDataFromSheets();
+      await loadDatiVivi();
       setLotOnFlyDialog({ open: false, lineId: "", code: "", expiry: "", qty: "" });
     } catch (err) {
       alert("Errore: " + String(err));
@@ -6531,7 +6592,7 @@ export default function App() {
         // Riga non piu' allineata col database: ricarico cosi' l'ordine si
         // aggiorna con gli id reali e la nuova prova va a buon fine.
         if (result && result.code === "RIGA_INESISTENTE") {
-          await loadDataFromSheets();
+          await loadDatiVivi();
         }
       } else if (
         result.assignmentId &&
@@ -6656,7 +6717,7 @@ export default function App() {
             ((result && result.error) || "errore sconosciuto")
         );
         if (result && result.code === "RIGA_INESISTENTE") {
-          await loadDataFromSheets();
+          await loadDatiVivi();
         }
       } else if (
         result.assignmentId &&
@@ -6847,7 +6908,7 @@ export default function App() {
         alert("Non sono riuscito a staccare il residuo: " + ((r && r.error) || "sconosciuto"));
         return;
       }
-      await loadDataFromSheets();
+      await loadDatiVivi();
       alert(
         `Fatto.\n\nQuesto ordine ora contiene solo la merce coi lotti.\n` +
           `Il residuo (${r.pezzi_residui} pezzi) e' l'ordine ${r.id_residuo}, fra i Da preparare.`
@@ -8269,7 +8330,7 @@ ${isConferma
         alert("Unione non eseguita: " + ((res && res.error) || "errore sconosciuto"));
         return;
       }
-      await loadDataFromSheets();
+      await loadDatiVivi();
       setSelectedOrderId(String(dst.id));
       alert(`Ordini uniti: ${res.righeSpostate} righe spostate in ${dst.id}.`);
     } catch (e) {
@@ -8294,7 +8355,7 @@ ${isConferma
         alert("Separazione non eseguita: " + ((res && res.error) || "errore sconosciuto"));
         return;
       }
-      await loadDataFromSheets();
+      await loadDatiVivi();
       setSelectedOrderId(String(order.id));
     } catch (e) {
       alert("Errore di collegamento nella separazione: " + String(e));
@@ -8850,7 +8911,7 @@ ${isConferma
           }
         }
         // Refresh dati: il piu' affidabile dopo assegnazioni multiple e' ricaricare.
-        await loadDataFromSheets();
+        await loadDatiVivi();
         if (errorsRecap.length > 0) {
           alert(
             "Ordine creato. Alcuni lotti non sono stati assegnati automaticamente:\n\n" +
@@ -9654,7 +9715,7 @@ ${isConferma
         return;
       }
       setAbbuonoPer(null);
-      await loadDataFromSheets();
+      await loadDatiVivi();
     } catch (e) {
       alert("Errore di collegamento nel salvare l'abbuono.");
     }
@@ -9674,7 +9735,7 @@ ${isConferma
         alert("Abbuono non tolto: " + ((res && res.error) || "errore"));
         return;
       }
-      await loadDataFromSheets();
+      await loadDatiVivi();
     } catch (e) {
       alert("Errore di collegamento nel togliere l'abbuono.");
     }
@@ -9917,7 +9978,7 @@ ${isConferma
         setLots((prev) => applyStockMovementsToLots(prev, result.stockMovements));
       }
       if (result.orderReopened) {
-        await loadDataFromSheets();
+        await loadDatiVivi();
         return;
       }
 
@@ -9999,7 +10060,7 @@ ${isConferma
       // ricarichiamo lo stato completo dal foglio invece di applicare le patch
       // ottimistiche una per una.
       if (result.orderReopened) {
-        await loadDataFromSheets();
+        await loadDatiVivi();
         return;
       }
 
@@ -11983,7 +12044,7 @@ ${isConferma
                               archivio e il documento parte a zero. */}
                           {!isProduzione ? (
                             <div style={{ marginTop: 10 }}>
-                              <ValorizzazioneOrdine order={order} onSalvato={loadDataFromSheets} listini={listiniPrezzi} />
+                              <ValorizzazioneOrdine order={order} onSalvato={loadDatiVivi} listini={listiniPrezzi} />
                             </div>
                           ) : null}
 

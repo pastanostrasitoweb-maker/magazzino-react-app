@@ -425,23 +425,23 @@ async function anagrafichePerOrdini(orderIds) {
 
 // ---------- bulk load ----------
 
-async function bulkLoad() {
-  const [prodottiR, lottiR, ordiniR, clientiR] = await Promise.all([
+// IL NODO VIVO: quello che il lavoro cambia (prodotti, lotti, ordini attivi
+// con righe e assegnazioni, snapshot anagrafiche degli ordini app). Sta in una
+// funzione sua perche' dopo un'operazione si ricarica SOLO questo (action
+// getDatiVivi): le anagrafiche complete (registro clienti, destinazioni,
+// schede arricchite) pesano ~4.500 righe e restano in memoria.
+async function caricaNodoVivo() {
+  const [prodottiR, lottiR, ordiniR] = await Promise.all([
     supabase.from("prodotti").select("*"),
     supabase.from("lotti").select("*").order("scadenza", { ascending: true, nullsFirst: false }),
     // Solo ordini ATTIVI (non archiviati): lo storico si carica a richiesta
-    // (getOrdiniArchiviati). Niente scarico di 227+ ordini e ~1000 righe a ogni
-    // apertura, e nessun taglio silenzioso al tetto di 1000 righe di PostgREST.
+    // (getOrdiniArchiviati), senza tagli silenziosi al tetto dei 1000.
     supabase.from("ordini").select("*").or("archiviato.is.null,archiviato.eq.false"),
-    // clienti: tabella nuova (06_clienti.sql). maybe non esiste su ambienti
-    // non ancora migrati -> tollerante: se errore, lista vuota, app gira lo stesso.
-    supabase.from("clienti").select("*").order("ragione_sociale", { ascending: true }),
   ]);
 
   for (const r of [prodottiR, lottiR, ordiniR]) {
     if (r.error) throw r.error;
   }
-
   const prodotti = (prodottiR.data || []).map((row) => ({
     ID_Prodotto: String(row.id_prodotto ?? ""),
     Codice_Prodotto: row.codice_prodotto ?? "",
@@ -489,6 +489,21 @@ async function bulkLoad() {
     : [];
   const righeOrdine = righeRows.map(mapRigaRow);
   const assegnazioniLotti = assegRows.map(mapAssegRow);
+
+  // Anagrafiche degli ordini arrivati dall'APP agenti: lo snapshot JSON del
+  // cliente (crm_clienti non e' leggibile da anon, ma lo snapshot viaggia
+  // con l'ordine). Serve al semaforo "Anagrafica OK/KO" e al DDT.
+  // Mappa: id_ordine_magazzino -> oggetto cliente.
+  // Solo per gli ordini attivi (lo storico porta le sue anagrafiche a richiesta).
+  const anagraficheApp = await anagrafichePerOrdini(activeOrderIds);
+  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, anagraficheApp };
+}
+
+async function bulkLoad() {
+  const vivo = await caricaNodoVivo();
+  // clienti: tabella nuova (06_clienti.sql). maybe non esiste su ambienti
+  // non ancora migrati -> tollerante: se errore, lista vuota, app gira lo stesso.
+  const clientiR = await supabase.from("clienti").select("*").order("ragione_sociale", { ascending: true });
 
   // clienti: tollerante alla tabella mancante (clientiR.error -> lista vuota).
   const clientiLocali = (clientiR && !clientiR.error ? clientiR.data || [] : []).map((row) => ({
@@ -582,12 +597,6 @@ async function bulkLoad() {
     // senza anagrafica agenti il selettore resta vuoto, l'ordine si salva lo stesso
   }
 
-  // Anagrafiche degli ordini arrivati dall'APP agenti: lo snapshot JSON del
-  // cliente (crm_clienti non e' leggibile da anon, ma lo snapshot viaggia
-  // con l'ordine). Serve al semaforo "Anagrafica OK/KO" e al DDT.
-  // Mappa: id_ordine_magazzino -> oggetto cliente.
-  // Solo per gli ordini attivi (lo storico porta le sue anagrafiche a richiesta).
-  const anagraficheApp = await anagrafichePerOrdini(activeOrderIds);
 
   // Layer di ARRICCHIMENTO nostro: tipologia cliente (HORECA/FARMA/GDO) e campi
   // anagrafica completati a mano, indicizzati per chiave cliente (P.IVA o nome).
@@ -654,8 +663,9 @@ async function bulkLoad() {
     console.warn("destinazioni non caricate:", e);
   }
 
-  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, clienti, agenti, anagraficheApp, overridesClienti, destinazioni };
+  return { ...vivo, clienti, agenti, overridesClienti, destinazioni };
 }
+
 
 // ---------- action handlers ----------
 
@@ -2881,7 +2891,7 @@ async function deleteCliente(params) {
 // Servono al badge pagamento AUTO degli ordini: il match ordine→cliente
 // avviene per nome (token) in App.jsx. clienti_gestionale supera le 1000
 // righe → paginato (PostgREST taglia a 1000 per richiesta).
-async function getSituazioneGestionale() {
+async function getSituazioneGestionale(params) {
   const scaduti = {};
   {
     const { data, error } = await supabase
@@ -2895,6 +2905,11 @@ async function getSituazioneGestionale() {
         num: Number(r.num_scadute) || 0,
       };
     }
+  }
+  // Ai giri periodici serve solo lo scaduto: l'anagrafica del gestionale
+  // (~2.000 righe) non cambia ogni dieci minuti e il matcher resta in memoria.
+  if (params && params.soloScaduti) {
+    return { success: true, scaduti, anagrafica: [] };
   }
   const anagrafica = [];
   const PAGE = 1000;
@@ -3412,6 +3427,9 @@ export async function callSheetsApi(params = {}) {
         const r = Array.isArray(data) ? data[0] : data;
         return { success: true, ...r };
       }
+      case "getDatiVivi":
+        // Il nodo vivo da solo: ordini attivi, lotti, prodotti, assegnazioni.
+        return await caricaNodoVivo();
       case "impostaMetodoPagamento": {
         // Il metodo di pagamento E la scadenza della partita, insieme. Il
         // database rifiuta un metodo che non sa leggere (metodo_pagamento_canonico
@@ -3534,7 +3552,7 @@ export async function callSheetsApi(params = {}) {
       case "deleteCliente":
         return await deleteCliente(params);
       case "getSituazioneGestionale":
-        return await getSituazioneGestionale();
+        return await getSituazioneGestionale(params);
       case "getOrdiniDaApp":
         return await getOrdiniDaApp();
       case "spostaOrdineInOrdini":
