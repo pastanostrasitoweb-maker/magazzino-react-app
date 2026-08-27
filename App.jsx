@@ -1944,6 +1944,81 @@ function riduciImmagine(file, maxLato = 1400, qualita = 0.7) {
   });
 }
 
+// ---- IL CARTONE BOLLINATO SI AGGIUNGE COME ARTICOLO (Luca 27/08/2026) ----
+// "Il cartone bollinato deve uscire come articolo, e deve essere selezionabile
+// in mezzo a tutti quelli che sono da bollinare." Prima esisteva solo per gli
+// ordini arrivati dall'app agenti: in sede non c'era modo di metterlo.
+// La finestra elenca TUTTI i lotti bollinati (sotto la soglia, scaduti
+// esclusi: quelli si distruggono, non si regalano) e aggiunge una riga
+// ARTICOLO vera: prodotto reale, lotto promesso nel nome (la tendina poi lo
+// mette in cima), listino scritto e sconto 100 nella sua colonna, come ogni
+// omaggio (lo sconto mai dentro il prezzo).
+function FinestraBollinato({ righe, onScegli, onChiudi }) {
+  const [qta, setQta] = useState({});
+  const disponibili = (righe || []).filter((r) => !r.scaduto && Number(r.disponibile) > 0);
+  if (!disponibili.length) {
+    return (
+      <div style={{ fontSize: 14, color: "#617086" }}>
+        Nessun lotto bollinato disponibile (sotto i {GIORNI_BOLLATO} giorni con giacenza).
+        <div style={{ marginTop: 12, textAlign: "right" }}>
+          <button style={btnStyle("outline")} onClick={onChiudi}>Chiudi</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: "#617086", marginBottom: 8 }}>
+        Lotti sotto i {GIORNI_BOLLATO} giorni di shelf life: si regalano, non si vendono.
+        La riga nasce come articolo in omaggio (listino scritto, sconto 100%).
+      </div>
+      <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+          <thead>
+            <tr style={{ textAlign: "left", color: "#617086" }}>
+              <th style={{ padding: "6px 6px" }}>Referenza</th>
+              <th style={{ padding: "6px 6px" }}>Lotto</th>
+              <th style={{ padding: "6px 6px", textAlign: "right" }}>Giorni</th>
+              <th style={{ padding: "6px 6px", textAlign: "right" }}>Disp.</th>
+              <th style={{ padding: "6px 6px", textAlign: "right" }}>Q.ta</th>
+              <th style={{ padding: "6px 6px" }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {disponibili.map((r) => (
+              <tr key={r.lotId} style={{ borderTop: "1px solid #eef1f6" }}>
+                <td style={{ padding: "7px 6px", fontWeight: 700 }}>
+                  {r.productName}
+                  <span style={{ color: "#8a94a6", fontWeight: 400 }}> · {r.productCode}</span>
+                </td>
+                <td style={{ padding: "7px 6px" }}>{r.lotCode} · scad. {fmtDate(r.expiry)}</td>
+                <td style={{ padding: "7px 6px", textAlign: "right", fontWeight: 800, color: r.giorni <= 10 ? "#b45309" : "#243043" }}>{r.giorni}</td>
+                <td style={{ padding: "7px 6px", textAlign: "right" }}>{r.disponibile}</td>
+                <td style={{ padding: "7px 6px", textAlign: "right" }}>
+                  <input
+                    type="number" min={1} max={r.disponibile}
+                    value={qta[r.lotId] ?? 1}
+                    onChange={(e) => setQta((p) => ({ ...p, [r.lotId]: e.target.value }))}
+                    style={{ width: 58, padding: "4px 6px", border: "1px solid #cfd8e6", borderRadius: 6, textAlign: "right" }}
+                  />
+                </td>
+                <td style={{ padding: "7px 6px", textAlign: "right" }}>
+                  <button style={btnStyle("success")} onClick={() => onScegli(r, qta[r.lotId] ?? 1)}>
+                    🏷️ Aggiungi
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 12, textAlign: "right" }}>
+        <button style={btnStyle("outline")} onClick={onChiudi}>Chiudi</button>
+      </div>
+    </div>
+  );
+}
+
 // ---- BOLLINO SCADENZA SUI LOTTI (Luca 2026-07-31) ----
 // Serve a vedere a colpo d'occhio, nella vista magazzino, cosa resta davvero
 // vendibile a PREZZO PIENO e cosa invece e' ormai da bollinare.
@@ -2212,6 +2287,12 @@ function normalizeProducts(rows) {
           .trim()
           .toLowerCase()
       ),
+      // Aliquota IVA del catalogo (regola "IVA mai inventata"): serve alle
+      // righe che nascono in sede, cartone bollinato compreso.
+      ivaPct: (() => {
+        const v = getField(row, ["IVA_Pct", "iva_pct", "IVA"]);
+        return v === "" || v === null || v === undefined ? null : Number(v);
+      })(),
       // Peso in kg per 1 unita' d'ordine (per l'UM del prodotto: peso del
       // cartone per i CT, del pezzo per i PZ). Fonte: tabella statica
       // PESI_PRODOTTI (dai cataloghi app agenti); fallback colonna peso_kg se
@@ -4500,6 +4581,7 @@ export default function App() {
   const [pannelloFatture, setPannelloFatture] = useState(false);
   const [impegnatoDi, setImpegnatoDi] = useState(null);
   const [abbuonoPer, setAbbuonoPer] = useState(null);
+  const [bollinatoPer, setBollinatoPer] = useState(null);
   const [ordineDaGuardare, setOrdineDaGuardare] = useState(null);
   // I CLIENTI ANCORA DA CONFERMARE (Luca 26/08/2026: "dammeli in rosso da
   // modificare in archivio"). Sono quelli che hanno ordinato dal 03/08 e che
@@ -9712,6 +9794,47 @@ ${isConferma
   // torna con le quantita'.
   // Si apre la finestra: importo, motivo e ALIQUOTA da scegliere.
   const aggiungiAbbuono = (order) => { if (order) setAbbuonoPer(order); };
+  const aggiungiBollinato = (order) => { if (order) setBollinatoPer(order); };
+
+  // IL CARTONE BOLLINATO COME RIGA ARTICOLO (Luca 27/08/2026): prodotto vero,
+  // lotto promesso nel nome (la tendina lo mette in cima e offre solo i
+  // bollati), listino scritto e sconto 100 nella sua colonna.
+  const salvaBollinato = async (order, r, qty) => {
+    if (!order || !r) return;
+    const n = Math.max(1, Math.round(Number(qty) || 1));
+    const prod = products.find((p) => String(p.id) === String(r.productId));
+    const nextRowOrder =
+      Math.max(0, ...((order.lines || []).map((l) => Number(l.rowOrder || 0)))) + 1;
+    const chiave = String(prod?.code || r.productCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const listino = Number(listiniPrezzi?.[chiave]?.l1?.prezzo || 0);
+    try {
+      const res = await callSheetsApi({
+        action: "addOrderLine",
+        payload: JSON.stringify({
+          orderId: order.id,
+          lineId: `RIGA-${Date.now()}-BOLLINATO`,
+          productId: String(r.productId),
+          productCode: prod?.code || r.productCode || "",
+          productName: `${prod?.name || r.productName} 🏷️ DA BOLLINARE (${r.giorni} gg) · lotto ${r.lotCode}`,
+          rowOrder: nextRowOrder,
+          qtyOrdered: n,
+          prezzoUnitario: listino,
+          scontoPct: 0,
+          sconto2Pct: 100,
+          ...(prod?.ivaPct != null ? { ivaPct: prod.ivaPct } : {}),
+          prezzoOrigine: "bollato-sede",
+        }),
+      });
+      if (!res || !res.success) {
+        alert("Cartone bollinato non aggiunto: " + ((res && res.error) || "errore"));
+        return;
+      }
+      setBollinatoPer(null);
+      await loadDatiVivi();
+    } catch (e) {
+      alert("Errore di collegamento nell'aggiungere il cartone bollinato.");
+    }
+  };
 
   const salvaAbbuono = async (order, { importo, motivo, iva }) => {
     if (!order) return;
@@ -10896,6 +11019,13 @@ ${isConferma
                             onAggiungi={() => azioneUnica("abbuono-" + selectedOrder.id, () => aggiungiAbbuono(selectedOrder))}
                             onTogli={(l) => azioneUnica("togli-abbuono-" + l.lineId, () => togliAbbuono(selectedOrder, l))}
                           />
+                          <button
+                            style={btnStyle("outline")}
+                            onClick={() => azioneUnica("bollinato-" + selectedOrder.id, () => aggiungiBollinato(selectedOrder))}
+                            title="Aggiungi un cartone bollinato scegliendo dall'elenco dei lotti sotto la soglia"
+                          >
+                            🏷️ Cartone bollinato
+                          </button>
                           {/* Il badge del pagamento E' il comando: dice lo stato
                               (compreso lo scaduto calcolato dal Cashflow) e si
                               apre per cambiarlo. Prima erano tre cose separate,
@@ -12144,6 +12274,13 @@ ${isConferma
                             onAggiungi={() => azioneUnica("abbuono-" + order.id, () => aggiungiAbbuono(order))}
                             onTogli={(l) => azioneUnica("togli-abbuono-" + l.lineId, () => togliAbbuono(order, l))}
                           />
+                          <button
+                            style={btnStyle("outline")}
+                            onClick={() => azioneUnica("bollinato-" + order.id, () => aggiungiBollinato(order))}
+                            title="Aggiungi un cartone bollinato scegliendo dall'elenco dei lotti sotto la soglia"
+                          >
+                            🏷️ Cartone bollinato
+                          </button>
 
                           {order.computedStatus !== "Spedito" ? (
                             <button
@@ -15872,6 +16009,21 @@ ${isConferma
               order={ordersWithComputed.find((o) => String(o.id) === String(abbuonoPer.id)) || abbuonoPer}
               onSalva={(dati) => salvaAbbuono(abbuonoPer, dati)}
               onChiudi={() => setAbbuonoPer(null)}
+            />
+          ) : null}
+        </Modal>
+
+        <Modal
+          open={Boolean(bollinatoPer)}
+          title="🏷️ Cartone bollinato in omaggio"
+          onClose={() => setBollinatoPer(null)}
+          maxWidth={760}
+        >
+          {bollinatoPer ? (
+            <FinestraBollinato
+              righe={bollatiRows}
+              onScegli={(r, q) => salvaBollinato(bollinatoPer, r, q)}
+              onChiudi={() => setBollinatoPer(null)}
             />
           ) : null}
         </Modal>

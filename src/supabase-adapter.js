@@ -453,6 +453,7 @@ async function caricaNodoVivo() {
     Categoria: row.categoria ?? "",
     Sottocategoria: row.sottocategoria ?? "",
     Gestione_Lotti: boolToSiNo(row.gestione_lotti),
+    IVA_Pct: row.iva_pct ?? "",
   }));
 
   // Mappa id_prodotto -> codice_prodotto (dai prodotti caricati).
@@ -2399,7 +2400,7 @@ async function deleteOrderLine(params) {
 
   const r = await supabase
     .from("righe_ordine")
-    .select("id_riga, id_prodotto, prezzo_origine, descrizione_prodotto")
+    .select("id_riga, id_prodotto, prezzo_origine, descrizione_prodotto, quantita_assegnata")
     .eq("id_riga", lineId)
     .maybeSingle();
   if (r.error) return failure(r.error);
@@ -2409,8 +2410,14 @@ async function deleteOrderLine(params) {
     String(r.data.prezzo_origine || "") === "abbuono" ||
     String(r.data.id_prodotto || "").startsWith("ABBUONO-") ||
     /^ABBUONO\b/i.test(String(r.data.descrizione_prodotto || ""));
-  if (!eAbbuono) {
+  // Il cartone bollinato aggiunto in sede si puo' ripensare, ma solo finche'
+  // non ha un lotto assegnato: da li' in poi e' merce impegnata come le altre.
+  const eBollinatoSede = String(r.data.prezzo_origine || "") === "bollato-sede";
+  if (!eAbbuono && !eBollinatoSede) {
     return { success: false, error: "Da qui si tolgono solo gli abbuoni, non le righe di merce." };
+  }
+  if (eBollinatoSede && Number(r.data.quantita_assegnata || 0) > 0) {
+    return { success: false, error: "Il cartone bollinato ha gia' un lotto assegnato: togli prima l'assegnazione." };
   }
 
   const del = await supabase.from("righe_ordine").delete().eq("id_riga", lineId);
