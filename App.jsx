@@ -8537,8 +8537,12 @@ ${isConferma
       });
 
       if (!result || !result.success) {
+        // IL MOTIVO PER ESTESO (Luca 27/08/2026: "quando succede dicci il
+        // motivo dell'errore cosi' possiamo sbloccarlo"). Il database ora
+        // elenca le righe scoperte con i pezzi mancanti: va mostrato tale
+        // quale, non riassunto in un errore generico.
         alert(
-          "Errore nel salvataggio stato ordine sul foglio: " +
+          "L'ordine NON e' passato a PRONTO.\n\nMotivo: " +
             ((result && result.error) || "errore sconosciuto")
         );
         return;
