@@ -235,7 +235,10 @@ function valorizzaRigaApp(r) {
     ? Number(r.pezzi_collo) || (pezzi > 0 ? pezzi / colli : 1)
     : 1;
   const prezzoPezzo = Number(r.prezzo_unitario || 0);
-  const prezzo = Math.round(prezzoPezzo * pezziCollo * 10000) / 10000;
+  // MASSIMO DUE DECIMALI (Luca 27/08/2026): i prezzi si parlano in centesimi.
+  // Il listino di canale dell'app e' per pezzo con 4 decimali, e riportato a
+  // cartone si portava dietro la coda (45,3080 invece di 45,31 in bolla).
+  const prezzo = Math.round(prezzoPezzo * pezziCollo * 100) / 100;
 
   // REGOLA DI LUCA (11/08/2026): "ogni cosa che viene scontata NON modifica il
   // prezzo di listino ma aggiunge lo sconto nella riga sconti. Adesso abbiamo uno
@@ -295,7 +298,7 @@ function valorizzaRigaApp(r) {
     ) {
       return {
         qty: aCartoni ? colli : pezzi,
-        prezzo: Math.round(listinoPezzo * pezziCollo * 10000) / 10000,
+        prezzo: Math.round(listinoPezzo * pezziCollo * 100) / 100,
         sconto: s1,
         sconto2: s2,
       };
@@ -320,7 +323,7 @@ function valorizzaRigaApp(r) {
       // sconto sta nella sua colonna, come vuole la regola di Luca.
       return {
         qty: aCartoni ? colli : pezzi,
-        prezzo: Math.round(listinoPezzo * pezziCollo * 10000) / 10000,
+        prezzo: Math.round(listinoPezzo * pezziCollo * 100) / 100,
         sconto: 0,
         sconto2: 100,
       };
@@ -332,7 +335,7 @@ function valorizzaRigaApp(r) {
       if (sc1 >= 0 && sc1 < 100 && Math.abs(netto - finalePezzo * pezziCollo) < 0.01) {
         return {
           qty: aCartoni ? colli : pezzi,
-          prezzo: Math.round(listinoPezzo * pezziCollo * 10000) / 10000,
+          prezzo: Math.round(listinoPezzo * pezziCollo * 100) / 100,
           sconto: sc1,
           sconto2: scDich,
         };
@@ -341,7 +344,7 @@ function valorizzaRigaApp(r) {
   }
 
   if (listinoPezzo > 0 && prezzoPezzo > 0 && listinoPezzo >= prezzoPezzo) {
-    const lordo = Math.round(listinoPezzo * pezziCollo * 10000) / 10000;
+    const lordo = Math.round(listinoPezzo * pezziCollo * 100) / 100;
     const cascata = (a, b) => 1 - (1 - a / 100) * (1 - b / 100);
     const scontoVero = 1 - prezzoPezzo / listinoPezzo;
 
@@ -2429,7 +2432,8 @@ async function updateOrderLine(params) {
   // Prezzo e sconto sempre correggibili a mano: se li tocchi, l'origine diventa manuale.
   const prezzoUp = p.prezzoUnitario ?? p.prezzo_unitario;
   if (prezzoUp !== undefined) {
-    patch.prezzo_unitario = prezzoUp === null || prezzoUp === "" ? null : Number(prezzoUp);
+    patch.prezzo_unitario =
+      prezzoUp === null || prezzoUp === "" ? null : Math.round(Number(prezzoUp) * 100) / 100;
     patch.prezzo_origine = String(p.prezzoOrigine ?? p.prezzo_origine ?? "manuale");
   }
   const scontoUp = p.scontoPct ?? p.sconto_pct;
