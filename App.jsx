@@ -7227,6 +7227,21 @@ export default function App() {
       }
       colliManual = Math.round(n);
       payloadColli = colliManual;
+      // UN NUMERO DIVERSO DAL CONTEGGIO SI DICHIARA (DDT 1980, 27/08/2026:
+      // in bolla 15 colli con 16 cartoni di merce, e li ha contati il
+      // cliente). Scrivere piu' o meno scatole di quelle che fanno le righe
+      // puo' essere giusto (accorpamenti, polybox), ma non deve succedere per
+      // sbaglio: la differenza si conferma a voce alta.
+      const ordC = (ordersWithComputed || []).find((o) => String(o.id) === String(orderId));
+      const sugg = Number(ordC?.colliSuggested ?? NaN);
+      if (Number.isFinite(sugg) && sugg > 0 && colliManual !== sugg) {
+        const ok = window.confirm(
+          `Le righe dell'ordine fanno ${sugg} cartoni, stai scrivendo ${colliManual} colli.\n\n` +
+            `Questo numero finisce in bolla ed e' quello su cui il corriere fattura.\n\n` +
+            `OK = confermo ${colliManual} colli.\nAnnulla = torno a contare.`
+        );
+        if (!ok) return;
+      }
     }
 
     const previousOrders = orders;
