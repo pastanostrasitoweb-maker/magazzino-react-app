@@ -66,9 +66,12 @@ export const CORRIERI = [
     id: 'stef',
     nome: 'Stef',
     servizio: 'fresh',
-    temperature: ['fresh', 'frozen-collo'],
+    // 'secco' dal 27/08/2026 (Luca: "dice che Stef non ci va mentre abbiamo
+    // spedito proprio con lui"): la merce secca viaggia consolidata nel giro
+    // refrigerato, quindi Stef e' un'opzione vera anche per gli ordini ambient.
+    temperature: ['fresh', 'frozen-collo', 'secco'],
     descrizione:
-      'STEF Italia, refrigerato nazionale. Griglia per regione (€/sped fino 100kg, €/kg oltre), min 25kg. Ritiro Roma 15€/viaggio. Usato anche per surgelato a collo (poly box).',
+      'STEF Italia, refrigerato nazionale. Griglia per regione (€/sped fino 100kg, €/kg oltre), min 25kg. Ritiro Roma 15€/viaggio. Usato anche per surgelato a collo (poly box) e per il secco consolidato nel giro fresh.',
     contratto: { fonte: 'Offerta tariffaria trasporti nazionali (01/12/2023)', pagamento: 'RiBA 30gg' },
     pto: { fonte: 'Griglia tariffaria 20 regioni + coperture PTO (giorni/agenzia)' }
   },
@@ -91,7 +94,9 @@ export function corriereById(id) {
 export function corrieriPerTemperatura(temp) {
   switch (temp) {
     case 'secco':
-      return CORRIERI.filter((c) => c.servizio === 'ambient')
+      // Ambient piu' i corrieri che dichiarano di portare anche il secco
+      // (Stef: consolidato nel giro refrigerato).
+      return CORRIERI.filter((c) => c.servizio === 'ambient' || c.temperature.includes('secco'))
     case 'fresh':
       return CORRIERI.filter((c) => c.servizio === 'fresh')
     case 'frozen': // frozen a collo -> corrieri fresh (con poly box)

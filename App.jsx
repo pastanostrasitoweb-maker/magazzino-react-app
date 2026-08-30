@@ -5907,8 +5907,26 @@ export default function App() {
       // sull'ordine (order.cap, congelato alla creazione, vale per ogni cliente
       // anche agenti/testo libero); in mancanza, ripiego sull'anagrafica GAMMA.
       const temperatura = temperaturaOrdine(lines, order.pedanaFrozen);
+      // IL CAP SI CERCA DOVE STA (Luca 27/08/2026: "dice che Stef non ci va
+      // mentre abbiamo spedito proprio con lui"). Su 8 spedizioni Stef vere il
+      // motore taceva per "CAP mancante" mentre il CAP c'era: sulla sede di
+      // consegna scelta, sulla scheda arricchita o nello snapshot dell'app
+      // agenti. Stessa catena del DDT: ordine -> sede scelta -> scheda
+      // cliente -> snapshot app -> anagrafica GAMMA.
+      const sediOrd = destinazioni[String(order.clientId || "")] || [];
+      const sedeOrd =
+        sediOrd.find((d) => String(d.id) === String(order.idDestinazione || "")) ||
+        sediOrd.find((d) => d.predefinita) ||
+        sediOrd[0];
+      const ovOrd = clientiOverride[clientKeyFor(order)] || {};
+      const appOrd = appAnagrafiche[String(order.id)] || {};
       const capDest = String(
-        order.cap || clientsById[String(order.clientId)]?.cap || ""
+        order.cap ||
+          sedeOrd?.cap ||
+          ovOrd.cap ||
+          appOrd.cap ||
+          clientsById[String(order.clientId)]?.cap ||
+          ""
       ).trim();
       const transport =
         pesoTotale > 0 && capDest
@@ -5972,7 +5990,7 @@ export default function App() {
         pesoIsManual,
       };
     });
-  }, [orders, assignments, products, clientsById]);
+  }, [orders, assignments, products, clientsById, destinazioni, clientiOverride, appAnagrafiche]);
 
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
