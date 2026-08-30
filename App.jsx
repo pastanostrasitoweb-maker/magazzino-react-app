@@ -8137,7 +8137,7 @@ th{background:#eee}.tot{display:flex;gap:24px;margin-top:12px;font-weight:bold}
   color:#555;margin-bottom:3px}
 .nota-conferma{margin-top:16px;padding:10px 12px;border:1px solid #999;border-radius:6px;
   font-size:12px;line-height:1.45;color:#333;background:#fafafa}
-@media print{.noprint{display:none}}</style></head><body>
+@media print{.noprint{display:none !important}}</style></head><body>
 <div class="foglio">
 <div class="top"><div><h1>GLUTEN FREE EXPERIENCE SRL</h1><div style="font-size:12px">${
   isConferma ? "Conferma d&rsquo;ordine" : "Documento di Trasporto (D.d.T.) — D.P.R. 472/96"
