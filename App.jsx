@@ -1567,6 +1567,16 @@ function BadgeDestinazione({ order, sedi, scelta, onScegli, onAggiungi, ripiego 
     return [d.etichetta, dove].filter(Boolean).join(" · ");
   };
 
+  // SCELTA O RIPIEGO: il bollino deve dire quale delle due.
+  // Prima mostrava sempre `scelta`, che e' gia' il risultato del ripiego sulla
+  // predefinita: un ordine su cui NESSUNO aveva deciso niente si leggeva
+  // identico a uno deciso dall'agente. Con un cliente solo il ripiego e'
+  // innocuo (c'e' un negozio solo, non ci sono alternative); con due o piu' e'
+  // il punto in cui la merce parte per il posto sbagliato senza che nessuno
+  // abbia sbagliato niente.
+  const esplicita = elenco.some((d) => String(d.id) === String(order?.idDestinazione || ""));
+  const daScegliere = !esplicita && elenco.length > 1;
+
   // In archivio si legge e non si cambia: il DDT e' emesso e la merce e'
   // arrivata, quindi cambiare il negozio di destinazione vorrebbe dire far
   // dire al documento una cosa diversa da quella che e' successa.
@@ -1584,20 +1594,32 @@ function BadgeDestinazione({ order, sedi, scelta, onScegli, onAggiungi, ripiego 
 
   return (
     <select
-      style={{ ...badgeStyle(elenco.length > 1 ? "dark" : "outline"), ...base }}
-      value={String(scelta?.id || "")}
+      style={{
+        ...badgeStyle(daScegliere ? "warning" : esplicita && elenco.length > 1 ? "dark" : "outline"),
+        ...base,
+      }}
+      // Se nessuno ha scelto e i negozi sono piu' di uno, la tendina resta
+      // VUOTA: mostrare la predefinita gia' selezionata sarebbe una decisione
+      // presa dal sistema e firmata da una persona che non l'ha presa.
+      value={daScegliere ? "" : String(scelta?.id || "")}
       title={
-        scelta
+        daScegliere
+          ? `Questo cliente ha ${elenco.length} negozi e nessuno ha ancora detto dove va la merce. ` +
+            `Senza scelta il documento ripiegherebbe su ${scelta ? etichetta(scelta) : "il primo della lista"}.`
+          : scelta
           ? `Spedire a: ${etichetta(scelta)}. ${[scelta.via, scelta.civico].filter(Boolean).join(" ")}` +
-            (elenco.length > 1 ? " · Cambia negozio da qui, vale solo per questo ordine." : "")
+            (esplicita ? " · Scelta confermata." : " · Unico negozio registrato, nessuno ha dovuto scegliere.") +
+            (elenco.length > 1 ? " Cambia negozio da qui, vale solo per questo ordine." : "")
           : "Scegli dove spedire questo ordine"
       }
       onChange={(e) => {
         const v = String(e.target.value);
+        if (v === "") return;
         if (v === NUOVO) { if (onAggiungi) onAggiungi(); return; }
         if (onScegli) onScegli(v);
       }}
     >
+      {daScegliere && <option value="">⚠️ DOVE SPEDIRE? {elenco.length} negozi</option>}
       {elenco.map((d) => (
         <option key={d.id} value={d.id}>
           📍 {etichetta(d)}{d.predefinita && elenco.length > 1 ? " (predefinita)" : ""}
@@ -4491,6 +4513,13 @@ export default function App() {
   // CAP a mano per il cliente scritto a mano (serve al costo trasporto, che
   // altrimenti non ha destinazione per gli ordini a testo libero).
   const [newOrderCap, setNewOrderCap] = useState("");
+  // DOVE VA LA MERCE, scelto quando l'ordine nasce (31/08/2026).
+  // Gli ordini caricati in sede nascevano senza sede di consegna: 13 ordini
+  // vivi senza CAP che il preventivo del corriere non riusciva nemmeno a
+  // quotare, e su ELIOR (4 magazzini, nessuno predefinito) il ripiego pescava
+  // Roma su un ordine etichettato Milano. La sede si sceglie qui, come il
+  // cliente, non si scopre dopo.
+  const [newOrderDestId, setNewOrderDestId] = useState("");
   const [newOrderCategory, setNewOrderCategory] = useState("");
   const [newOrderNotes, setNewOrderNotes] = useState("");
   const [newOrderLines, setNewOrderLines] = useState([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "", naturaIva: "" }]);
@@ -4958,8 +4987,25 @@ export default function App() {
     else if (aZero.length > 0) daCompletare.push(`Senza prezzo: ${nomi(aZero)}`);
     // Aliquota mancante: va detto, non lasciato al valore di ripiego. Sul
     // documento diventerebbe 4% in silenzio, e su un ravioli sarebbe 10%.
-    const senzaIva = righe.filter((l) => l.prezzoUnitario > 0 && l.ivaPct == null);
-    if (senzaIva.length > 0) daCompletare.push(`Senza aliquota IVA: ${nomi(senzaIva)}`);
+    //
+    // GUARDAVA SOLO LE RIGHE COL PREZZO, e quindi non vedeva proprio quelle in
+    // cui l'aliquota manca davvero: gli articoli fuori magazzino (che a
+    // catalogo non ci sono) e il cartone bollinato prima che gli si scelga il
+    // lotto arrivano tutti a prezzo nullo o zero. Sono le uniche due strade da
+    // cui una riga senza IVA puo' nascere, ed erano le due che il controllo
+    // saltava. Adesso si guardano TUTTE le righe.
+    //
+    // Blocca, non segnala: dal 31/08 il database rifiuta l'archiviazione di un
+    // ordine con una riga senza aliquota, quindi dirlo qui in giallo vorrebbe
+    // dire far scoprire il muro sbattendoci contro. La campionatura gratuita
+    // resta fuori: non va in fattura, e chiederle un'aliquota fermerebbe merce
+    // che non ha nessun problema.
+    const senzaIva = righe.filter((l) => l.ivaPct == null || l.ivaPct === "");
+    if (senzaIva.length > 0) {
+      const dove = `Senza aliquota IVA: ${nomi(senzaIva)}`;
+      if (campionaturaGratuita) daCompletare.push(dove + " (campionatura: non va in fattura)");
+      else bloccanti.push(dove);
+    }
 
     return { bloccanti, daCompletare, totale: bloccanti.length + daCompletare.length };
   };
@@ -8475,9 +8521,34 @@ ${isConferma
   // archiviato e marcato "unito". Reversibile con separaOrdine.
   const unisciOrdine = async (src, dst) => {
     if (!src || !dst) return;
+
+    // DUE NEGOZI NON DIVENTANO UNA SPEDIZIONE (31/08/2026).
+    // L'unione guardava solo cliente e giorno: due ordini dello stesso cliente
+    // per due punti vendita diversi finivano in un documento solo, e la sede
+    // dell'ordine sorgente spariva senza che nessuno lo leggesse. Un camion
+    // pero' scarica in un posto solo. Qui non si sceglie al posto di nessuno:
+    // si dice che sono due consegne, e chi sa come stanno le cose decide.
+    const sedeSrc = destinazioneDi(src);
+    const sedeDst = destinazioneDi(dst);
+    const doveSrc = String(sedeSrc?.id || "");
+    const doveDst = String(sedeDst?.id || "");
+    if (doveSrc && doveDst && doveSrc !== doveDst) {
+      const nome = (d) =>
+        [d.etichetta, d.localita, d.provincia ? `(${d.provincia})` : ""].filter(Boolean).join(" ");
+      alert(
+        `Questi due ordini vanno in due posti diversi, non si uniscono.\n\n` +
+          `${src.id} → ${nome(sedeSrc)}\n` +
+          `${dst.id} → ${nome(sedeDst)}\n\n` +
+          `Un documento solo vorrebbe dire una consegna sola, e una delle due sedi si perderebbe.\n` +
+          `Se la merce va davvero tutta nello stesso negozio, cambia prima la sede col bollino 📍 e riprova.`
+      );
+      return;
+    }
+
+    const stessaSede = sedeDst ? `\nTutto va a: ${[sedeDst.etichetta, sedeDst.localita].filter(Boolean).join(" · ")}.` : "";
     const conferma = window.confirm(
       `Unire l'ordine di ${src.customer || src.id} in un unico ordine?\n\n` +
-        `Le righe di ${src.id} passano a ${dst.id}: un solo documento e una sola spedizione.\n` +
+        `Le righe di ${src.id} passano a ${dst.id}: un solo documento e una sola spedizione.${stessaSede}\n` +
         `Si può separare in qualsiasi momento.`
     );
     if (!conferma) return;
@@ -8933,6 +9004,19 @@ ${isConferma
       return;
     }
 
+    // LA SEDE SI SCEGLIE PRIMA DI SALVARE. Se il cliente ha negozi registrati
+    // e nessuno e' stato scelto, l'ordine non nasce: il ripiego silenzioso
+    // sulla predefinita e' esattamente il modo in cui la merce parte per il
+    // posto sbagliato senza che nessuno abbia sbagliato niente.
+    const sediDelCliente = destinazioni[String(newOrderClientId)] || [];
+    if (sediDelCliente.length > 0 && !newOrderDestId) {
+      alert(
+        `${newOrderCustomer.trim()} ha ${sediDelCliente.length} negozi registrati.\n\n` +
+          "Scegli dove va la merce prima di salvare: il sistema non lo indovina, e la consegna non va alla sede legale."
+      );
+      return;
+    }
+
     const validLines = newOrderLines
       .filter((line) => {
         const hasQty = Number(line.qtyOrdered) > 0;
@@ -9004,6 +9088,10 @@ ${isConferma
       // oppure quello digitato a mano (ordine a testo libero). Per il costo
       // trasporto.
       cap: String(newOrderCap || clientsById[newOrderClientId]?.cap || "").trim(),
+      // La sede scelta viaggia con l'ordine dalla nascita: il trigger
+      // cap_dalla_destinazione le allinea dietro il CAP, e il preventivo del
+      // corriere trova dove sta andando la merce.
+      idDestinazione: newOrderDestId || "",
       lines: validLines,
     };
 
@@ -9019,6 +9107,7 @@ ${isConferma
           workStatus: newOrder.workStatus,
           date: newOrder.date,
           cap: newOrder.cap,
+          id_destinazione: newOrder.idDestinazione,
           agenteId: newOrder.agenteId,
           agenteNome: newOrder.agenteNome,
           lines: newOrder.lines,
@@ -9039,6 +9128,7 @@ ${isConferma
       setNewOrderCustomer("");
       setNewOrderClientId("");
       setNewOrderCap("");
+      setNewOrderDestId("");
       setNewOrderCategory("");
       setNewOrderNotes("");
       setNewOrderLines([{ productId: "", productSearch: "", customName: "", isOutsideStock: false, qtyOrdered: "", lotId: "", prezzoUnitario: "", scontoPct: "", ivaPct: "", naturaIva: "" }]);
@@ -14749,12 +14839,77 @@ ${isConferma
                     setNewOrderCustomer(c.name);
                     if (c.category) setNewOrderCategory(c.category);
                     setNewOrderCap(String(c.cap || ""));
+                    // UN NEGOZIO SOLO NON E' UNA SCELTA: si preseleziona.
+                    // Da due in su la scelta la fa una persona: il campo resta
+                    // vuoto e l'ordine non si salva finche' non si sceglie.
+                    // La predefinita si propone, ma si vede che e' proposta.
+                    const sedi = destinazioni[String(id)] || [];
+                    if (sedi.length === 1) setNewOrderDestId(String(sedi[0].id));
+                    else if (sedi.length > 1) {
+                      const pre = sedi.find((s) => s.predefinita);
+                      setNewOrderDestId(pre ? String(pre.id) : "");
+                      if (pre && pre.cap) setNewOrderCap(String(pre.cap));
+                    } else setNewOrderDestId("");
+                    const unica = sedi.length === 1 ? sedi[0] : null;
+                    if (unica && unica.cap) setNewOrderCap(String(unica.cap));
                   } else {
                     setNewOrderCustomer("");
                     setNewOrderCap("");
+                    setNewOrderDestId("");
                   }
                 }}
               />
+
+              {/* DOVE SI CONSEGNA. Sta subito sotto il cliente perche' e' la
+                  seconda domanda dell'ordine, non un dettaglio del trasporto:
+                  la consegna non va alla sede legale. */}
+              {newOrderClientId && (destinazioni[String(newOrderClientId)] || []).length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 12, color: "#5a6e90", fontWeight: 700, marginBottom: 4 }}>
+                    📍 Dove si consegna{" "}
+                    {(destinazioni[String(newOrderClientId)] || []).length === 1
+                      ? "(unico negozio registrato)"
+                      : `(${(destinazioni[String(newOrderClientId)] || []).length} negozi: scegli)`}
+                  </div>
+                  <select
+                    style={{
+                      ...inputStyle(),
+                      ...(newOrderDestId ? {} : { borderColor: "#fdba74", background: "#fff7ed" }),
+                    }}
+                    value={newOrderDestId}
+                    onChange={(e) => {
+                      const v = String(e.target.value);
+                      setNewOrderDestId(v);
+                      const s = (destinazioni[String(newOrderClientId)] || []).find(
+                        (x) => String(x.id) === v
+                      );
+                      if (s && s.cap) setNewOrderCap(String(s.cap));
+                    }}
+                  >
+                    <option value="">⚠️ Scegli il negozio dove va la merce</option>
+                    {(destinazioni[String(newOrderClientId)] || []).map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {[d.etichetta, d.localita, d.provincia ? `(${d.provincia})` : "", d.cap]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        {d.predefinita ? " — predefinita" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {!newOrderDestId && (
+                    <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>
+                      Finche' non scegli, l'ordine non si salva: il sistema non indovina dove
+                      spedire.
+                    </div>
+                  )}
+                </div>
+              )}
+              {newOrderClientId && (destinazioni[String(newOrderClientId)] || []).length === 0 && (
+                <div style={{ fontSize: 12, color: "#5a6e90", marginTop: 8 }}>
+                  📍 Nessun negozio registrato per questo cliente: vale l'indirizzo dell'anagrafica.
+                  Il negozio si aggiunge dal bollino 📍 dell'ordine.
+                </div>
+              )}
 
               <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13, color: "#475569", cursor: "pointer" }}>
                 <input
@@ -14766,9 +14921,11 @@ ${isConferma
                       setNewOrderClientId("");
                       setNewOrderCustomer("");
                       setNewOrderCap("");
+                      setNewOrderDestId("");
                     } else if (!newOrderClientId) {
                       setNewOrderCustomer("");
                       setNewOrderCap("");
+                      setNewOrderDestId("");
                     }
                   }}
                 />

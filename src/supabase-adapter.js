@@ -2390,6 +2390,21 @@ async function addOrderLine(params) {
     }
   }
 
+  // L'ALIQUOTA E' UN DATO DEL PRODOTTO, NON DEL PREZZO (31/08/2026).
+  // Stava dentro il ramo "se la riga porta un prezzo": una riga aggiunta a mano
+  // senza prezzo nasceva senza aliquota, e restava vuota fino alla fattura.
+  // Qui si legge dal CATALOGO, come fa createOrder: non si inventa niente, si
+  // copia quello che l'articolo dichiara. Se il prodotto non e' a catalogo
+  // (fuori magazzino, cartone bollinato) la riga resta vuota apposta, e dal
+  // 31/08 l'archiviazione si ferma a chiedere.
+  if (riga.iva_pct === undefined && /^\d+$/.test(String(idProdotto))) {
+    const cat = await supabase
+      .from("prodotti").select("iva_pct").eq("id_prodotto", String(idProdotto)).maybeSingle();
+    if (cat.data && cat.data.iva_pct !== null && cat.data.iva_pct !== undefined) {
+      riga.iva_pct = Number(cat.data.iva_pct);
+    }
+  }
+
   const { data, error } = await supabase
     .from("righe_ordine")
     .insert(riga)
@@ -3011,6 +3026,93 @@ async function getOrdiniDaApp() {
   return { success: true, ordini: q.data || [] };
 }
 
+// Confronto fra due indirizzi "e' lo stesso posto?": si guardano solo le
+// lettere e i numeri, minuscoli. "Via Castello, 5742" e "VIA CASTELLO 5742"
+// sono lo stesso portone, e un doppione in anagrafica non serve a nessuno.
+const stessoPosto = (v) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// L'app agenti manda la via GIA' COMPLETA di CAP e citta':
+// "Via Castello, 5742, 30122 Venezia (VE)". Sul DDT la via si stampa su una
+// riga e "CAP citta (prov)" su quella sotto: lasciandola intera l'indirizzo
+// uscirebbe scritto due volte. Si taglia solo quando la coda combacia davvero
+// col CAP che il JSON porta a parte; se non combacia si tiene tutto, perche'
+// un indirizzo di troppo si legge, uno tagliato male no.
+// Esportata per poterla provare da sola: una regola che taglia indirizzi
+// deve essere verificabile senza aprire l'app.
+export function viaSenzaCoda(via, cap) {
+  const v = String(via ?? "").trim();
+  const c = String(cap ?? "").trim();
+  if (!v || !c) return v;
+  const i = v.indexOf(c);
+  if (i <= 0) return v;
+  return v.slice(0, i).replace(/[\s,;.·-]+$/, "").trim() || v;
+}
+
+// REGISTRA LA SEDE CHE L'AGENTE HA CONFERMATO e la aggancia all'ordine.
+// Idempotente: se il cliente ha gia' una sede allo stesso indirizzo la si
+// riusa, non se ne crea una seconda. Non blocca mai l'import: un ordine senza
+// sede si corregge dal bollino, un ordine perso no.
+export async function agganciaDestinazioneDaJson(idOrdine, dest) {
+  try {
+    const d = typeof dest === "string" ? JSON.parse(dest) : dest;
+    if (!d) return { success: false, error: "nessuna destinazione" };
+
+    const cap = String(d.cap || "").trim();
+    const via = viaSenzaCoda(d.via || d.indirizzo || "", cap);
+    const localita = String(d.localita || d.citta || "").trim();
+    if (!via && !localita) return { success: false, error: "indirizzo vuoto" };
+
+    // Il codice cliente VERO e' quello che createOrder ha appena agganciato
+    // all'ordine (puo' averlo registrato al volo): si rilegge da li', non si
+    // indovina dallo staging. Il trigger di guardia rifiuta una sede che non
+    // sia del cliente dell'ordine, e ha ragione.
+    const ord = await supabase
+      .from("ordini").select("id_cliente").eq("id_ordine", String(idOrdine)).maybeSingle();
+    const cod = String(ord.data?.id_cliente || "").trim();
+    if (!cod) return { success: false, error: "ordine senza codice cliente" };
+
+    const gia = await supabase
+      .from("clienti_destinazioni")
+      .select("id,via,cap,localita")
+      .eq("codice_cliente", cod);
+    const trovata = (gia.data || []).find(
+      (x) =>
+        stessoPosto(x.via) === stessoPosto(via) &&
+        stessoPosto(x.cap) === stessoPosto(cap) &&
+        stessoPosto(x.localita) === stessoPosto(localita)
+    );
+
+    let id = trovata?.id;
+    if (!id) {
+      id = `DEST-${cod}-${Date.now()}`;
+      const ins = await supabase.from("clienti_destinazioni").insert({
+        id,
+        codice_cliente: cod,
+        etichetta: "Sede",
+        insegna: d.insegna || null,
+        via: via || null,
+        cap: cap || null,
+        localita: localita || null,
+        provincia: String(d.provincia || "").trim() || null,
+        // Prima sede del cliente: e' anche la predefinita. Con due o piu' la
+        // predefinita non si tocca, la scelta resta di chi carica.
+        predefinita: (gia.data || []).length === 0,
+        fonte: "app agenti",
+      });
+      if (ins.error) return { success: false, error: ins.error.message };
+    }
+
+    // Agganciata all'ordine: il trigger cap_dalla_destinazione porta dietro il
+    // CAP giusto, quindi il preventivo del corriere torna a funzionare.
+    const upd = await supabase
+      .from("ordini").update({ id_destinazione: id }).eq("id_ordine", String(idOrdine));
+    if (upd.error) return { success: false, error: upd.error.message };
+    return { success: true, id, creata: !trovata };
+  } catch (e) {
+    return { success: false, error: String(e) };
+  }
+}
+
 // "Sposta in ordini": crea l'ordine operativo (ordini + righe_ordine) dallo
 // staging e marca lo staging come Importato. Da qui segue il flusso normale.
 async function spostaOrdineInOrdini(params) {
@@ -3108,6 +3210,19 @@ async function spostaOrdineInOrdini(params) {
     }),
   });
   if (!created?.success) return { success: false, error: created?.error || "errore creazione ordine" };
+
+  // L'INDIRIZZO CONFERMATO DALL'AGENTE NON SI BUTTA (31/08/2026).
+  // Per un cliente NUOVO le sedi in anagrafica non esistono ancora, quindi
+  // l'app agenti manda `id_destinazione: null` e scrive l'indirizzo nel JSON
+  // `destinazione`. Il magazzino leggeva solo l'id e il JSON finiva nel
+  // cestino: l'ordine restava senza sede e il documento ripiegava sulla sede
+  // legale. Erano 5 ordini dal 25/08 (MEA Libera Tutti, La Bottega della
+  // salute, LE CHICCHE, Loor Alcivar, Tentazioni senza glutine).
+  // Qui la sede si REGISTRA: cosi' l'indirizzo che l'agente ha confermato
+  // diventa un dato dell'anagrafica, e vale anche per il prossimo ordine.
+  if (!src.id_destinazione && src.destinazione) {
+    await agganciaDestinazioneDaJson(idOrdine, src.destinazione);
+  }
 
   // Flag "preso in gestione dal magazzino" verso l'app agenti: stato=Importato
   // (già letto dall'app agenti) + numero ordine magazzino + orario. Aggiungiamo

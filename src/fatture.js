@@ -193,6 +193,19 @@ export function xmlFattura(numero, dataDoc, ordine, a, righe) {
       const sc = [r.sconto_pct, r.sconto2_pct, r.sconto3_pct].map((s) => Number(s) || 0);
       let netto = qta * pu;
       for (const s of sc) netto *= 1 - s / 100;
+      // ALIQUOTA ASSENTE E ALIQUOTA ZERO NON SONO LA STESSA COSA.
+      // `Number(null) || 0` le faceva diventare identiche, e l'errore che
+      // usciva diceva "a IVA zero senza natura" anche quando l'aliquota non
+      // c'era proprio: chi lo leggeva andava a cercare una natura da scrivere
+      // invece dell'aliquota che mancava. Dal 31/08 l'archiviazione non lascia
+      // piu' passare una riga senza aliquota, ma qui resta l'ultima rete: se
+      // una riga arriva fin qui vuota, lo si dice con la parola giusta.
+      if (r.iva_pct === null || r.iva_pct === undefined || String(r.iva_pct).trim() === "") {
+        throw new Error(
+          `riga "${String(r.descrizione_prodotto || "").slice(0, 40)}" senza aliquota IVA: ` +
+            "scrivila sull'ordine (o a catalogo sull'articolo), non si puo' dedurre qui"
+        );
+      }
       const al = Number(r.iva_pct) || 0;
       // UNA RIGA A ZERO DEVE DIRE PERCHE'. Aliquota 0 senza natura non esiste
       // per lo SDI: la natura la scrive il magazzino sulla riga, qui si
