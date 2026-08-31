@@ -2012,6 +2012,27 @@ function rigaBollinatoGenerico(line) {
   return String(line?.productId || "").startsWith("BOLLINATO-");
 }
 
+// L'OMAGGIO DEI BOLLINI 1+1. Arriva dall'app agenti come riga fuori magazzino
+// "contenuto a scelta della sede": il cartone lo sceglie chi spedisce, e finora
+// non aveva dove dirlo (Luca 27/08/2026: "dobbiamo sempre dare la possibilita'
+// di inserire il lotto di quei ct dentro bollinati"). Senza lotto la merce
+// parte e non si scarica: gli stessi cartoni restano in giacenza a scadere.
+function rigaOmaggioBollini(line) {
+  const id = String(line?.productId || "");
+  const nome = String(line?.productName || "");
+  return id === "FUORI_MAGAZZINO-OMAGGIO" ||
+    /bollinat\w*\s*1\s*\+\s*1|omaggio\s+bollin/i.test(nome);
+}
+
+// Le righe che si servono dall'ELENCO DEI BOLLINATI: il cartone aggiunto in
+// sede e l'omaggio 1+1. Stessa tendina (tutti i bollinati, di ogni referenza)
+// e stesso esito: scelto il lotto, la riga diventa l'articolo vero.
+// Differenza: il cartone in sede SENZA lotto non e' niente e blocca; l'omaggio
+// 1+1 senza lotto resta com'e' oggi e non ferma la spedizione.
+function rigaSceltaBollinati(line) {
+  return rigaBollinatoGenerico(line) || rigaOmaggioBollini(line);
+}
+
 // Il codice lotto scritto dall'agente dentro la descrizione. Il formato che
 // manda l'app agenti e' "· lotto 2606174P", a volte seguito dalla scadenza fra
 // parentesi, quindi si ferma al primo pezzo alfanumerico dopo la parola.
@@ -5857,7 +5878,7 @@ export default function App() {
       const lines = (order.lines || []).map((line) => {
         const product = products.find((item) => String(item.id) === String(line.productId));
         const outsideStock = isOutsideStockLine(line);
-        const lotOptional = isLotOptionalProduct(product);
+        const lotOptional = isLotOptionalProduct(product) || rigaOmaggioBollini(line);
         // Sempre selettore lotti per le righe di magazzino. Anche i prodotti
         // a "disponibilita' generica" hanno il loro lotto DISPONIBILITA da
         // scegliere esplicitamente: cosi' su TUTTI gli ordini Luca puo' vedere
@@ -5865,6 +5886,9 @@ export default function App() {
         // a lotto facoltativo (HORECA, BIS): se c'e' un lotto lo si usa,
         // altrimenti si movimenta senza lotto.
         const abbuono = rigaAbbuono(line);
+        // L'omaggio 1+1 e' fuori magazzino, ma il lotto glielo si deve poter
+        // dare: lotto FACOLTATIVO, cosi' la tendina dei bollinati compare e
+        // "Senza lotto" resta una scelta valida (non blocca mai la spedizione).
         const requiresLots = !abbuono && !outsideStock && !lotOptional;
 
         const assignedFromAssignments = (assignments[line.lineId] || []).reduce(
@@ -6414,7 +6438,7 @@ export default function App() {
     // CARTONE BOLLINATO GENERICO: la lista di TUTTI i cartoni bollinati, di
     // ogni referenza (scaduti esclusi), dal piu' corto. E' qui che si sceglie
     // davvero cosa esce.
-    if (rigaBollinatoGenerico(line)) {
+    if (rigaSceltaBollinati(line)) {
       return activeLots
         .filter((lot) => (lotAssignedMap[String(lot.id)]?.total || 0) > 0)
         .filter((lot) => {
@@ -6469,7 +6493,9 @@ export default function App() {
     // rispondeva "inserisci una quantita' valida", e a quel punto ripiegava sul
     // lotto fresco che invece la disponibilita' l'aveva. La frizione decideva
     // quale merce si regala. Se davvero sfora, la conferma qui sotto lo chiede.
-    if (rigaBollata(line) && suggestedQty <= 0) suggestedQty = Number(line.qtyToAssign || 0);
+    if ((rigaBollata(line) || rigaSceltaBollinati(line)) && suggestedQty <= 0) {
+      suggestedQty = Number(line.qtyToAssign || 0) || 1;
+    }
 
     setInlineAssignmentForms((prev) => ({
       ...prev,
@@ -6550,7 +6576,7 @@ export default function App() {
       // Da qui in poi e' merce vera: prodotto del lotto, listino scritto,
       // sconto 100 nella sua colonna, IVA dal catalogo. Prima si aggiorna la
       // riga, poi si assegna: l'assegnazione deve nascere sul prodotto vero.
-      if (rigaBollinatoGenerico(line)) {
+      if (rigaSceltaBollinati(line)) {
         const prodVero = products.find((p) => String(p.id) === String(selectedLot.productId));
         if (!prodVero) {
           alert("Non riconosco il prodotto del lotto scelto: riprova dopo un Aggiorna.");
@@ -6564,7 +6590,9 @@ export default function App() {
           payload: JSON.stringify({
             lineId: line.lineId,
             productId: String(prodVero.id),
-            productName: `${prodVero.name} 🏷️ DA BOLLINARE (${bol ? bol.giorni : "?"} gg) · lotto ${selectedLot.lot}`,
+            productName: rigaOmaggioBollini(line)
+              ? `${prodVero.name} 🏷️ OMAGGIO bollini 1+1 (${bol ? bol.giorni : "?"} gg) · lotto ${selectedLot.lot}`
+              : `${prodVero.name} 🏷️ DA BOLLINARE (${bol ? bol.giorni : "?"} gg) · lotto ${selectedLot.lot}`,
             prezzoUnitario: listino,
             scontoPct: 0,
             sconto2Pct: 100,
@@ -11865,7 +11893,7 @@ ${isConferma
                                               ? ` · bollato ${bol.giorni} gg`
                                               : " · NON bollato")
                                           : "";
-                                        const nomeProdotto = rigaBollinatoGenerico(line)
+                                        const nomeProdotto = rigaSceltaBollinati(line)
                                           ? `${productMap[String(lot.productId)]?.name || productMap[String(lot.productId)]?.code || lot.productId} · `
                                           : "";
                                         return (
