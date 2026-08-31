@@ -1412,6 +1412,15 @@ async function createOrder(params) {
       stato_lavorazione: statoLav,
       cap,
       archiviato: false,
+      // LA SEDE DI CONSEGNA VIAGGIA COL SUO ORDINE (31/08/2026). Senza, la
+      // merce va all'indirizzo predefinito del cliente: finora e' uscita
+      // giusta per coincidenza (quasi tutti hanno un negozio solo), tranne
+      // Maison Della Salute, partita per Anzio invece che Nettuno. Col
+      // trigger cap_dalla_destinazione, scrivendola qui si porta dietro
+      // anche il CAP giusto per il preventivo del corriere.
+      ...(p.id_destinazione || p.idDestinazione
+        ? { id_destinazione: String(p.id_destinazione || p.idDestinazione) }
+        : {}),
       ...(p.agenteId ? { agente_id: String(p.agenteId) } : {}),
       ...(p.agenteNome ? { agente_nome: String(p.agenteNome) } : {}),
       ...(p.listino ? { listino: String(p.listino) } : {}),
@@ -1428,6 +1437,37 @@ async function createOrder(params) {
   if (insOrder.error) return failure(insOrder.error);
 
   const linesIn = Array.isArray(p.lines) ? p.lines : [];
+
+  // L'IVA NON SI INVENTA (regola Luca, e qui era rimasto il 4% di ripiego).
+  // Gli ordini che arrivano dall'app agenti NON portano l'aliquota (il ponte
+  // manda iva: null su ogni riga), quindi ogni riga nasceva al 4% e restava
+  // cosi' finche' la valorizzazione non la correggeva: i ripieni al 10%
+  // partivano al 4% (Farmacia San Lorenzo, 28/08/2026). L'aliquota e' un dato
+  // del PRODOTTO: si legge dal catalogo. Se il prodotto non ce l'ha, la riga
+  // resta VUOTA: il rosso la segnala e l'archiviazione si ferma, che e' meglio
+  // di una fattura con l'imposta sbagliata.
+  const ivaDaCatalogo = {};
+  {
+    const idsCatalogo = [
+      ...new Set(
+        linesIn
+          .map((l) => String(l.productId || l.idProdotto || l.ID_Prodotto || ""))
+          .filter((id) => id && /^\d+$/.test(id))
+      ),
+    ];
+    if (idsCatalogo.length) {
+      const cat = await supabase
+        .from("prodotti")
+        .select("id_prodotto, iva_pct")
+        .in("id_prodotto", idsCatalogo);
+      for (const r of cat.data || []) {
+        if (r.iva_pct !== null && r.iva_pct !== undefined) {
+          ivaDaCatalogo[String(r.id_prodotto)] = Number(r.iva_pct);
+        }
+      }
+    }
+  }
+
   const righe = linesIn.map((line, i) => {
     const lineId = line.lineId || line.idRiga || line.ID_Riga || `RIGA-${Date.now()}-${i}`;
     const productId = line.productId || line.idProdotto || line.ID_Prodotto;
@@ -1448,12 +1488,21 @@ async function createOrder(params) {
       quantita_ordinata: qtaOrdinata,
       quantita_assegnata: 0,
       ordine_riga: ordineRiga,
+      // L'IVA si scrive SEMPRE, anche quando la riga non porta un prezzo:
+      // e' un dato del prodotto, non del prezzo, e in fattura serve comunque.
+      iva_pct: (() => {
+        const dichiarata = line.ivaPct ?? line.iva_pct;
+        if (dichiarata !== undefined && dichiarata !== null && dichiarata !== "") {
+          return Number(dichiarata);
+        }
+        const dalCatalogo = ivaDaCatalogo[String(productId)];
+        return dalCatalogo === undefined ? null : dalCatalogo;
+      })(),
       ...(prezzo === undefined || prezzo === null
         ? {}
         : {
             prezzo_unitario: Number(prezzo),
             sconto_pct: Number(sconto || 0),
-            iva_pct: Number(line.ivaPct ?? line.iva_pct ?? 4),
             natura_iva: line.naturaIva ?? line.natura_iva ?? null,
             prezzo_origine: origine || "manuale",
           }),
@@ -3051,6 +3100,10 @@ async function spostaOrdineInOrdini(params) {
       // Come viaggia il gelo: la scelta l'ha fatta l'agente, il magazzino la
       // eredita e non deve indovinarla dai nomi dei prodotti.
       pedanaFrozen: src.pedana_frozen === true,
+      // DOVE va la merce, scelto dall'agente ordine per ordine (dal 24/08):
+      // senza questa riga la destinazione si perdeva all'import e il
+      // magazzino ripiegava sulla sede predefinita del cliente.
+      id_destinazione: src.id_destinazione || "",
       lines,
     }),
   });
