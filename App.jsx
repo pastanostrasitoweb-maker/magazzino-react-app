@@ -5944,8 +5944,17 @@ export default function App() {
         sediOrd[0];
       const ovOrd = clientiOverride[clientKeyFor(order)] || {};
       const appOrd = appAnagrafiche[String(order.id)] || {};
+      // LA SEDE SCELTA COMANDA SUL CAP (27/08/2026, segnalazione incrociata
+      // verificata: su 28 ordini con destinazione scelta, 19 avevano
+      // ordini.cap diverso da quello di consegna e 13 in un'altra zona).
+      // ordini.cap porta il CAP dell'ANAGRAFICA, non della destinazione: col
+      // suo il preventivo calcola una tratta che non esiste (BLUSERENA
+      // quotata su Pescara mentre la merce va a Castellaneta Marina, TA).
+      // Se per quell'ordine e' stata scelta una sede, il suo CAP viene prima
+      // di tutto; sotto, la catena di sempre.
       const capDest = String(
-        order.cap ||
+        (order.idDestinazione ? sedeOrd?.cap : "") ||
+          order.cap ||
           sedeOrd?.cap ||
           ovOrd.cap ||
           appOrd.cap ||
