@@ -8466,6 +8466,38 @@ ${isConferma
         orderId,
       });
 
+      // IL PREZZO SI SEGNALA, E SE DITE OK SI PROSEGUE (Luca 31/08/2026:
+      // "segnalalo ma non bloccarlo, se ti diciamo ok prosegui"). Il
+      // guardiano non e' un muro: dice cosa non torna, e chi guarda decide.
+      // L'ok resta scritto col nome di chi l'ha dato (v_prezzi_autorizzati).
+      if (result && result.code === "PREZZO_DA_AUTORIZZARE") {
+        const ok = window.confirm(
+          "PREZZI DIVERSI DA QUELLI CONCORDATI DALL'AGENTE\n\n" +
+            String(result.error || "") +
+            "\n\nOK = va bene cosi', archivia (resta scritto che l'hai deciso tu)." +
+            "\nAnnulla = non archivio, prima sistemo i prezzi."
+        );
+        if (!ok) return;
+        const aut = await callSheetsApi({
+          action: "autorizzaPrezzo",
+          payload: JSON.stringify({ orderId, operatore: authUser?.username || "" }),
+        });
+        if (!aut || !aut.success) {
+          alert("Non sono riuscito a registrare l'ok: " + ((aut && aut.error) || "errore"));
+          return;
+        }
+        const secondo = await callSheetsApi({ action: "archiveOrder", orderId });
+        if (!secondo || !secondo.success) {
+          alert("Ok registrato, ma l'archiviazione non e' riuscita: " + ((secondo && secondo.error) || "errore"));
+          return;
+        }
+        setOrders((prev) =>
+          prev.map((order) =>
+            String(order.id) === String(orderId) ? { ...order, archived: true } : order
+          )
+        );
+        return;
+      }
       if (!result || !result.success) {
         alert(
           "Errore nell'archiviazione ordine: " +

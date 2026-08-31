@@ -710,7 +710,7 @@ async function archivePreparedOrders() {
     // restava in Preparati anche col cliente corretto. BIOCELIA, 27/08/2026:
     // "TRANSFER" sull'ordine, "Bonifico 30 gg fine mese" sul cliente, e il
     // cancello la segnalava lo stesso.
-    .select("id_ordine, id_cliente, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile, colli, ddt_numero")
+    .select("id_ordine, id_cliente, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile, colli, ddt_numero, prezzo_ok_da")
     .or("archiviato.is.null,archiviato.eq.false")
     .lt("data_preparato", midnightIso);
   if (error) return failure(error);
@@ -827,7 +827,8 @@ async function archivePreparedOrders() {
     // cliente non ha mai accettato (Il Celiaco, DDT 1908: 43 EUR in piu').
     // Anche qui il controllo sta nell'adapter E nel database, perche'
     // l'archiviazione notturna parte da sola.
-    if (traditi.has(String(r.id_ordine))) {
+    // Chi ha gia' avuto l'ok firmato passa: la decisione e' stata presa.
+    if (traditi.has(String(r.id_ordine)) && !String(r.prezzo_ok_da || "").trim()) {
       prezzoTradito.push(r.id_ordine);
       continue;
     }
@@ -1110,8 +1111,35 @@ async function archiveOrder(params) {
     .from("ordini")
     .update({ archiviato: true })
     .eq("id_ordine", String(idOrdine));
-  if (error) return failure(error);
+  if (error) {
+    // IL PREZZO SI SEGNALA E SI DECIDE (Luca 31/08/2026). Il guardiano
+    // risponde con un messaggio riconoscibile: qui si passa il codice
+    // all'interfaccia, che mostra il dettaglio e chiede se procedere.
+    // Non e' un errore da rileggere in console: e' una domanda a una persona.
+    if (/PREZZO_DA_AUTORIZZARE/.test(String(error.message || ""))) {
+      return {
+        success: false,
+        code: "PREZZO_DA_AUTORIZZARE",
+        error: String(error.message).replace(/^.*PREZZO_DA_AUTORIZZARE:\s*/s, ""),
+      };
+    }
+    return failure(error);
+  }
   return { success: true };
+}
+
+// L'OK al prezzo diverso, firmato da chi lo da'. Poi si archivia davvero.
+async function autorizzaPrezzo(params) {
+  const p = parsePayload(params);
+  const idOrdine = String(p.orderId || p.idOrdine || "").trim();
+  if (!idOrdine) return { success: false, error: "orderId mancante" };
+  const { data, error } = await supabase.rpc("autorizza_prezzo_ordine", {
+    p_id_ordine: idOrdine,
+    p_operatore: String(p.operatore || "").trim(),
+  });
+  if (error) return failure(error);
+  const r = Array.isArray(data) ? data[0] : data;
+  return { success: true, righe: r?.righe ?? 0, sovrapprezzo: r?.sovrapprezzo ?? 0, dettaglio: r?.dettaglio || "" };
 }
 
 // PONTE VERSO L'APP AGENTI: quando il magazzino fa avanzare un ordine nato
@@ -3558,6 +3586,8 @@ export async function callSheetsApi(params = {}) {
         return await markOrderViewed(params);
       case "archiveOrder":
         return await archiveOrder(params);
+      case "autorizzaPrezzo":
+        return await autorizzaPrezzo(params);
       case "setMotivoFermo":
         return await setMotivoFermo(params);
       case "unisciOrdini":
