@@ -6398,6 +6398,25 @@ export default function App() {
       return;
     }
 
+    // QUI SI SCRIVE QUANTO SE NE SPEDISCE, NON QUANTO SE NE PRODUCE
+    // (Bongusto, DDT 1958: nel riquadro e' finita la quantita' del lotto
+    // prodotto, 7, su una riga che ne ordinava 1. Il magazzino ha scaricato 7
+    // lasagne, la bolla ne dichiarava 1, e la fattura non tornava). Il
+    // controllo c'era sull'assegnazione normale e mancava qui.
+    const giaAssegnate = Number(line.assignedQty || 0);
+    const residuo = Math.max(0, Number(line.qtyOrdered || 0) - giaAssegnate);
+    if (qtyN > residuo) {
+      const ok = window.confirm(
+        `Questa riga ordina ${Number(line.qtyOrdered || 0)} ${residuo !== Number(line.qtyOrdered || 0) ? `(ne restano ${residuo} da assegnare)` : ""} ` +
+          `e stai assegnando ${qtyN}.\n\n` +
+          "Il lotto puo' avere piu' pezzi: qui va scritto quanti ne partono per QUESTO cliente, " +
+          "non quanti ne hai prodotti.\n\n" +
+          `OK = assegno ${qtyN} lo stesso (usciranno dal magazzino ma in bolla ne resteranno ${Number(line.qtyOrdered || 0)}).\n` +
+          `Annulla = correggo la quantita'.`
+      );
+      if (!ok) return;
+    }
+
     setSavingLotOnFly(true);
     try {
       // ACCORPAMENTO: se esiste gia' un lotto con stesso codice (case-insensitive)
@@ -6455,6 +6474,10 @@ export default function App() {
           qty: qtyN,
           operatore: existingLot ? "lotto al volo (accorpato)" : "lotto al volo",
           allowNegative: true,
+          // L'operatore ha appena confermato di voler assegnare piu' pezzi di
+          // quelli ordinati: il database lo lascia passare solo se glielo si
+          // dice, cosi' non puo' succedere per distrazione.
+          oltreOrdinato: qtyN > residuo,
         }),
       });
       if (!assigned?.success) {

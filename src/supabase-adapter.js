@@ -932,6 +932,9 @@ async function assignLot(params) {
   const quantita = Number(p.qty ?? p.quantita ?? 0);
   const operatore = p.operatore || "";
   const allowNegative = !!(p.allowNegative ?? p.allow_negative);
+  // Assegnare piu' pezzi di quelli ordinati fa uscire merce che in bolla non
+  // c'e': si puo' fare, ma va detto (il database lo pretende).
+  const oltreOrdinato = !!(p.oltreOrdinato ?? p.oltre_ordinato);
 
   if (!idRiga || !idLotto || !quantita) {
     return { success: false, error: "Parametri mancanti per assignLot" };
@@ -990,6 +993,7 @@ async function assignLot(params) {
     p_operatore: String(operatore),
     p_aggiungi: aggiungi,
     p_allow_negative: !!allowNegative,
+    p_oltre_ordinato: oltreOrdinato,
   });
   if (error) return failure(error);
   const row = Array.isArray(data) ? data[0] : data;
