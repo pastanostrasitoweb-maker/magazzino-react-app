@@ -4581,7 +4581,13 @@ export default function App() {
         // prima di una provincia mancante.
         .order("pagamento_da_sistemare", { ascending: false })
         .order("ultimo_ordine", { ascending: false, nullsFirst: false });
-      if (!error) setDaConfermare(data || []);
+      // CHI BLOCCA LA FATTURA VIENE PRIMA. Il pagamento resta in testa perche'
+      // falsa anche il Cashflow, poi chi ha un documento fermo che aspetta
+      // solo questo dato, poi tutti gli altri.
+      const peso = (c) => (c.pagamento_da_sistemare ? 0
+        : (c.mancano || []).some((m) => String(m).startsWith("FATTURA:")) ? 1
+        : (c.mancano || []).includes("SCHEDA CLIENTE mai compilata") ? 2 : 3);
+      if (!error) setDaConfermare([...(data || [])].sort((a, b) => peso(a) - peso(b)));
     } catch (_) { /* la lista e' un aiuto, non deve fermare l'archivio */ }
     try {
       const { data } = await supabase
@@ -13253,6 +13259,13 @@ ${isConferma
                         <>{daConfermare.length} clienti che hanno ordinato dal 03/08 da sistemare</>
                       )}
                     </b>
+                    {daConfermare.filter((c) => (c.mancano || []).some((m) => String(m).startsWith("FATTURA:"))).length > 0 && (
+                      <div style={{ fontSize: 13, marginTop: 3, fontWeight: 700 }}>
+                        {daConfermare.filter((c) => (c.mancano || []).some((m) => String(m).startsWith("FATTURA:"))).length}{" "}
+                        hanno un documento gia' uscito col DDT che <b>non si puo' fatturare</b> finche'
+                        non si riempie quello scritto FATTURA:
+                      </div>
+                    )}
                     <div style={{ fontSize: 12.5, opacity: 0.85, marginTop: 2 }}>
                       Apri la scheda, controlla i dati e salva: da quel momento il cliente e'
                       confermato e il suo codice porta la <b>R</b>. Finche' resta qui, l'anagrafica
@@ -13295,7 +13308,13 @@ ${isConferma
                             ) : c.gia_confermato ? (
                               <b>già confermato, ma manca ancora: {(c.mancano || []).join(" · ")}</b>
                             ) : (c.mancano || []).length ? (
-                              (c.mancano || []).join(" · ")
+                              (c.mancano || []).map((m, i) => (
+                                <span key={i}>
+                                  {i > 0 ? " · " : ""}
+                                  <span style={String(m).startsWith("FATTURA:") || String(m).startsWith("SCHEDA")
+                                    ? { color: "#b91c1c", fontWeight: 700 } : undefined}>{m}</span>
+                                </span>
+                              ))
                             ) : (
                               "da verificare"
                             )}
