@@ -4585,8 +4585,9 @@ export default function App() {
       // falsa anche il Cashflow, poi chi ha un documento fermo che aspetta
       // solo questo dato, poi tutti gli altri.
       const peso = (c) => (c.pagamento_da_sistemare ? 0
-        : (c.mancano || []).some((m) => String(m).startsWith("FATTURA:")) ? 1
-        : (c.mancano || []).includes("SCHEDA CLIENTE mai compilata") ? 2 : 3);
+        : (c.mancano || []).some((m) => String(m).startsWith("SCHEDA DOPPIA")) ? 1
+        : (c.mancano || []).some((m) => String(m).startsWith("FATTURA:")) ? 2
+        : (c.mancano || []).includes("SCHEDA CLIENTE mai compilata") ? 3 : 4);
       if (!error) setDaConfermare([...(data || [])].sort((a, b) => peso(a) - peso(b)));
     } catch (_) { /* la lista e' un aiuto, non deve fermare l'archivio */ }
     try {
@@ -13312,6 +13313,7 @@ ${isConferma
                                 <span key={i}>
                                   {i > 0 ? " · " : ""}
                                   <span style={String(m).startsWith("FATTURA:") || String(m).startsWith("SCHEDA")
+                                    || String(m).startsWith("ALTRA SCHEDA")
                                     ? { color: "#b91c1c", fontWeight: 700 } : undefined}>{m}</span>
                                 </span>
                               ))
