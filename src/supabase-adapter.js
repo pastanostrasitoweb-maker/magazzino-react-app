@@ -1806,12 +1806,30 @@ async function saveClienteOverride(params) {
 async function caricaSuStorage(path, dataUrl) {
   const resp = await fetch(dataUrl);
   const blob = await resp.blob();
-  const { error } = await supabase.storage
+  // upsert FALSE: un documento caricato non si sovrascrive. Se il nome esiste
+  // gia' si aggiunge un suffisso, cosi' l'originale resta quello che e'.
+  let destinazione = path;
+  let esito = await supabase.storage
     .from("documenti")
-    .upload(path, blob, { contentType: blob.type || "application/octet-stream", upsert: true });
+    .upload(destinazione, blob, { contentType: blob.type || "application/octet-stream", upsert: false });
+  if (esito.error && /exists/i.test(String(esito.error.message || ""))) {
+    const punto = path.lastIndexOf(".");
+    const stelo = punto > 0 ? path.slice(0, punto) : path;
+    const coda = punto > 0 ? path.slice(punto) : "";
+    destinazione = `${stelo}-${Date.now()}${coda}`;
+    esito = await supabase.storage
+      .from("documenti")
+      .upload(destinazione, blob, { contentType: blob.type || "application/octet-stream", upsert: false });
+  }
+  if (esito.error) throw esito.error;
+  // LINK FIRMATO A SCADENZA, non indirizzo pubblico eterno (02/09/2026): il
+  // bucket non e' piu' pubblico, quindi un indirizzo indovinato non apre
+  // niente. Un anno: abbastanza per l'uso normale, non per sempre.
+  const { data, error } = await supabase.storage
+    .from("documenti")
+    .createSignedUrl(destinazione, 60 * 60 * 24 * 365);
   if (error) throw error;
-  const { data } = supabase.storage.from("documenti").getPublicUrl(path);
-  return data?.publicUrl || "";
+  return data?.signedUrl || "";
 }
 
 // Azione generica: carica un documento su Storage e ritorna l'URL (per DDT,
@@ -2142,68 +2160,20 @@ async function deleteOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
 
-  // Se l'ordine era passato per la preparazione, lo stock dei lotti era stato
-  // scalato da prepara_ordine. Eliminando l'ordine lo ripristiniamo (somma
-  // delle assegnazioni per lotto, rincrementata su lotti.quantita_caricata).
-  // Se l'ordine non era mai stato preparato non c'e' niente da ripristinare:
-  // lo stock fisico non era stato toccato.
-  const ordR = await supabase
-    .from("ordini")
-    .select("stato")
-    .eq("id_ordine", String(idOrdine))
-    .maybeSingle();
-  if (ordR.error) return failure(ordR.error);
-  const stockGiaScalato = stockScalato(ordR.data?.stato);
-
-  const stockMovements = [];
-
-  if (stockGiaScalato) {
-    const righeR = await supabase
-      .from("righe_ordine")
-      .select("id_riga")
-      .eq("id_ordine", String(idOrdine));
-    if (righeR.error) return failure(righeR.error);
-    const righeIds = (righeR.data || []).map((r) => r.id_riga);
-
-    if (righeIds.length > 0) {
-      const assR = await supabase
-        .from("assegnazioni_lotti")
-        .select("id_lotto, quantita_assegnata")
-        .in("id_riga", righeIds);
-      if (assR.error) return failure(assR.error);
-
-      const sumByLot = {};
-      for (const a of assR.data || []) {
-        const k = String(a.id_lotto);
-        sumByLot[k] = (sumByLot[k] || 0) + Number(a.quantita_assegnata || 0);
-      }
-
-      for (const [lotId, qty] of Object.entries(sumByLot)) {
-        const curLotR = await supabase
-          .from("lotti")
-          .select("quantita_caricata")
-          .eq("id_lotto", lotId)
-          .maybeSingle();
-        // se il lotto e' stato eliminato non posso ripristinare nulla, salto.
-        if (curLotR.error || !curLotR.data) continue;
-        const newQty = Number(curLotR.data.quantita_caricata || 0) + qty;
-        const updR = await supabase
-          .from("lotti")
-          .update({ quantita_caricata: newQty })
-          .eq("id_lotto", lotId);
-        if (updR.error) return failure(updR.error);
-        stockMovements.push({ lotId, newQty });
-      }
-    }
-  }
-
-  const { error } = await supabase
-    .from("ordini")
-    .delete()
-    .eq("id_ordine", String(idOrdine));
+  // UNA COSA SOLA, NON SEI (02/09/2026). Prima qui si leggeva la giacenza di
+  // ogni lotto, la si riscriveva sommando l'assegnato e solo alla fine si
+  // cancellava l'ordine: un errore a meta' o due click ravvicinati
+  // rimettevano la stessa merce in magazzino due volte, in silenzio. Ora
+  // rientro e cancellazione stanno in una transazione sola (elimina_ordine),
+  // le righe si bloccano e ripetere la chiamata non riaccredita niente.
+  const { data, error } = await supabase.rpc("elimina_ordine", { p_id_ordine: String(idOrdine) });
   if (error) return failure(error);
-
-  return { success: true, stockMovements, orderWasPrepared: stockGiaScalato };
+  const righe = Array.isArray(data) ? data : data ? [data] : [];
+  const stockMovements = righe.map((r) => ({
+    lotId: String(r.lotto_id),
+    newQty: Number(r.quantita_nuova ?? 0),
+  }));
+  return { success: true, stockMovements, orderWasPrepared: stockMovements.length > 0 };
 }
 
 async function createLot(params) {
