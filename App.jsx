@@ -4437,6 +4437,11 @@ function PannelloFatture({ onChiudi }) {
   );
 }
 
+// Cosa vuol dire "blocca la fattura" lo sa un posto solo: la voce arriva dalla
+// vista, e il prefisso e' il contratto fra il database e questa schermata.
+const haVoce = (c, p) => (c.mancano || []).some((m) => String(m).startsWith(p));
+const bloccaFattura = (c) => haVoce(c, "FATTURA:");
+
 export default function App() {
   const [page, setPage] = useState("ordini");
   const [orders, setOrders] = useState([]);
@@ -4616,8 +4621,8 @@ export default function App() {
       // falsa anche il Cashflow, poi chi ha un documento fermo che aspetta
       // solo questo dato, poi tutti gli altri.
       const peso = (c) => (c.pagamento_da_sistemare ? 0
-        : (c.mancano || []).some((m) => String(m).startsWith("SCHEDA DOPPIA")) ? 1
-        : (c.mancano || []).some((m) => String(m).startsWith("FATTURA:")) ? 2
+        : haVoce(c, "SCHEDA DOPPIA") ? 1
+        : bloccaFattura(c) ? 2
         : (c.mancano || []).includes("SCHEDA CLIENTE mai compilata") ? 3 : 4);
       if (!error) setDaConfermare([...(data || [])].sort((a, b) => peso(a) - peso(b)));
     } catch (_) { /* la lista e' un aiuto, non deve fermare l'archivio */ }
@@ -13373,8 +13378,7 @@ ${isConferma
                               (c.mancano || []).map((m, i) => (
                                 <span key={i}>
                                   {i > 0 ? " · " : ""}
-                                  <span style={String(m).startsWith("FATTURA:") || String(m).startsWith("SCHEDA")
-                                    || String(m).startsWith("ALTRA SCHEDA")
+                                  <span style={/^(FATTURA:|(ALTRA )?SCHEDA)/.test(String(m))
                                     ? { color: "#b91c1c", fontWeight: 700 } : undefined}>{m}</span>
                                 </span>
                               ))
