@@ -471,8 +471,20 @@ const METODI_PAGAMENTO = GRUPPI_PAGAMENTO.flatMap((g) => g.voci);
 // "CONTRASSEGNO" non lo sono: dicono il mezzo ma non il termine, e senza termine
 // non c'e' scadenza. "Da concordare" e' fuori dalla lista per lo stesso motivo:
 // e' un promemoria, non una condizione di pagamento.
+// Il confronto NON e' lettera per lettera (Luca 01/09/2026: "mi dicono che
+// hai tutti i dati mentre in archivio dice che manca il pagamento"). Il
+// database normalizza prima di leggere, l'app confrontava la stringa esatta:
+// "Bonifico Fine Mese" con le maiuscole, o due spazi di troppo, risultavano
+// "mancanti" pur essendo lo stesso identico metodo. Chi guarda l'archivio
+// vede un rosso su un dato che c'e', e smette di fidarsi dei rossi.
+// Qui si ignorano maiuscole e spazi doppi. Le forme davvero diverse
+// ("Bonifico 30FM") le raddrizza il database quando scrive.
+const chiaveMetodo = (m) =>
+  String(m || "").trim().toLowerCase().replace(/\s+/g, " ");
+const METODI_PAGAMENTO_CHIAVI = new Set(METODI_PAGAMENTO.map(chiaveMetodo));
+
 function metodoLeggibile(metodo) {
-  return METODI_PAGAMENTO.includes(String(metodo || "").trim());
+  return METODI_PAGAMENTO_CHIAVI.has(chiaveMetodo(metodo));
 }
 
 // Dal 03/08/2026 comanda il magazzino, e da quella data i metodi devono essere

@@ -799,8 +799,12 @@ async function archivePreparedOrders() {
     const daAllineare = !data0 || data0 >= PAGAMENTI_ALLINEATI_DAL_ADAPTER;
     const suOrdine = String(r.metodo_pagamento || "").trim();
     const suCliente = String(metodiCliente[String(r.id_cliente || "")] || "").trim();
+  const chiaveMet = (m) => String(m || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const CANONICI_CHIAVI = new Set([...METODI_PAGAMENTO_CANONICI].map(chiaveMet));
+    // Stessa tolleranza dell'interfaccia: maiuscole e spazi non fanno di un
+    // metodo giusto un metodo mancante.
     const leggibile =
-      METODI_PAGAMENTO_CANONICI.has(suOrdine) || METODI_PAGAMENTO_CANONICI.has(suCliente);
+      CANONICI_CHIAVI.has(chiaveMet(suOrdine)) || CANONICI_CHIAVI.has(chiaveMet(suCliente));
     // Campionatura gratuita: niente da incassare, quindi il cancello non si
     // applica (Luca 11/08/2026). A imponibile zero non c'e' nessuna scadenza da
     // sbagliare, e chiedere il metodo le terrebbe bloccate per sempre.
