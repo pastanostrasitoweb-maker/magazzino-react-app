@@ -1058,9 +1058,28 @@ function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva, apriNuovaSubi
 // mai sul consigliato: mostrare il prezzo di un corriere accanto al nome di un
 // altro e' peggio che non mostrare niente (Luca 26/08/2026: "se cambi il
 // metodo di consegna non ricalcola il prezzo").
+// UN CORRIERE, UN NOME (analisi 02/09/2026). Nel campo `corriere` sono finite
+// tredici grafie per sei vettori: il magazzino ci scriveva il NOME ("Stef"),
+// l'app logistica l'ID ("stef"), e a mano sono passati "STEF", "BRT AMBIENT",
+// "Tacos". Chi conta le spedizioni per corriere ne contava sei diversi dove
+// ce n'era uno. Adesso nel database si scrive l'ID e qui si traduce: a video
+// e in bolla si legge sempre il nome buono, qualunque cosa ci sia scritto.
+const NOME_CORRIERE = (() => {
+  const perChiave = new Map();
+  for (const c of CORRIERI) {
+    perChiave.set(String(c.id).toLowerCase(), c.nome);
+    perChiave.set(String(c.nome).toLowerCase(), c.nome);
+  }
+  return (v) => {
+    const k = String(v || "").trim().toLowerCase();
+    if (!k) return "";
+    return perChiave.get(k) || String(v).trim();
+  };
+})();
+
 function opzioneDelCorriere(transport, nomeCorriere) {
   if (!transport || transport.errore || !nomeCorriere) return null;
-  const cerca = String(nomeCorriere).trim().toLowerCase();
+  const cerca = NOME_CORRIERE(nomeCorriere).toLowerCase();
   const tutte = [transport.consigliato, ...(transport.alternative || [])].filter(Boolean);
   return (
     tutte.find((o) => String(o.corriere || "").trim().toLowerCase() === cerca) ||
@@ -1070,7 +1089,7 @@ function opzioneDelCorriere(transport, nomeCorriere) {
 }
 
 function BadgeCorriere({ order, onApri, compatto = false }) {
-  const scelto = String(order?.courier || order?.courierSpedizione || "").trim();
+  const scelto = NOME_CORRIERE(order?.courier || order?.courierSpedizione);
   const suggerito = order?.transport && !order.transport.errore
     ? order.transport.consigliato
     : null;
@@ -7839,7 +7858,7 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
   const markOrderShipped = async (order) => {
     if (!order) return;
     const corriere =
-      order.courier || order.transport?.consigliato?.corriere || "";
+      NOME_CORRIERE(order.courier) || order.transport?.consigliato?.corriere || "";
     // Segnare spedito EMETTE il documento di trasporto, e da li' non si torna
     // indietro (regola di Luca 03/08/2026). Va detto prima di farlo, non dopo,
     // e va detto anche cosa manca: correggere un DDT gia' uscito e' un'altra
@@ -8030,8 +8049,10 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
       pagamento: app.metodo_pagamento || "",
       note: String(app.note || "").trim(),
     };
+    // In bolla il NOME del vettore, non l'id con cui e' scritto nel database.
     const corriere =
-      order.courier || order.courierSpedizione || order.transport?.consigliato?.corriere || "";
+      NOME_CORRIERE(order.courier || order.courierSpedizione) ||
+      order.transport?.consigliato?.corriere || "";
     // La data del DOCUMENTO, non quella di oggi. Sembra un dettaglio e non lo
     // e': ristampare un DDT il giorno dopo ne cambiava la data, e un documento
     // fiscale con due date diverse a seconda di quando lo stampi non sta in
