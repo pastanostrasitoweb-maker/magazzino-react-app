@@ -4776,8 +4776,26 @@ export default function App() {
 
   // Il metodo scritto sull'ANAGRAFICA del cliente di quell'ordine. E' la fonte
   // che vale quando l'ordine non ne porta uno suo: cosi' non si chiede due volte.
+  // LA SCHEDA SI TROVA PER CODICE CLIENTE (02/09/2026). La chiave da P.IVA o
+  // nome la calcolavano in due (database dal registro, app dallo snapshot
+  // dell'app agenti) e quando il registro non ha la P.IVA le due chiavi
+  // divergono: la scheda scritta da una parte non si vede dall'altra, e chi
+  // corregge crea una seconda scheda. Il codice cliente e' uno solo.
+  const overridePerCodice = useMemo(() => {
+    const m = {};
+    for (const o of Object.values(clientiOverride || {})) {
+      const c = String(o?.codice_cliente || "").trim();
+      if (c && !m[c]) m[c] = o;
+    }
+    return m;
+  }, [clientiOverride]);
+  const overrideDi = (order) =>
+    overridePerCodice[String(order?.clientId || "").trim()] ||
+    clientiOverride[clientKeyFor(order)] ||
+    null;
+
   const metodoDelCliente = (order) =>
-    String((clientiOverride[clientKeyFor(order)] || {}).metodo_pagamento || "").trim();
+    String((overrideDi(order) || {}).metodo_pagamento || "").trim();
 
   // Se il pagamento di questo ordine e' da sistemare, tenendo conto
   // dell'anagrafica. Da usare al posto di pagamentoDaSistemare(order) secco.
@@ -4810,7 +4828,7 @@ export default function App() {
       };
       fonte = "GAMMA";
     }
-    const ov = clientiOverride[clientKeyFor(order)] || null;
+    const ov = overrideDi(order) || null;
     const merged = { ...base };
     if (ov) {
       for (const k of Object.keys(ov)) {
@@ -4826,7 +4844,7 @@ export default function App() {
   // Tipologia cliente: prima il nostro override, poi il dato dedotto dallo
   // snapshot/GAMMA (canale/settore), altrimenti vuota (da assegnare a mano).
   const tipologiaFor = (order) => {
-    const ov = clientiOverride[clientKeyFor(order)];
+    const ov = overrideDi(order);
     if (ov?.tipologia) return ov.tipologia;
     const app = appAnagrafiche[String(order?.id || "")];
     const gamma = gammaDiOrdine(order);
@@ -4843,7 +4861,7 @@ export default function App() {
   const agenteDi = (order) => {
     const suOrdine = String(order?.agenteNome || "").trim();
     if (suOrdine) return suOrdine;
-    const ov = clientiOverride[clientKeyFor(order)] || {};
+    const ov = overrideDi(order) || {};
     return String(ov.agente_nome || "").trim();
   };
 
@@ -6026,7 +6044,7 @@ export default function App() {
         sediOrd.find((d) => String(d.id) === String(order.idDestinazione || "")) ||
         sediOrd.find((d) => d.predefinita) ||
         sediOrd[0];
-      const ovOrd = clientiOverride[clientKeyFor(order)] || {};
+      const ovOrd = overrideDi(order) || {};
       const appOrd = appAnagrafiche[String(order.id)] || {};
       // LA SEDE SCELTA COMANDA SUL CAP (27/08/2026, segnalazione incrociata
       // verificata: su 28 ordini con destinazione scelta, 19 avevano
@@ -7168,8 +7186,15 @@ export default function App() {
   // I campi arricchiti si salvano su clienti_override; quelli di identita' sulla
   // tabella clienti. Qui si scrive dove va scritto, senza far pensare a chi
   // compila che siano tre posti diversi.
-  const salvaSchedaOverride = async (chiave, f) => {
-    const payload = { chiave, operatore: authUser?.username || "" };
+  const salvaSchedaOverride = async (chiave, f, codice) => {
+    const payload = {
+      chiave,
+      operatore: authUser?.username || "",
+      // Il codice viaggia con la scheda, e il salvataggio da qui e' un atto
+      // umano: la conferma (la R) si dichiara, non si deduce.
+      codice_cliente: String(codice || clienteAperto?.cliente?.id || f?.codice_cliente || "").trim(),
+      conferma_umana_il: new Date().toISOString(),
+    };
     for (const g of CAMPI_SCHEDA) for (const c of g.campi) payload[c.key] = f[c.key] ?? "";
     payload.tipologia = f.tipologia ?? "";
     payload.metodo_pagamento = f.metodo_pagamento ?? "";
@@ -7213,7 +7238,7 @@ export default function App() {
     const nuovo = res.cliente || res.dato || null;
     const idNuovo = String((nuovo && (nuovo.ID_Cliente || nuovo.id_cliente)) || res.codice || "");
     const chiave = chiaveAnagrafica({ name: f.ragione_sociale, piva: f.partita_iva }, f.partita_iva);
-    if (chiave) await salvaSchedaOverride(chiave, f);
+    if (chiave) await salvaSchedaOverride(chiave, f, idNuovo);
     await loadDataFromSheets();
     alert(
       `Cliente creato con il codice ${idNuovo || "(assegnato dal registro)"}.\n\n` +
@@ -7244,7 +7269,7 @@ export default function App() {
     }
     const idNuovo = String((res.cliente && res.cliente.id_cliente) || res.codice || "");
     const chiave = chiaveAnagrafica({ name: f.ragione_sociale, piva: f.partita_iva }, f.partita_iva);
-    if (chiave) await salvaSchedaOverride(chiave, f);
+    if (chiave) await salvaSchedaOverride(chiave, f, idNuovo);
     await loadDataFromSheets();
     setNewOrderClientId(idNuovo);
     setNewOrderCustomer(f.ragione_sociale);
@@ -8070,7 +8095,7 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
     // non devono vederli: dipende da chi riceve la merce.
     // Sul DDT i prezzi sono una scelta del cliente; sulla conferma d'ordine
     // ci sono sempre, perche' e' proprio quello che il cliente deve confermare.
-    const conPrezzi = isConferma || !!(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi;
+    const conPrezzi = isConferma || !!(overrideDi(order) || {}).ddt_con_prezzi;
     const eur = (n) =>
       Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -8109,7 +8134,10 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
             return li.expiry ? `${li.code} (scad. ${fmtDate(li.expiry)})` : li.code;
           })
           .filter(Boolean);
-        const lottoStr = lottiParts.join(" · ");
+        // Gli ESPOSITORI sono materiale da banco, non merce a lotto: il lotto
+        // in bolla confonde chi riceve (magazzino, 02/09/2026).
+        const espositore = /^EXPO/i.test(String(prod?.code || line.productCode || ""));
+        const lottoStr = espositore ? "" : lottiParts.join(" · ");
         const descr = esc(line.productName || "") +
           (lottoStr ? ` — Lotto: ${esc(lottoStr)}` : "") +
           // Sul DDT senza prezzi l'importo dell'abbuono va nella descrizione:
@@ -12518,7 +12546,7 @@ ${isConferma
                           ) : null}
 
                           <SpuntaPrezziDDT
-                            attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
+                            attivo={(overrideDi(order) || {}).ddt_con_prezzi}
                             onCambia={(v) => setDdtConPrezzi(order, v)}
                             compatto
                           />
@@ -12868,7 +12896,7 @@ ${isConferma
                         <RotateCcw size={16} /> Riporta in preparati
                       </button>
                       <SpuntaPrezziDDT
-                        attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
+                        attivo={(overrideDi(order) || {}).ddt_con_prezzi}
                         onCambia={(v) => setDdtConPrezzi(order, v)}
                       />
                       {spuntaCampionatura(order, false)}
@@ -13238,7 +13266,7 @@ ${isConferma
                         📄 Vedi DDT
                       </button>
                       <SpuntaPrezziDDT
-                        attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
+                        attivo={(overrideDi(order) || {}).ddt_con_prezzi}
                         onCambia={(v) => setDdtConPrezzi(order, v)}
                         compatto
                       />
@@ -13797,7 +13825,7 @@ ${isConferma
                                 📄 {order.ddtNumero ? "Vedi DDT" : "Genera DDT"}
                               </button>
                               <SpuntaPrezziDDT
-                                attivo={(clientiOverride[clientKeyFor(order)] || {}).ddt_con_prezzi}
+                                attivo={(overrideDi(order) || {}).ddt_con_prezzi}
                                 onCambia={(v) => setDdtConPrezzi(order, v)}
                                 compatto
                               />

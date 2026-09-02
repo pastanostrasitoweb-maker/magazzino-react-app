@@ -1606,7 +1606,7 @@ const OVERRIDE_CLIENTE_FIELDS = [
   // distinti (Luca 22/08/2026).
   "nome", "cognome",
   "indirizzo_spedizione", "insegna", "orari_consegna", "giorno_chiusura",
-  "codice_univoco", "pec", "email", "telefono", "metodo_pagamento",
+  "codice_cliente", "conferma_umana_il", "codice_univoco", "pec", "email", "telefono", "metodo_pagamento",
   "tipologia", "note",
   // L'agente e' un dato del cliente: si sceglie una volta e vale per tutti i
   // suoi ordini (Luca 04/08/2026).
