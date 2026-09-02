@@ -652,6 +652,7 @@ function BollinoAbbuono({ order, onAggiungi, onTogli }) {
   if (!righe.length) {
     return (
       <button
+        data-telemetria="abbuono-apri"
         style={{ ...compactBtnStyle("outline") }}
         onClick={onAggiungi}
         title="Sconto in euro sul totale, non un articolo. IVA 4%, massimo 50 euro."
@@ -1025,7 +1026,7 @@ function SediConsegna({ codiceCliente, sedi, onSalva, onDisattiva, apriNuovaSubi
               />
               È la sede predefinita
             </label>
-            <button style={{ ...compactBtnStyle("primary"), marginLeft: "auto" }} disabled={salvando} onClick={salva}>
+            <button data-telemetria="anagrafica-sede-salva" style={{ ...compactBtnStyle("primary"), marginLeft: "auto" }} disabled={salvando} onClick={salva}>
               {salvando ? "Salvo…" : "Salva sede"}
             </button>
             <button style={compactBtnStyle("outline")} onClick={() => { setApertaId(""); setBozza(null); }}>
@@ -1375,7 +1376,9 @@ function SchedaCliente({
       )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button style={btnStyle("primary")} onClick={salva} disabled={salvando}>
+        <button
+          data-telemetria={nuovo ? "anagrafica-crea" : "anagrafica-salva"}
+          style={btnStyle("primary")} onClick={salva} disabled={salvando}>
           {salvando ? "Salvo…" : nuovo ? "Crea cliente" : "Salva modifiche"}
         </button>
         <button style={btnStyle("outline")} onClick={onChiudi} disabled={salvando}>
@@ -1503,6 +1506,7 @@ function BadgePagamento({ order, metodoCliente, onScegli, compatto = false }) {
               : "Metodo di pagamento mancante: la scadenza a Cashflow e' messa a caso.")
           : `${attuale}${dallAnagrafica ? " (dall'anagrafica del cliente)" : ""} — la scadenza si calcola da qui. Cambiandolo qui vale per questo ordine E per i prossimi del cliente.`
       }
+      data-telemetria="pagamento-scegli"
       onChange={(e) => { if (e.target.value) onScegli(e.target.value); }}
     >
       {/* La voce di testa c'e' ogni volta che il valore attuale non sta nella
@@ -11030,7 +11034,7 @@ ${isConferma
                       minWidth: isSmallLayout ? "calc(50% - 5px)" : 140,
                     }}
                     disabled={loadingData}
-                    onClick={loadDataFromSheets}
+                    data-telemetria="dati-aggiorna" onClick={loadDataFromSheets}
                     title="Ricarica tutto: ordini, righe, lotti, anagrafiche e archivio"
                   >
                     <RefreshCw
@@ -11275,6 +11279,7 @@ ${isConferma
                             onTogli={(l) => azioneUnica("togli-abbuono-" + l.lineId, () => togliAbbuono(selectedOrder, l))}
                           />
                           <button
+                            data-telemetria="bollinato-aggiungi"
                             style={btnStyle("outline")}
                             onClick={() => azioneUnica("bollinato-" + selectedOrder.id, () => aggiungiBollinato(selectedOrder))}
                             title="Aggiungi un cartone bollinato scegliendo dall'elenco dei lotti sotto la soglia"
@@ -11338,6 +11343,7 @@ ${isConferma
                             const completa = a.stato === "ok";
                             return (
                               <button
+                                data-telemetria={completa ? "anagrafica-apri" : "anagrafica-completa"}
                                 style={compactBtnStyle(completa ? "outline" : "primary")}
                                 onClick={() => openCompletaAnagrafica(selectedOrder)}
                                 title={completa ? "Vedi e modifica l'anagrafica del cliente" : "Inserisci i dati mancanti dell'anagrafica"}
@@ -12302,6 +12308,7 @@ ${isConferma
                       </button>
                     ) : selectedOrder.totalToAssign === 0 ? (
                       <button
+                        data-telemetria="ordine-pronto"
                         style={btnStyle("success", savingPreparedOrderId === String(selectedOrder.id))}
                         disabled={savingPreparedOrderId === String(selectedOrder.id)}
                         onClick={markOrderPrepared}
@@ -12366,7 +12373,7 @@ ${isConferma
               </div>
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
+                <button style={btnStyle("outline")} data-telemetria="dati-aggiorna" onClick={loadDataFromSheets}>
                   <RefreshCw size={18} /> Aggiorna
                 </button>
                 <button style={btnStyle("primary")} onClick={() => azioneUnica("archivia-tutti", archiveAllPreparedOrders)}>
@@ -12674,7 +12681,7 @@ ${isConferma
                 </div>
               </div>
 
-              <button style={btnStyle("outline")} onClick={loadDataFromSheets}>
+              <button style={btnStyle("outline")} data-telemetria="dati-aggiorna" onClick={loadDataFromSheets}>
                 <RefreshCw size={18} /> Aggiorna
               </button>
             </div>
