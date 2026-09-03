@@ -3177,10 +3177,41 @@ async function spostaOrdineInOrdini(params) {
     };
   });
 
+  // IL CAP E' QUELLO DI DOVE VA LA MERCE (03/09/2026).
+  // Qui si prendeva il CAP dal JSON del CLIENTE, cioe' la sede legale. Ma la
+  // sede di consegna la sceglie l'agente ordine per ordine, e quando le due
+  // non coincidono l'ordine nasceva con il CAP sbagliato: Kairos consegna a
+  // Piedimonte San Germano (FR) ed e' entrato con 00187, Roma. Da li' in poi
+  // sbaglia tutto quello che sul CAP ci ragiona - zona del corriere, costo
+  // stimato, se il gelo ci arriva - e sul documento finisce un indirizzo che
+  // non esiste (CAP di Roma su un comune del frusinate).
+  // L'ordine di ricerca e' quello vero: prima dove si consegna, poi il
+  // ripiego sull'anagrafica.
+  let capConsegna = "";
+  const destJson = src.destinazione && typeof src.destinazione === "object" ? src.destinazione : null;
+  if (destJson && destJson.cap) capConsegna = String(destJson.cap).trim();
+  if (!capConsegna && src.id_destinazione) {
+    // La sede puo' essere gia' in anagrafica e piu' completa dello snapshot
+    // che l'app si porta dietro (qualcuno puo' averle messo il CAP dopo).
+    const { data: dRow } = await supabase
+      .from("clienti_destinazioni")
+      .select("cap")
+      .eq("id", String(src.id_destinazione))
+      .maybeSingle();
+    if (dRow?.cap) capConsegna = String(dRow.cap).trim();
+  }
+  const capAnagrafica = String(cli.cap || cli.CAP || cli.cap_destinazione || "").trim();
+
   const noteParts = [`Da APP · agente ${src.agente_nome || ""} · ${src.canale || ""}`];
   if (src.note) noteParts.push(src.note);
   if (src.data_consegna) noteParts.push(`consegna richiesta ${src.data_consegna}`);
   if (cli.nuovo) noteParts.push(`NUOVO CLIENTE (P.IVA ${cli.partita_iva || "n/d"})`);
+  if (!capConsegna && destJson && (destJson.localita || destJson.via)) {
+    noteParts.push(
+      `⚠️ CAP DELLA CONSEGNA MANCANTE (${[destJson.via, destJson.civico, destJson.localita, destJson.provincia]
+        .filter(Boolean).join(" ")}): verificare prima di spedire`
+    );
+  }
 
   const created = await createOrder({
     payload: JSON.stringify({
@@ -3191,9 +3222,10 @@ async function spostaOrdineInOrdini(params) {
       date: src.creato_il || null,
       status: "Da preparare",
       workStatus: "Nuovo",
-      // CAP per il costo trasporto: appena l'app agenti includera' cli.cap
-      // nel JSON cliente, l'ordine agente lo salva. (Oggi manda solo citta.)
-      cap: cli.cap || cli.CAP || cli.cap_destinazione || "",
+      // Il CAP di dove si consegna. Se la sede scelta non ce l'ha, si ripiega
+      // sull'anagrafica ma la nota lo dice: un CAP di ripiego su un altro
+      // comune e' peggio di nessun CAP, perche' nessuno lo mette in dubbio.
+      cap: capConsegna || capAnagrafica,
       // Il "listino" di un ordine agente e' il canale con cui l'app ha fatto
       // i prezzi (farmaceutico / horeca / gdo): serve a sapere su che base
       // e' stato valorizzato, senza confonderlo coi listini 1/8 del gestionale.
