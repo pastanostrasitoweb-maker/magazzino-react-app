@@ -11179,10 +11179,9 @@ ${isConferma
             }}
           >
             <div>
-              <strong>C'e' una versione nuova del magazzino.</strong>{" "}
-              Quella che stai usando e' di prima delle correzioni. Aggiorna quando
-              hai finito quello che stai scrivendo: niente va perso, ma quello che
-              non hai ancora salvato va salvato prima.
+              <strong>È uscita una versione nuova del magazzino.</strong>{" "}
+              Quella che stai usando è di prima delle correzioni. Prendila quando
+              hai finito quello che stai scrivendo: salva prima, poi premi qui.
             </div>
             <button
               type="button"
