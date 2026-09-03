@@ -1754,7 +1754,19 @@ async function saveClienteOverride(params) {
     .upsert(row, { onConflict: "chiave" })
     .select()
     .maybeSingle();
-  if (error) return failure(error);
+  if (error) {
+    // UN CLIENTE HA UNA SCHEDA SOLA. Se il database rifiuta perche' quel codice
+    // ce l'ha gia' un'altra scheda, va detto con parole comprensibili: chi sta
+    // compilando deve sapere che il cliente e' doppio, non leggere il nome di
+    // un indice. (Regola Luca: quando si blocca, dicci il motivo.)
+    if (String(error.code || "") === "23505" && String(error.message || "").includes("un_codice_una_scheda")) {
+      return failure(
+        "Questo cliente ha gia' un'altra scheda con lo stesso codice: " +
+        "le due vanno unite prima di salvare, altrimenti si scrive su una e si legge dall'altra."
+      );
+    }
+    return failure(error);
+  }
 
   // "Se inserisco un listino a mano i prezzi devono automaticamente cambiare"
   // (Luca 05/08/2026). Cambiare listino o sconti in anagrafica e' una decisione

@@ -1236,7 +1236,14 @@ function SchedaCliente({
     staSalvando.current = true;
     setSalvando(true);
     try {
-      await (nuovo ? onCrea(f) : onSalva(cliente, f));
+      // SI SALVA SULLA SCHEDA CHE SI E' APERTA. La chiave viaggia con la
+      // scheda: se la si ricalcola dai campi, aggiungere la partita IVA a un
+      // cliente che ne era senza sposta il salvataggio su una chiave nuova e
+      // ne nasce una seconda scheda. Da quel momento le ragazze scrivono su
+      // una e l'app legge dall'altra. (Delizie del palato, 03/09/2026: CAP
+      // corretto in 84129 su una scheda, e il magazzino continuava a leggere
+      // il civico "35" finito nel CAP sull'altra.)
+      await (nuovo ? onCrea(f) : onSalva(cliente, f, override?.chiave));
     } finally {
       staSalvando.current = false;
       setSalvando(false);
@@ -7384,8 +7391,10 @@ export default function App() {
     );
   });
 
-  const salvaClienteScheda = async (cliente, f) => {
-    const chiave = chiaveAnagrafica(cliente, f.partita_iva);
+  const salvaClienteScheda = async (cliente, f, chiaveEsistente) => {
+    // La chiave della scheda aperta viene prima di qualunque ricalcolo: e' il
+    // suo nome, non un dato che cambia quando si completa l'anagrafica.
+    const chiave = chiaveEsistente || chiaveAnagrafica(cliente, f.partita_iva);
     if (!chiave) {
       alert("Cliente non identificabile: manca sia P.IVA sia ragione sociale.");
       return;
