@@ -3632,6 +3632,20 @@ export async function callSheetsApi(params = {}) {
         return await logProduzione(params);
       case "saveClienteOverride":
         return await saveClienteOverride(params);
+      case "scriviMetodoSullaScheda": {
+        // Scrive il metodo sulla scheda VERA del cliente: la cerca per codice,
+        // poi tra gli altri codici dello stesso cliente, e solo se non esiste
+        // la crea (con la ragione sociale dentro).
+        const pp = parsePayload(params);
+        const { data, error } = await supabase.rpc("scrivi_metodo_sulla_scheda", {
+          p_codice: String(pp.codice_cliente || ""),
+          p_metodo: String(pp.metodo || ""),
+          p_operatore: String(pp.operatore || operatoreCorrente || ""),
+          p_nome: String(pp.nome || ""),
+        });
+        if (error) return failure(error);
+        return { success: true, chiave: data };
+      }
       case "salvaFotoBolla":
         return await salvaFotoBolla(params);
       case "uploadDocumento":

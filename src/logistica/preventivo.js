@@ -103,6 +103,12 @@ export function calcolaPreventivo({ peso, cap, temperatura, box, cliente }) {
   if (!/^[0-9]{5}$/.test(String(cap).trim())) {
     return { errore: `CAP "${cap}" non valido: servono cinque cifre. Correggi l'anagrafica o la sede di consegna.` }
   }
+  // E DA QUI IN POI SI USA QUELLO PULITO. Trovato in verifica: " 84129 " con
+  // gli spazi passava il controllo e poi arrivava sporco alle tabelle delle
+  // zone, che non lo riconoscevano: consigliava BRT a 19,00 zona Z2 invece di
+  // Stef a 20,00 zona CAMPANIA. Validare una cosa e usarne un'altra e' peggio
+  // che non validare, perche' sembra controllato.
+  cap = String(cap).trim()
   if (kg <= 0) return { errore: 'Peso ordine mancante' }
 
   const ammessi = corrieriPerTemperatura(temperatura)

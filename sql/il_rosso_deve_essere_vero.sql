@@ -10,6 +10,19 @@
 -- quando NESSUNA fonte sa dire quando si incassa, e accanto compare quello che
 -- risulta, da confermare con un click invece che da riscrivere a mano.
 
+create or replace function metodo_sulla_scheda_del_cliente(p_codice text)
+returns text
+language sql
+stable
+as $$
+  select metodo_pagamento_canonico(co.metodo_pagamento)
+    from clienti_override co
+   where (co.codice_cliente = p_codice
+          or co.codice_cliente in (select codici_dello_stesso_cliente(p_codice)))
+     and metodo_pagamento_canonico(co.metodo_pagamento) is not null
+   limit 1;
+$$;
+
 drop view if exists v_clienti_da_confermare;
 
 create view v_clienti_da_confermare as
@@ -34,8 +47,11 @@ create view v_clienti_da_confermare as
     metodo_del_cliente(COALESCE(a.codice_cliente, x.cod)) IS NULL AS pagamento_da_sistemare,
     x.ultimo_ordine,
     -- Quello che risulta dalle altre fonti quando la scheda tace: si conferma,
-    -- non si riscrive.
-    CASE WHEN metodo_pagamento_canonico(a.metodo_pagamento) IS NULL
+    -- non si riscrive. "La scheda" e' quella del CLIENTE, ovunque stia: se si
+    -- guarda solo il codice esatto, uno conferma il metodo, il metodo viene
+    -- scritto sulla scheda sotto l'altro codice, e la riga continua a chiedere
+    -- la stessa conferma. Chi lavora clicca due volte e pensa sia rotto.
+    CASE WHEN metodo_sulla_scheda_del_cliente(COALESCE(a.codice_cliente, x.cod)) IS NULL
          THEN metodo_del_cliente(COALESCE(a.codice_cliente, x.cod))
     END AS metodo_ricavato
    FROM ordinanti x

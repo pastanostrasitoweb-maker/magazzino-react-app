@@ -4656,13 +4656,17 @@ export default function App() {
   // chi fattura deve poter dire di si'.
   const scriviMetodoRicavato = async (c) => {
     if (!c?.metodo_ricavato) return;
+    // LA SCHEDA SI CERCA, NON SI INVENTA. La chiave che arriva dall'elenco e'
+    // buona per mostrare una riga: quando il cliente ha la scheda sotto l'altro
+    // suo codice, quella chiave non esiste e scriverci sopra crea un doppione
+    // senza nemmeno la ragione sociale. Trovato in verifica su SAN PIETRO.
     const r = await callSheetsApi({
-      action: "saveClienteOverride",
+      action: "scriviMetodoSullaScheda",
       payload: JSON.stringify({
-        chiave: c.chiave,
         codice_cliente: c.codice_cliente || "",
-        metodo_pagamento: c.metodo_ricavato,
+        metodo: c.metodo_ricavato,
         operatore: authUser?.username || "",
+        nome: c.ragione_sociale || "",
       }),
     });
     if (!r || !r.success) {

@@ -43,7 +43,12 @@ begin
   if e_un_segnaposto(new.pec)            then new.pec            := null; end if;
   if e_un_segnaposto(new.email)          then new.email          := null; end if;
   if e_un_segnaposto(new.telefono)       then new.telefono       := null; end if;
-  if e_un_segnaposto(new.cap)            then new.cap            := null; end if;
+  -- Il CAP: fuori i segnaposto E i numeri troppo corti. "35" era il civico di
+  -- Delizie del palato, e il preventivo gli aveva trovato una zona. Da quattro
+  -- cifre in su si tiene (la Svizzera ne usa quattro), sotto non e' un CAP in
+  -- nessun paese. Trovato in verifica: "12" entrava ancora.
+  if e_un_segnaposto(new.cap) or (coalesce(btrim(new.cap),'') <> '' and btrim(new.cap) !~ '^[0-9]{4,5}$')
+    then new.cap := null; end if;
   if e_un_segnaposto(new.citta)          then new.citta          := null; end if;
   if e_un_segnaposto(new.sede_legale)    then new.sede_legale    := null; end if;
   -- la provincia si normalizza, non si giudica: NA e NO sono sigle vere
