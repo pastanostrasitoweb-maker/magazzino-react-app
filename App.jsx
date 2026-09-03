@@ -1471,6 +1471,19 @@ const CAMPI_SCHEDA = [
     ],
   },
   {
+    // LE COORDINATE SERVONO SOLO A CHI PAGA CON RI.BA. Nel flusso che va in
+    // banca ci finiscono ABI e CAB del cliente: se sono sbagliati l'addebito
+    // parte dal conto di un altro. L'IBAN si scrive come sta sulla carta
+    // intestata e ABI/CAB si compilano da soli, cosi' nessuno deve contare i
+    // caratteri. (Luca 03/09/2026: "IBAN ABI e CAB obbligatorio per Ri.Ba.")
+    titolo: "Coordinate bancarie (per la Ri.Ba.)",
+    campi: [
+      { key: "iban", label: "IBAN", largo: true, aiuto: "Da qui ABI e CAB si riempiono da soli" },
+      { key: "abi", label: "ABI (5 cifre)" },
+      { key: "cab", label: "CAB (5 cifre)" },
+    ],
+  },
+  {
     titolo: "Contatti",
     campi: [
       { key: "email", label: "Email" },

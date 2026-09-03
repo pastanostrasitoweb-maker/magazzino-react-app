@@ -40,7 +40,13 @@ create view v_clienti_da_confermare as
     COALESCE(a.ragione_sociale, g.ragione_sociale, x.nome_ordine) AS ragione_sociale,
     a.metodo_pagamento,
     a.agente_nome,
-    COALESCE(a.mancano, ARRAY['SCHEDA CLIENTE mai compilata'::text]) AS mancano,
+    -- RI.BA. SENZA COORDINATE: la ricevuta non si puo' presentare in banca.
+    -- Si aggiunge a quello che manca, cosi' compare nello stesso elenco che si
+    -- guarda prima di fatturare, invece che scoprirlo il giorno della distinta.
+    CASE WHEN riba_senza_coordinate(COALESCE(a.codice_cliente, x.cod))
+         THEN COALESCE(a.mancano, ARRAY[]::text[]) || ARRAY['RI.BA.: mancano ABI e CAB, la ricevuta non si puo'' presentare']
+         ELSE COALESCE(a.mancano, ARRAY['SCHEDA CLIENTE mai compilata'::text])
+    END AS mancano,
     c.chiave IS NOT NULL AS gia_confermato,
     c.codice_r,
     -- ROSSO SOLO SE NESSUNO SA DIRLO. Prima bastava che mancasse sulla scheda.
