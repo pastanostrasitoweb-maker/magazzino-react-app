@@ -4494,6 +4494,11 @@ export default function App() {
   const [savingOverride, setSavingOverride] = useState("");
   const [anagOpen, setAnagOpen] = useState(false);
   const [anagOrderId, setAnagOrderId] = useState("");
+  // La FOTOGRAFIA dell'ordine su cui si sta compilando. La lista degli ordini
+  // viene sostituita a ogni ricarica e tiene solo gli attivi: se l'ordine
+  // finisce in archivio mentre ci scrivi sopra, cercarlo li' dentro non lo
+  // trova piu' e il pannello resta vuoto a meta' lavoro. Qui resta.
+  const [anagOrder, setAnagOrder] = useState(null);
   const [anagForm, setAnagForm] = useState({});
   const [savingAnag, setSavingAnag] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState("");
@@ -5154,11 +5159,12 @@ export default function App() {
     if (!form.sede_legale && merged.indirizzo) form.sede_legale = String(merged.indirizzo);
     setAnagForm(form);
     setAnagOrderId(String(order.id));
+    setAnagOrder(order);
     setAnagOpen(true);
   };
 
   const saveCompletaAnagrafica = async () => {
-    const order = orders.find((o) => String(o.id) === String(anagOrderId));
+    const order = orders.find((o) => String(o.id) === String(anagOrderId)) || anagOrder;
     if (!order) return;
     const chiave = clientKeyFor(order);
     if (!chiave) {
@@ -5437,7 +5443,13 @@ export default function App() {
   // Niente spinner a tutta pagina: il refresh e' piccolo e silenzioso.
   const loadDatiVivi = async () => {
     try {
-      await callSheetsApi({ action: "archivePreparedOrders" }).catch(() => null);
+      // L'ARCHIVIAZIONE NON PARTE MENTRE STAI COMPILANDO. Archiviare toglie
+      // l'ordine dalla lista degli attivi, e il pannello dell'anagrafica lo
+      // cerca li' dentro: se sparisce mentre ci stai scrivendo, il pannello
+      // resta senza il suo ordine e sembra che ti abbia buttato fuori.
+      if (!staCompilandoRef.current) {
+        await callSheetsApi({ action: "archivePreparedOrders" }).catch(() => null);
+      }
       const raw = await callSheetsApi({ action: "getDatiVivi" });
 
       const safeProducts = normalizeProducts(raw.prodotti || []);
@@ -5484,7 +5496,9 @@ export default function App() {
     setLoadError("");
 
     try {
-      await callSheetsApi({ action: "archivePreparedOrders" }).catch(() => null);
+      if (!staCompilandoRef.current) {
+        await callSheetsApi({ action: "archivePreparedOrders" }).catch(() => null);
+      }
 
       const raw = await callSheetsApi();
 
@@ -7229,10 +7243,18 @@ export default function App() {
   // scrivendo. Il dato non si perde nel database, ma il lavoro fatto a schermo
   // si'. Finche' una finestra di lavoro e' aperta i giri automatici stanno
   // fermi, e ripartono da soli appena la chiudi.
+  // TUTTE le finestre di lavoro, nessuna esclusa. La prima versione le
+  // elencava quasi tutte e lasciava fuori proprio `anagOpen`, cioe' il
+  // pannello "Completa anagrafica" che si apre dall'ordine: ed e' quello che
+  // il magazzino usa tutto il giorno. Luca: "lo fa ancora!!". Quando si
+  // protegge per elenco, la voce che manca e' sempre quella che serviva.
   const staCompilando =
-    Boolean(clienteAperto) || clientDialogOpen || assignDialogOpen || orderDialogOpen ||
-    editLineDialogOpen || Boolean(abbuonoPer) || Boolean(transportModalOrderId) ||
-    Boolean(lotOnFlyDialog?.open);
+    Boolean(clienteAperto) || anagOpen || clientDialogOpen || assignDialogOpen ||
+    orderDialogOpen || addLineDialogOpen || editLineDialogOpen || editOrderDialogOpen ||
+    productDialogOpen || editProductDialogOpen || lotDialogOpen || editLotDialogOpen ||
+    adminDialogOpen || prodLoadOpen || Boolean(abbuonoPer) ||
+    Boolean(transportModalOrderId) || Boolean(lotOnFlyDialog?.open) ||
+    Boolean(fermoDialog?.open);
   const staCompilandoRef = useRef(false);
   useEffect(() => { staCompilandoRef.current = staCompilando; }, [staCompilando]);
 
@@ -16477,7 +16499,10 @@ ${isConferma
         >
           {(() => {
             /* Anche qui il form vive di stato proprio: si rifa' per ordine. */
-            const order = orders.find((o) => String(o.id) === String(anagOrderId));
+            // Se nel frattempo l'ordine e' uscito dagli attivi (archiviato,
+            // spedito) NON si perde il pannello: si continua con quello che si
+            // stava compilando. I dati vanno sul CLIENTE, non sull'ordine.
+            const order = orders.find((o) => String(o.id) === String(anagOrderId)) || anagOrder;
             const a = order ? anagraficaFor(order) : null;
             const mancantiSet = new Set(a?.mancanti || []);
             return (
