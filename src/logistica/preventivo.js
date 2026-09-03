@@ -95,6 +95,14 @@ export function previsioneConsegna(dataOrdineISO, corriereId, giorniTransito) {
 export function calcolaPreventivo({ peso, cap, temperatura, box, cliente }) {
   const kg = Number(peso) || 0
   if (!cap) return { errore: 'CAP destinazione mancante' }
+  // UN CAP E' DI CINQUE CIFRE. Delizie del palato aveva "35" nel campo CAP (il
+  // civico di "Via lungomare Colombo 35" finito nella casella sbagliata) e il
+  // preventivo, invece di fermarsi, gli ha trovato una zona: ROMA, per un
+  // cliente di SALERNO. Un prezzo calcolato su una tratta che non esiste e'
+  // peggio di nessun prezzo, perche' nessuno lo mette in dubbio.
+  if (!/^[0-9]{5}$/.test(String(cap).trim())) {
+    return { errore: `CAP "${cap}" non valido: servono cinque cifre. Correggi l'anagrafica o la sede di consegna.` }
+  }
   if (kg <= 0) return { errore: 'Peso ordine mancante' }
 
   const ammessi = corrieriPerTemperatura(temperatura)

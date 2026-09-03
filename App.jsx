@@ -6137,15 +6137,19 @@ export default function App() {
       // quotata su Pescara mentre la merce va a Castellaneta Marina, TA).
       // Se per quell'ordine e' stata scelta una sede, il suo CAP viene prima
       // di tutto; sotto, la catena di sempre.
-      const capDest = String(
-        (order.idDestinazione ? sedeOrd?.cap : "") ||
-          order.cap ||
-          sedeOrd?.cap ||
-          ovOrd.cap ||
-          appOrd.cap ||
-          clientsById[String(order.clientId)]?.cap ||
-          ""
-      ).trim();
+      // Lungo la catena si scarta quello che CAP non e'. Nel campo CAP finisce
+      // di tutto (il civico, due cifre, un trattino): se si prende il primo
+      // valore non vuoto ci si ferma sulla spazzatura e non si arriva mai al
+      // CAP buono che sta un gradino piu' sotto.
+      const capValido = (v) => (/^[0-9]{5}$/.test(String(v || "").trim()) ? String(v).trim() : "");
+      const capDest =
+        (order.idDestinazione ? capValido(sedeOrd?.cap) : "") ||
+        capValido(order.cap) ||
+        capValido(sedeOrd?.cap) ||
+        capValido(ovOrd.cap) ||
+        capValido(appOrd.cap) ||
+        capValido(clientsById[String(order.clientId)]?.cap) ||
+        "";
       const transport =
         pesoTotale > 0 && capDest
           ? calcolaPreventivo({
