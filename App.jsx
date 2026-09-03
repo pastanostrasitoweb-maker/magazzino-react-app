@@ -491,6 +491,22 @@ function metodoLeggibile(metodo) {
 // in forma canonica. Il pregresso non si rincorre: quegli ordini sono chiusi e
 // le loro partite le governa il Cashflow (Luca: "a me interessa che sia
 // allineato dal 03.08").
+// OGNI QUANTO L'APP SI RIAGGIORNA DA SOLA (Luca 02/09/2026: "fa refresh ogni
+// pochi secondi, sospendi e mettilo ogni 15 minuti").
+//
+// C'erano due controlli della chat OGNI 4 SECONDI piu' il reparto ordini ogni
+// minuto: con l'app aperta tutto il giorno su quattro postazioni sono decine di
+// migliaia di richieste, e il lavoro si interrompe di continuo.
+//
+// Adesso il ritmo e' uno solo, quindici minuti, e vale per tutto. Due
+// eccezioni ragionate:
+//   - la chat APERTA si aggiorna ogni 15 secondi: se la stai guardando devi
+//     vedere la risposta, se no non e' una chat;
+//   - quando la finestra e' in secondo piano non si aggiorna NIENTE, e appena
+//     torni in primo piano si ricarica subito: e' il "sospendi" vero.
+const RITMO_AGGIORNAMENTO = 15 * 60 * 1000;
+const RITMO_CHAT_APERTA = 15 * 1000;
+
 const PAGAMENTI_ALLINEATI_DAL = "2026-08-03";
 
 // I COLLI SI CONFERMANO, NON SI DEDUCONO (Luca 17/08/2026).
@@ -3987,10 +4003,14 @@ function ChatPanel({ tabella, authUser, height = "42vh", vuotoLabel = "Nessun me
       setMessages(msgs);
     };
     poll();
-    const iv = setInterval(poll, 4000);
+    // Il pannello e' aperto: qui la chat serve viva, ma 15 secondi bastano.
+    const iv = setInterval(() => { if (!document.hidden && !staCompilandoRef.current) poll(); }, RITMO_CHAT_APERTA);
+    const alRitorno = () => { if (!document.hidden && !staCompilandoRef.current) poll(); };
+    document.addEventListener("visibilitychange", alRitorno);
     return () => {
       stop = true;
       clearInterval(iv);
+      document.removeEventListener("visibilitychange", alRitorno);
     };
   }, [tabella, authUser]);
 
@@ -5644,8 +5664,14 @@ export default function App() {
 
   useEffect(() => {
     loadOrdiniApp();
-    const t = setInterval(loadOrdiniApp, 60000); // aggiorna il reparto ogni minuto
-    return () => clearInterval(t);
+    const t = setInterval(() => { if (!document.hidden && !staCompilandoRef.current) loadOrdiniApp(); }, RITMO_AGGIORNAMENTO);
+    // Tornando sull'app si riallinea subito, senza aspettare il giro.
+    const alRitorno = () => { if (!document.hidden && !staCompilandoRef.current) loadOrdiniApp(); };
+    document.addEventListener("visibilitychange", alRitorno);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", alRitorno);
+    };
   }, []);
 
   // Scaduto + anagrafica dal gestionale (sincronizzati dalle ts-sync-*):
@@ -5670,7 +5696,7 @@ export default function App() {
       } catch (_) { /* badge restano manuali */ }
     };
     carica();
-    const t = setInterval(carica, 10 * 60000);
+    const t = setInterval(() => { if (!document.hidden && !staCompilandoRef.current) carica(); }, RITMO_AGGIORNAMENTO);
     return () => clearInterval(t);
   }, []);
 
@@ -7191,6 +7217,24 @@ export default function App() {
 
   const [clientiCerca, setClientiCerca] = useState("");
   const [clienteAperto, setClienteAperto] = useState(null); // {cliente} oppure {nuovo:true}
+
+  // STA SOTTO clienteAperto, e non e' pignoleria: una costante usata prima
+  // di essere dichiarata fa morire il componente e lascia la pagina bianca.
+  // MENTRE STAI COMPILANDO, NESSUNO TI TOCCA LO SCHERMO (Luca 02/09/2026:
+  // "mentre segno un'anagrafica mi fa refresh e mi va fuori").
+  //
+  // I giri automatici (chat, reparto ordini, situazione gestionale) aggiornano
+  // lo stato dell'app, e ogni aggiornamento ridisegna: se in quel momento hai
+  // una scheda aperta a meta', ti ritrovi buttato fuori da quello che stavi
+  // scrivendo. Il dato non si perde nel database, ma il lavoro fatto a schermo
+  // si'. Finche' una finestra di lavoro e' aperta i giri automatici stanno
+  // fermi, e ripartono da soli appena la chiudi.
+  const staCompilando =
+    Boolean(clienteAperto) || clientDialogOpen || assignDialogOpen || orderDialogOpen ||
+    editLineDialogOpen || Boolean(abbuonoPer) || Boolean(transportModalOrderId) ||
+    Boolean(lotOnFlyDialog?.open);
+  const staCompilandoRef = useRef(false);
+  useEffect(() => { staCompilandoRef.current = staCompilando; }, [staCompilando]);
 
   // I campi arricchiti si salvano su clienti_override; quelli di identita' sulla
   // tabella clienti. Qui si scrive dove va scritto, senza far pensare a chi
@@ -9618,10 +9662,14 @@ ${isConferma
       if (!chatOpenRef.current) setChatUnread(unread);
     };
     poll();
-    const iv = setInterval(poll, 4000);
+    // Solo il pallino dei non letti: non serve inseguirlo al secondo.
+    const iv = setInterval(() => { if (!document.hidden && !staCompilandoRef.current) poll(); }, RITMO_AGGIORNAMENTO);
+    const alRitorno = () => { if (!document.hidden && !staCompilandoRef.current) poll(); };
+    document.addEventListener("visibilitychange", alRitorno);
     return () => {
       stop = true;
       clearInterval(iv);
+      document.removeEventListener("visibilitychange", alRitorno);
     };
   }, [authUser]);
 
