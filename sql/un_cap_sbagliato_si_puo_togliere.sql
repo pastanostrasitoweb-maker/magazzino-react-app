@@ -34,6 +34,8 @@ BEGIN
         NULL;  -- un metodo che il database rifiuta non si difende
       ELSIF v_campo = 'cap' AND btrim(v_prima) !~ '^[0-9]{4,5}$' THEN
         NULL;  -- e nemmeno un CAP che CAP non e'
+      ELSIF e_un_segnaposto(v_prima) THEN
+        NULL;  -- una "x" non e' un dato: toglierla non e' perdere niente
       ELSE
         v_new := jsonb_set(v_new, ARRAY[v_campo], to_jsonb(v_prima));
         CONTINUE;

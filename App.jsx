@@ -4651,11 +4651,32 @@ export default function App() {
   const [daConfermare, setDaConfermare] = useState([]);
   // I confermati, per codice cliente: serve a mostrare il bollino R sulla scheda.
   const [confermati, setConfermati] = useState({});
+  // Scrive sulla scheda il metodo che gia' risulta dalle altre fonti. Serve un
+  // click perche' si parla di quando entrano i soldi: il dato lo abbiamo, ma
+  // chi fattura deve poter dire di si'.
+  const scriviMetodoRicavato = async (c) => {
+    if (!c?.metodo_ricavato) return;
+    const r = await callSheetsApi({
+      action: "saveClienteOverride",
+      payload: JSON.stringify({
+        chiave: c.chiave,
+        codice_cliente: c.codice_cliente || "",
+        metodo_pagamento: c.metodo_ricavato,
+        operatore: authUser?.username || "",
+      }),
+    });
+    if (!r || !r.success) {
+      alert("Metodo non salvato: " + ((r && r.error) || "errore"));
+      return;
+    }
+    await caricaDaConfermare();
+  };
+
   const caricaDaConfermare = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("v_clienti_da_confermare")
-        .select("chiave, codice_cliente, ragione_sociale, metodo_pagamento, agente_nome, mancano, ultimo_ordine, gia_confermato, codice_r, pagamento_da_sistemare")
+        .select("chiave, codice_cliente, ragione_sociale, metodo_pagamento, agente_nome, mancano, ultimo_ordine, gia_confermato, codice_r, pagamento_da_sistemare, metodo_ricavato")
         // Il pagamento in cima: blocca la fattura e falsa il Cashflow, viene
         // prima di una provincia mancante.
         .order("pagamento_da_sistemare", { ascending: false })
@@ -13520,6 +13541,25 @@ ${isConferma
                               <b style={{ color: "#b91c1c" }}>
                                 PAGAMENTO: c'è "{c.metodo_pagamento || "niente"}", non dice quando si incassa
                               </b>
+                            ) : c.metodo_ricavato ? (
+                              /* IL DATO C'E', SOLO NON SULLA SCHEDA. Sta sui suoi
+                                 ordini, sulle fatture gia' emesse, o sulla scheda
+                                 dell'altro suo codice. Non si fa riscrivere a mano
+                                 una cosa che sappiamo gia': si conferma. */
+                              <span>
+                                <b style={{ color: "#166534" }}>PAGAMENTO: risulta «{c.metodo_ricavato}»</b>
+                                <button
+                                  type="button"
+                                  data-telemetria="pagamento-conferma-ricavato"
+                                  style={{ ...compactBtnStyle("primary"), marginLeft: 8 }}
+                                  onClick={() => scriviMetodoRicavato(c)}
+                                >
+                                  Scrivilo sulla scheda
+                                </button>
+                                {(c.mancano || []).length ? (
+                                  <span style={{ color: "#b45309" }}> · manca ancora: {(c.mancano || []).join(" · ")}</span>
+                                ) : null}
+                              </span>
                             ) : c.gia_confermato ? (
                               <b>già confermato, ma manca ancora: {(c.mancano || []).join(" · ")}</b>
                             ) : (c.mancano || []).length ? (
