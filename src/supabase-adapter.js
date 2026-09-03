@@ -434,12 +434,16 @@ async function anagrafichePerOrdini(orderIds) {
 // getDatiVivi): le anagrafiche complete (registro clienti, destinazioni,
 // schede arricchite) pesano ~4.500 righe e restano in memoria.
 async function caricaNodoVivo() {
-  const [prodottiR, lottiR, ordiniR] = await Promise.all([
+  const [prodottiR, lottiR, ordiniR, abbuoniR] = await Promise.all([
     supabase.from("prodotti").select("*"),
     supabase.from("lotti").select("*").order("scadenza", { ascending: true, nullsFirst: false }),
     // Solo ordini ATTIVI (non archiviati): lo storico si carica a richiesta
     // (getOrdiniArchiviati), senza tagli silenziosi al tetto dei 1000.
     supabase.from("ordini").select("*").or("archiviato.is.null,archiviato.eq.false"),
+    // GLI ABBUONI PROMESSI E NON ANCORA DATI. Sono pochi e servono su ogni
+    // ordine di quel cliente: viaggiano col nodo vivo, non con una chiamata
+    // per riga (DDT 2035: 33,50 euro concordati e mai finiti sul documento).
+    supabase.from("abbuoni_promessi").select("*").eq("stato", "in attesa"),
   ]);
 
   for (const r of [prodottiR, lottiR, ordiniR]) {
@@ -500,7 +504,21 @@ async function caricaNodoVivo() {
   // Mappa: id_ordine_magazzino -> oggetto cliente.
   // Solo per gli ordini attivi (lo storico porta le sue anagrafiche a richiesta).
   const anagraficheApp = await anagrafichePerOrdini(activeOrderIds);
-  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, anagraficheApp };
+  // Se il registro degli abbuoni non risponde il magazzino lavora comunque:
+  // un elenco vuoto vale "nessuno da dare", non un blocco.
+  const abbuoniPromessi = (abbuoniR && !abbuoniR.error ? abbuoniR.data || [] : []).map((a) => ({
+    id: a.id,
+    codiceCliente: a.codice_cliente,
+    importo: Number(a.importo),
+    motivo: a.motivo,
+    ivaPct: a.iva_pct == null ? null : Number(a.iva_pct),
+    promessoDa: a.promesso_da || "",
+    promessoIl: a.promesso_il,
+    ddtRiferimento: a.ddt_riferimento || "",
+    note: a.note || "",
+  }));
+
+  return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, anagraficheApp, abbuoniPromessi };
 }
 
 async function bulkLoad() {
@@ -2055,6 +2073,18 @@ async function assegnaNumeroDDT(params) {
     const { data, error } = await supabase.rpc("assegna_numero_ddt", {
       p_id_ordine: idOrdine,
     });
+    // IL PREZZO DELL'AGENTE E' LEGGE ANCHE QUI. Il guardiano sull'emissione del
+    // DDT (sql/il_prezzo_dell_agente_e_legge_anche_sul_ddt.sql) blocca prima che
+    // il numero venga bruciato se una riga costa al cliente piu' del concordato.
+    // Si riconosce il codice cosi' l'app puo' chiedere l'ok invece di mostrare
+    // un errore secco, come gia' fa in archivio.
+    if (error && /PREZZO_DA_AUTORIZZARE/.test(String(error.message || ""))) {
+      return {
+        success: false,
+        code: "PREZZO_DA_AUTORIZZARE",
+        error: String(error.message).replace(/^.*PREZZO_DA_AUTORIZZARE:\s*/s, ""),
+      };
+    }
     if (error) return failure(error);
     return { success: true, numero: String(data) };
   } catch (e) {
@@ -2191,90 +2221,50 @@ async function deleteOrder(params) {
   return { success: true, stockMovements, orderWasPrepared: stockMovements.length > 0 };
 }
 
+// IL CARICO PASSA DA UNA PORTA SOLA (03/09/2026).
+// Prima questa funzione faceva tutto da sola: cercava il lotto gemello,
+// sommava, o ne creava uno nuovo. Faceva bene l'accorpamento e male tutto il
+// resto: non lasciava traccia del carico da nessuna parte. Chi caricava dalla
+// pagina Articoli spariva per l'app Produzione e per i kg del mese.
+// Adesso chiama `carica_lotto` sul database: una sola operazione che accorpa,
+// registra in `carichi_produzione` e RACCONTA cosa ha fatto (accorpato o no,
+// da quanto a quanto), cosi la maschera puo dirlo a chi sta caricando.
 async function createLot(params) {
   const p = parsePayload(params);
-  const idLotto = p.id || p.idLotto || `LOT-${Date.now()}`;
   const idProdotto = p.productId || p.idProdotto;
   const codiceLotto = p.lot || p.codiceLotto || p.Codice_Lotto || "";
   const scadenza = p.expiry || p.scadenza || null;
   const qty = Number(p.loadedQty ?? p.quantita ?? p.quantitaCaricata ?? 0);
+  const operatore = p.operatore || p.operator || "";
+  const origine = p.origine || "articoli";
 
-  // REGOLA: per i prodotti con gestione_lotti=true e' VIETATO creare un
-  // lotto generico "DISPONIBILITA". I prodotti con gestione_lotti=false
-  // possono averlo. Source of truth: colonna prodotti.gestione_lotti.
-  const isGenericCode = String(codiceLotto).trim().toLowerCase() === "disponibilita";
-  if (isGenericCode && idProdotto) {
-    const prodR = await supabase
-      .from("prodotti")
-      .select("gestione_lotti, codice_prodotto, descrizione_prodotto")
-      .eq("id_prodotto", isNaN(+idProdotto) ? -1 : +idProdotto)
-      .maybeSingle();
-    if (prodR.data?.gestione_lotti === true) {
-      return {
-        success: false,
-        error: `Il prodotto ${prodR.data.codice_prodotto || idProdotto} (${prodR.data.descrizione_prodotto || ""}) ha gestione lotti attiva: non puoi creare un lotto generico DISPONIBILITA. Crea un lotto con codice reale.`,
-      };
-    }
-  }
-
-  // ANTI-DUPLICATO (choke point per TUTTI i chiamanti: carico manuale, on-fly,
-  // ecc.): se esiste gia' un lotto NON archiviato con stesso prodotto e stesso
-  // codice (case-insensitive), non creare un doppione. Accumula la quantita'
-  // sul lotto esistente e restituisci il suo id. Cosi' "reinserire" un lotto
-  // gia' presente non genera piu' righe doppie.
-  const codeKey = String(codiceLotto).trim().toLowerCase();
-  if (codeKey && idProdotto) {
-    const existR = await supabase
-      .from("lotti")
-      .select("id_lotto, codice_lotto, quantita_caricata, scadenza")
-      .eq("id_prodotto", String(idProdotto))
-      .eq("archiviato", false);
-    if (existR.error) return failure(existR.error);
-    const match = (existR.data || []).find(
-      (l) => String(l.codice_lotto || "").trim().toLowerCase() === codeKey
-    );
-    if (match) {
-      const newTotal = Number(match.quantita_caricata || 0) + qty;
-      const patch = { quantita_caricata: newTotal };
-      if (scadenza) patch.scadenza = scadenza;
-      const upd = await supabase
-        .from("lotti")
-        .update(patch)
-        .eq("id_lotto", String(match.id_lotto))
-        .select()
-        .maybeSingle();
-      if (upd.error) return failure(upd.error);
-      return {
-        success: true,
-        idLotto: String(match.id_lotto),
-        lotId: String(match.id_lotto),
-        lotCode: match.codice_lotto || codiceLotto,
-        newQty: newTotal,
-        reused: true,
-      };
-    }
-  }
-
-  const { data, error } = await supabase
-    .from("lotti")
-    .insert({
-      id_lotto: String(idLotto),
-      id_prodotto: String(idProdotto),
-      codice_lotto: codiceLotto,
-      lotto: codiceLotto,
-      scadenza: scadenza || null,
-      quantita_caricata: qty,
-      archiviato: false,
-    })
-    .select()
-    .maybeSingle();
+  const { data, error } = await supabase.rpc("carica_lotto", {
+    p_id_prodotto: String(idProdotto ?? ""),
+    p_codice_lotto: String(codiceLotto || ""),
+    p_scadenza: scadenza || null,
+    p_quantita: qty,
+    p_operatore: String(operatore || ""),
+    p_origine: String(origine),
+  });
   if (error) return failure(error);
+  if (!data || data.ok !== true) {
+    return { success: false, error: (data && data.errore) || "carico non riuscito" };
+  }
+
   return {
     success: true,
-    idLotto: String(idLotto),
-    lotId: String(idLotto),
-    lotCode: codiceLotto,
-    newQty: qty,
+    idLotto: String(data.id_lotto),
+    lotId: String(data.id_lotto),
+    lotCode: String(data.codice_lotto || codiceLotto),
+    newQty: Number(data.dopo),
+    reused: Boolean(data.accorpato),
+    accorpato: Boolean(data.accorpato),
+    prima: Number(data.prima || 0),
+    aggiunte: Number(data.aggiunte || qty),
+    kg: data.kg === null || data.kg === undefined ? null : Number(data.kg),
+    tipoCarico: data.tipo_carico || null,
+    idCaricoProduzione: data.id_carico_produzione ?? null,
+    avviso: data.avviso || null,
   };
 }
 
@@ -3686,6 +3676,45 @@ export async function callSheetsApi(params = {}) {
       case "getDatiVivi":
         // Il nodo vivo da solo: ordini attivi, lotti, prodotti, assegnazioni.
         return await caricaNodoVivo();
+      // ABBUONI PROMESSI (03/09/2026, dal DDT 2035). Un abbuono concordato non
+      // vive nella testa di chi lo ha promesso: si registra, e da quel momento
+      // e' l'app a ricordarselo su ogni ordine di quel cliente.
+      case "prometttiAbbuono":
+      case "prometti_abbuono": {
+        const pa = parsePayload(params);
+        const { data, error } = await supabase.rpc("prometti_abbuono", {
+          p_codice_cliente: String(pa.codiceCliente || pa.codice_cliente || ""),
+          p_importo: Number(pa.importo || 0),
+          p_motivo: String(pa.motivo || ""),
+          p_iva_pct: pa.ivaPct == null || pa.ivaPct === "" ? null : Number(pa.ivaPct),
+          p_promesso_da: String(pa.operatore || ""),
+          p_ddt_riferimento: pa.ddtRiferimento ? String(pa.ddtRiferimento) : null,
+          p_note: pa.note ? String(pa.note) : null,
+        });
+        if (error) return failure(error);
+        if (!data || data.ok !== true) {
+          return { success: false, error: (data && data.errore) || "abbuono non registrato" };
+        }
+        return { success: true, id: data.id, cliente: data.cliente };
+      }
+      case "segnaAbbuonoApplicato": {
+        const sa = parsePayload(params);
+        const { data, error } = await supabase.rpc("segna_abbuono_applicato", {
+          p_id: Number(sa.id),
+          p_id_ordine: String(sa.orderId || sa.idOrdine || ""),
+          p_da: String(sa.operatore || ""),
+        });
+        if (error) return failure(error);
+        if (!data || data.ok !== true) {
+          return { success: false, error: (data && data.errore) || "abbuono non segnato" };
+        }
+        return {
+          success: true,
+          ddtNumero: data.ddt_numero || "",
+          documentoGiaEmesso: Boolean(data.documento_gia_emesso),
+          avviso: data.avviso || null,
+        };
+      }
       case "impostaMetodoPagamento": {
         // Il metodo di pagamento E la scadenza della partita, insieme. Il
         // database rifiuta un metodo che non sa leggere (metodo_pagamento_canonico

@@ -563,13 +563,16 @@ function chiaveDaAnagrafica(piva, nome) {
 const ABBUONO_MAX = 50;
 const ABBUONO_ALIQUOTE = [4, 10, 22];
 
-function FinestraAbbuono({ order, onSalva, onChiudi }) {
-  const [importo, setImporto] = useState("");
-  const [motivo, setMotivo] = useState("");
+function FinestraAbbuono({ order, promessa, onSalva, onRegistra, onChiudi }) {
+  // Se arriva da una promessa registrata, importo e motivo sono gia' quelli
+  // concordati col cliente: si conferma, non si ridigita (e non si sbaglia).
+  const [importo, setImporto] = useState(promessa ? String(promessa.importo) : "");
+  const [motivo, setMotivo] = useState(promessa ? String(promessa.motivo || "") : "");
   // Si propone l'aliquota che l'ordine usa di piu': un abbuono che rimborsa
   // merce al 10% deve togliere IVA al 10%, se no il conto non torna. Resta
   // una proposta: la sceglie chi fa l'abbuono.
   const [iva, setIva] = useState(() => {
+    if (promessa && Number(promessa.ivaPct) > 0) return String(promessa.ivaPct);
     const conta = new Map();
     for (const l of order?.lines || []) {
       if (rigaAbbuono(l)) continue;
@@ -593,6 +596,29 @@ function FinestraAbbuono({ order, onSalva, onChiudi }) {
         Non e' un articolo: non entra nei colli, non chiede lotti, non si prepara.
         Il massimo e' {ABBUONO_MAX} €.
       </div>
+
+      {promessa ? (
+        <div style={{ padding: "10px 12px", borderRadius: 10, background: "#ecfdf5",
+          border: "1px solid #6ee7b7", color: "#065f46", fontSize: 13, lineHeight: 1.5 }}>
+          Abbuono <b>già concordato</b> con questo cliente
+          {promessa.promessoDa ? <> da <b>{promessa.promessoDa}</b></> : null}
+          {promessa.ddtRiferimento ? <> per il documento <b>{promessa.ddtRiferimento}</b></> : null}.
+          Confermando, risulta dato e non ricompare più.
+        </div>
+      ) : null}
+
+      {/* IL DOCUMENTO GIA' USCITO (03/09/2026). Il numero del DDT si assegna
+          quando l'ordine va in Pronto, e da quel momento la copia consegnata al
+          cliente e' quella. Un abbuono messo dopo cambia il totale in fattura ma
+          NON la carta che il cliente ha in mano: chi lo fa deve saperlo. */}
+      {String(order?.ddtNumero || order?.ddt_numero || "").trim() ? (
+        <div style={{ padding: "10px 12px", borderRadius: 10, background: "#fffbeb",
+          border: "1px solid #fcd34d", color: "#78350f", fontSize: 13, lineHeight: 1.5 }}>
+          Il DDT <b>{String(order?.ddtNumero || order?.ddt_numero)}</b> è già stato emesso: la copia
+          consegnata al cliente <b>non porterà questo abbuono</b>. Va citato in fattura, così si
+          capisce perché il totale è diverso dalla bolla.
+        </div>
+      ) : null}
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         <div>
@@ -639,8 +665,29 @@ function FinestraAbbuono({ order, onSalva, onChiudi }) {
           : "Scrivi importo e motivo: il motivo finisce sul documento, lo legge il cliente."}
       </div>
 
-      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
         <button style={btnStyle("outline")} onClick={onChiudi}>Annulla</button>
+
+        {/* REGISTRARE SENZA DARE (03/09/2026). L'abbuono del DDT 2035 era stato
+            concordato giorni prima e viveva fuori dal sistema: quando l'ordine
+            e' partito nessuno se l'e' ricordato. Da qui si scrive la promessa,
+            e ricompare su OGNI ordine di quel cliente finche' non e' data. */}
+        {!promessa && onRegistra ? (
+          <button
+            data-telemetria="abbuono-prometti"
+            style={btnStyle("outline", !valido || salvando)}
+            disabled={!valido || salvando}
+            title="Lo scrivi adesso, lo dai su un ordine futuro: l'app te lo ricorda ogni volta"
+            onClick={async () => {
+              setSalvando(true);
+              try { await onRegistra({ importo: n, motivo: motivo.trim(), iva }); }
+              finally { setSalvando(false); }
+            }}
+          >
+            Segna come da dare
+          </button>
+        ) : null}
+
         <button
           style={btnStyle("primary", !valido || salvando)}
           disabled={!valido || salvando}
@@ -650,7 +697,7 @@ function FinestraAbbuono({ order, onSalva, onChiudi }) {
             finally { setSalvando(false); }
           }}
         >
-          {salvando ? "Salvo…" : "Applica l'abbuono"}
+          {salvando ? "Salvo…" : promessa ? "Applica adesso" : "Applica l'abbuono"}
         </button>
       </div>
     </div>
@@ -660,18 +707,42 @@ function FinestraAbbuono({ order, onSalva, onChiudi }) {
 // L'ABBUONO, SEMPRE IN VISTA. Non e' un articolo: e' uno sconto in euro che il
 // cliente vede sul documento. Se c'e' si legge quant'e' e perche'; se non c'e'
 // si puo' metterlo, in qualunque momento della vita dell'ordine.
-function BollinoAbbuono({ order, onAggiungi, onTogli }) {
+function BollinoAbbuono({ order, promesse, onAggiungi, onTogli }) {
   const righe = (order?.lines || []).filter((l) => rigaAbbuono(l));
   const totale = righe.reduce(
     (s, l) => s + Math.abs(Number(l.prezzoUnitario || 0) * Number(l.qtyOrdered || 1)), 0
   );
+  const inAttesa = (promesse || []).filter(Boolean);
   if (!righe.length) {
+    // UN ABBUONO PROMESSO SI VEDE PRIMA (03/09/2026, dal DDT 2035). Se il
+    // cliente ha un abbuono concordato e non ancora dato, il bottone non e' un
+    // bottone qualunque: e' un promemoria che chiede di essere chiuso.
+    if (inAttesa.length) {
+      const daDare = inAttesa.reduce((sum, a) => sum + Number(a.importo || 0), 0);
+      return (
+        <button
+          data-telemetria="abbuono-promesso-applica"
+          onClick={() => onAggiungi(inAttesa[0])}
+          title={inAttesa.map((a) => `${a.motivo} · ${fmtEur(a.importo)} €`).join(" · ")}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 12px",
+            borderRadius: 999, border: "1px solid #f59e0b", background: "#fffbeb",
+            color: "#92400e", fontWeight: 800, fontSize: 12.5, cursor: "pointer",
+          }}
+        >
+          ⚠️ Abbuono da dare: {fmtEur(daDare)} €
+          <span style={{ fontWeight: 600, opacity: 0.9 }}>
+            {inAttesa[0].motivo}{inAttesa.length > 1 ? ` +${inAttesa.length - 1}` : ""}
+          </span>
+        </button>
+      );
+    }
     return (
       <button
         data-telemetria="abbuono-apri"
         style={{ ...compactBtnStyle("outline") }}
-        onClick={onAggiungi}
-        title="Sconto in euro sul totale, non un articolo. IVA 4%, massimo 50 euro."
+        onClick={() => onAggiungi(null)}
+        title="Sconto in euro sul totale, non un articolo. L'aliquota si scegle, massimo 50 euro."
       >
         − Abbuono
       </button>
@@ -4656,6 +4727,10 @@ export default function App() {
   const [pannelloFatture, setPannelloFatture] = useState(false);
   const [impegnatoDi, setImpegnatoDi] = useState(null);
   const [abbuonoPer, setAbbuonoPer] = useState(null);
+  // GLI ABBUONI PROMESSI E NON ANCORA DATI (03/09/2026, dal DDT 2035: 33,50 €
+  // concordati col cliente e mai finiti sul documento). Non stanno sull'ordine:
+  // stanno sul CLIENTE, finche' qualcuno non li mette su un documento.
+  const [abbuoniPromessi, setAbbuoniPromessi] = useState([]);
   const [ordineDaGuardare, setOrdineDaGuardare] = useState(null);
   // I CLIENTI ANCORA DA CONFERMARE (Luca 26/08/2026: "dammeli in rosso da
   // modificare in archivio"). Sono quelli che hanno ordinato dal 03/08 e che
@@ -5519,6 +5594,7 @@ export default function App() {
       setLots(safeLots);
       setOrders(mergedOrders);
       setAppAnagrafiche(raw.anagraficheApp || {});
+      setAbbuoniPromessi(raw.abbuoniPromessi || []);
       setAssignments(normalizedAssignments);
       setArchivedLoaded(false);
       // Stessa regola del caricamento pieno: si resta sull'ordine che si
@@ -5575,6 +5651,7 @@ export default function App() {
       setClients(normalizedClients);
       setAgenti(raw.agenti || []);
       setAppAnagrafiche(raw.anagraficheApp || {});
+      setAbbuoniPromessi(raw.abbuoniPromessi || []);
       setClientiOverride(raw.overridesClienti || {});
       setDestinazioni(raw.destinazioni || {});
       setAssignments(normalizedAssignments);
@@ -6624,6 +6701,8 @@ export default function App() {
             codiceLotto: codeTrim,
             scadenza: expiry || "",
             quantita: 0,
+            operatore: authUser?.etichetta || authUser?.username || "",
+            origine: "lotto-al-volo",
           }),
         });
         if (!created?.success) {
@@ -8166,10 +8245,39 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
       // Qui NON si calcola piu' niente: il vecchio "leggi il prossimo, poi
       // scrivilo" poteva dare lo stesso numero a due postazioni e lasciava un
       // buco se la scrittura falliva. Vedi sql/numero_ddt.sql.
-      const nres = await callSheetsApi({
+      let nres = await callSheetsApi({
         action: "assegnaNumeroDDT",
         payload: JSON.stringify({ orderId: order.id }),
       });
+      // IL PREZZO DELL'AGENTE E' LEGGE (Luca 03/09/2026: "quello che segna
+      // l'agente e' legge e deve rimanere uguale a meno che non modificato da
+      // noi"). Se una riga costa al cliente piu' del concordato dall'agente, il
+      // DDT NON esce finche' qualcuno non guarda. Stesso patto dell'archivio:
+      // si puo' confermare, e resta scritto chi ha deciso. Farmacia Squarti:
+      // la promo BOX HOT -50% era degradata a 35% e il DDT era gia' partito,
+      // perche' il vecchio guardiano scattava solo all'archiviazione, dopo la
+      // stampa.
+      if (nres && nres.code === "PREZZO_DA_AUTORIZZARE") {
+        const ok = window.confirm(
+          "PREZZI DIVERSI DA QUELLI CONCORDATI DALL'AGENTE\n\n" +
+            String(nres.error || "") +
+            "\n\nOK = va bene cosi', emetti il DDT (resta scritto che l'hai deciso tu)." +
+            "\nAnnulla = non emetto il DDT, prima sistemo i prezzi."
+        );
+        if (!ok) return;
+        const aut = await callSheetsApi({
+          action: "autorizzaPrezzo",
+          payload: JSON.stringify({ orderId: order.id, operatore: authUser?.username || "" }),
+        });
+        if (!aut || !aut.success) {
+          alert("Non sono riuscito a registrare l'ok: " + ((aut && aut.error) || "errore"));
+          return;
+        }
+        nres = await callSheetsApi({
+          action: "assegnaNumeroDDT",
+          payload: JSON.stringify({ orderId: order.id }),
+        });
+      }
       if (!nres || !nres.success || !nres.numero) {
         // Nessun ripiego che si inventi un numero: meglio non stampare che
         // stampare un DDT con un numero gia' usato da un altro documento.
@@ -9096,6 +9204,31 @@ ${isConferma
       );
     }
 
+    // L'ABBUONO PROMESSO SI CHIEDE ADESSO (03/09/2026, dal DDT 2035). Il
+    // "Pronto" e' il momento in cui nasce il numero del DDT: da qui in avanti la
+    // copia consegnata al cliente e' quella. Se il cliente ha un abbuono
+    // concordato e sul documento non c'e', si ferma e si chiede — non si blocca
+    // il magazzino, ma non lo si lascia passare in silenzio: sul 2035 sono stati
+    // 33,50 euro che il cliente avrebbe pagato di nuovo.
+    const daDare = promesseDi(selectedOrder);
+    const haAbbuono = (selectedOrder.lines || []).some((l) => rigaAbbuono(l));
+    if (daDare.length && !haAbbuono) {
+      const quanto = daDare.reduce((sum, a) => sum + Number(a.importo || 0), 0);
+      const proseguo = window.confirm(
+        "ATTENZIONE: questo cliente ha un abbuono concordato e non ancora dato.\n\n" +
+          daDare.map((a) => `- ${fmtEur(a.importo)} € · ${a.motivo}`).join("\n") +
+          `\n\nTotale da dare: ${fmtEur(quanto)} €.\n\n` +
+          "Su questo ordine non c'e' nessuna riga di abbuono. Segnando PRONTO nasce il numero " +
+          "del DDT e la bolla consegnata sara' senza abbuono.\n\n" +
+          "OK = vado avanti comunque (l'abbuono resta da dare)\n" +
+          "Annulla = torno indietro e lo applico adesso"
+      );
+      if (!proseguo) {
+        aggiungiAbbuono(selectedOrder, daDare[0]);
+        return;
+      }
+    }
+
     setSavingPreparedOrderId(String(selectedOrder.id));
 
     try {
@@ -9539,6 +9672,39 @@ ${isConferma
   };
 
 
+  // IL LOTTO GEMELLO. Caricare due volte lo stesso lotto e normale: la
+  // produzione esce a ondate durante la giornata. Il magazzino somma, ma
+  // finora non lo diceva a nessuno, e chi caricava credeva di aver sbagliato e
+  // andava a inventare un codice nuovo. Adesso si vede PRIMA di salvare.
+  const lottoGemello = useMemo(() => {
+    const code = String(newLotCode || "").trim().toLowerCase();
+    if (!code || !newLotProductId) return null;
+    return (
+      lots.find(
+        (l) =>
+          !l.archived &&
+          String(l.productId) === String(newLotProductId) &&
+          String(l.lot || "").trim().toLowerCase() === code
+      ) || null
+    );
+  }, [lots, newLotCode, newLotProductId]);
+
+  // STESSA SCADENZA, CODICE DIVERSO. Il 02/09 Ricotta e Spinaci HORECA201 e
+  // finita in due lotti, 2609243 e 2608243: una cifra di differenza, invisibile
+  // a occhio. La scadenza uguale li tradisce, e si dice prima di salvare.
+  const lottoStessaScadenza = useMemo(() => {
+    if (!newLotExpiry || !newLotProductId) return null;
+    const code = String(newLotCode || "").trim().toLowerCase();
+    const gemelli = lots.filter(
+      (l) =>
+        !l.archived &&
+        String(l.productId) === String(newLotProductId) &&
+        String(l.lot || "").trim().toLowerCase() !== code &&
+        String(l.expiry || "").slice(0, 10) === String(newLotExpiry).slice(0, 10)
+    );
+    return gemelli.length ? gemelli.map((l) => l.lot).join(", ") : null;
+  }, [lots, newLotCode, newLotExpiry, newLotProductId]);
+
   const createLot = async () => {
     if (savingNewLot) return;
 
@@ -9580,7 +9746,11 @@ ${isConferma
     try {
       const result = await callSheetsApi({
         action: "createLot",
-        payload: JSON.stringify(newLot),
+        payload: JSON.stringify({
+          ...newLot,
+          operatore: authUser?.etichetta || authUser?.username || "",
+          origine: "articoli",
+        }),
       });
 
       if (!result || !result.success) {
@@ -9632,6 +9802,15 @@ ${isConferma
           ...prev,
         ];
       });
+
+      if (result.accorpato) {
+        alert(
+          `Lotto ${returnedLotCode} già a magazzino: ` +
+            `${result.prima} + ${result.aggiunte} = ${returnedQty}. ` +
+            `Non è stata creata una riga nuova, la quantità si è sommata.`
+        );
+      }
+      if (result.avviso) alert(result.avviso);
 
       setNewLotProductId("");
       setNewLotProductSearch("");
@@ -9904,6 +10083,8 @@ ${isConferma
           scadenza: prodExpiry,
           quantita: qty,
           loadedQty: qty,
+          operatore: authUser?.etichetta || authUser?.username || "",
+          origine: "produzione-magazzino",
         }),
       });
       if (!result || !result.success) {
@@ -9936,23 +10117,17 @@ ${isConferma
         ];
       });
 
-      // Log produzione per l'app margine (best-effort: se la tabella non c'e'
-      // ancora, il carico lotto resta comunque valido).
-      try {
-        await callSheetsApi({
-          action: "logProduzione",
-          payload: JSON.stringify({
-            productId: String(prod.id),
-            code: prod.code,
-            name: prod.name,
-            lot: prodCode.trim(),
-            expiry: prodExpiry,
-            ct: qty,
-            kg,
-            operatore: authUser?.etichetta || authUser?.username || "",
-          }),
-        });
-      } catch (_) {}
+      // Il carico e gia registrato: lo fa `carica_lotto` dentro la stessa
+      // operazione della giacenza. Prima si scriveva qui una seconda volta, e
+      // il registro dipendeva da una chiamata che poteva fallire in silenzio.
+      if (result.accorpato) {
+        alert(
+          `Lotto ${prodCode.trim()} già a magazzino: ` +
+            `${result.prima} + ${result.aggiunte} = ${returnedQty}. ` +
+            `Le unità si sono sommate a quelle di prima.`
+        );
+      }
+      if (result.avviso) alert(result.avviso);
 
       setProdTodayList((prev) => [
         { code: prod.code, name: prod.name, lot: prodCode.trim(), expiry: prodExpiry, qty, kg, uom: prod.uom },
@@ -10210,7 +10385,19 @@ ${isConferma
   // scritta come tale, se no fra sei mesi nessuno sa perche' quel totale non
   // torna con le quantita'.
   // Si apre la finestra: importo, motivo e ALIQUOTA da scegliere.
-  const aggiungiAbbuono = (order) => { if (order) setAbbuonoPer(order); };
+  const aggiungiAbbuono = (order, promessa) => {
+    if (order) setAbbuonoPer({ ...order, __promessa: promessa || null });
+  };
+
+  // Gli abbuoni che questo cliente deve ancora ricevere. Si aggancia per
+  // CODICE cliente: il nome non e' una chiave.
+  const promesseDi = (order) => {
+    const cod = String(order?.clientId || "").trim();
+    if (!cod) return [];
+    return (abbuoniPromessi || []).filter(
+      (a) => String(a.codiceCliente || "").trim() === cod
+    );
+  };
   // Aggiunge subito la riga generica: la scelta vera si fa sul LOTTO, dove la
   // tendina elenca tutti i cartoni bollinati di tutte le referenze.
   const aggiungiBollinato = async (order) => {
@@ -10275,10 +10462,79 @@ ${isConferma
         alert("Abbuono non salvato: " + ((res && res.error) || "errore"));
         return;
       }
+
+      // LA PROMESSA SI CHIUDE SOLO QUANDO LA RIGA C'E'. Prima la riga, poi il
+      // registro: se il secondo passo fallisce l'abbuono e' comunque dato e
+      // resta segnalato, che e' l'errore dalla parte giusta.
+      const promessa = order.__promessa;
+      if (promessa?.id) {
+        try {
+          const segn = await callSheetsApi({
+            action: "segnaAbbuonoApplicato",
+            payload: JSON.stringify({
+              id: promessa.id,
+              orderId: order.id,
+              operatore: authUser?.etichetta || authUser?.username || "",
+            }),
+          });
+          if (!segn?.success) {
+            alert(
+              "L'abbuono è stato messo sull'ordine, ma il registro non si è chiuso: " +
+                (segn?.error || "errore") +
+                "\nResterà segnalato come da dare finché non si sistema."
+            );
+          } else if (segn.avviso) {
+            alert(segn.avviso);
+          }
+        } catch (_) {
+          alert(
+            "L'abbuono è sull'ordine, ma non ho potuto chiudere il registro: resterà segnalato come da dare."
+          );
+        }
+      }
+
       setAbbuonoPer(null);
       await loadDatiVivi();
     } catch (e) {
       alert("Errore di collegamento nel salvare l'abbuono.");
+    }
+  };
+
+  // REGISTRARE UN ABBUONO CONCORDATO SENZA DARLO SUBITO. Vive sul cliente, non
+  // sull'ordine: cosi' lo ritrova anche chi prepara il prossimo.
+  const promettiAbbuono = async (order, { importo, motivo, iva }) => {
+    const cod = String(order?.clientId || "").trim();
+    if (!cod) {
+      alert(
+        "Questo ordine non ha un codice cliente: l'abbuono da dare si aggancia al codice, " +
+        "non al nome. Completa prima l'anagrafica."
+      );
+      return;
+    }
+    try {
+      const res = await callSheetsApi({
+        action: "prometttiAbbuono",
+        payload: JSON.stringify({
+          codiceCliente: cod,
+          importo,
+          motivo,
+          ivaPct: iva,
+          operatore: authUser?.etichetta || authUser?.username || "",
+          ddtRiferimento: String(order?.ddtNumero || "").trim() || null,
+        }),
+      });
+      if (!res || !res.success) {
+        alert("Abbuono non registrato: " + ((res && res.error) || "errore"));
+        return;
+      }
+      setAbbuonoPer(null);
+      await loadDatiVivi();
+      alert(
+        `Segnato: ${fmtEur(importo)} € da dare a ${res.cliente || cod}.\n\n` +
+        "Comparirà su ogni ordine di questo cliente finché non viene messo su un documento."
+      );
+    } catch (e) {
+      alert("Errore di collegamento nel registrare l'abbuono da dare.");
     }
   };
 
@@ -11454,7 +11710,8 @@ ${isConferma
                               quando l'ordine era gia' pronto. */}
                           <BollinoAbbuono
                             order={selectedOrder}
-                            onAggiungi={() => azioneUnica("abbuono-" + selectedOrder.id, () => aggiungiAbbuono(selectedOrder))}
+                            promesse={promesseDi(selectedOrder)}
+                            onAggiungi={(pr) => azioneUnica("abbuono-" + selectedOrder.id, () => aggiungiAbbuono(selectedOrder, pr))}
                             onTogli={(l) => azioneUnica("togli-abbuono-" + l.lineId, () => togliAbbuono(selectedOrder, l))}
                           />
                           <button
@@ -12715,7 +12972,8 @@ ${isConferma
 
                           <BollinoAbbuono
                             order={order}
-                            onAggiungi={() => azioneUnica("abbuono-" + order.id, () => aggiungiAbbuono(order))}
+                            promesse={promesseDi(order)}
+                            onAggiungi={(pr) => azioneUnica("abbuono-" + order.id, () => aggiungiAbbuono(order, pr))}
                             onTogli={(l) => azioneUnica("togli-abbuono-" + l.lineId, () => togliAbbuono(order, l))}
                           />
                           <button
@@ -16374,6 +16632,33 @@ ${isConferma
                     onChange={(event) => setNewLotCode(event.target.value)}
                     placeholder="Es. 2604110"
                   />
+
+                  {lottoGemello ? (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "#eff6ff",
+                        border: "1px solid #bfdbfe",
+                        color: "#1e3a8a",
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Questo lotto è già a magazzino con{" "}
+                      <b>{Number(lottoGemello.loadedQty || 0)}</b> unità.{" "}
+                      {Number(newLotQty) > 0 ? (
+                        <>
+                          Salvando diventano{" "}
+                          <b>{Number(lottoGemello.loadedQty || 0) + Number(newLotQty)}</b>:
+                        </>
+                      ) : (
+                        "Le unità che scrivi si sommano:"
+                      )}{" "}
+                      non nasce una riga nuova.
+                    </div>
+                  ) : null}
                 </div>
 
                 <div>
@@ -16385,6 +16670,25 @@ ${isConferma
                     value={newLotExpiry}
                     onChange={(event) => setNewLotExpiry(event.target.value)}
                   />
+
+                  {!lottoGemello && lottoStessaScadenza ? (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "#fffbeb",
+                        border: "1px solid #fcd34d",
+                        color: "#78350f",
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Di questo articolo c'è già il lotto <b>{lottoStessaScadenza}</b> con la
+                      stessa scadenza. È lo stesso lotto scritto in due modi? Se sì, correggi il
+                      codice: due lotti gemelli si dividono la merce e nessuno dei due torna.
+                    </div>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -16549,8 +16853,10 @@ ${isConferma
         >
           {abbuonoPer ? (
             <FinestraAbbuono
+              promessa={abbuonoPer.__promessa || null}
               order={ordersWithComputed.find((o) => String(o.id) === String(abbuonoPer.id)) || abbuonoPer}
               onSalva={(dati) => salvaAbbuono(abbuonoPer, dati)}
+              onRegistra={(dati) => promettiAbbuono(abbuonoPer, dati)}
               onChiudi={() => setAbbuonoPer(null)}
             />
           ) : null}
