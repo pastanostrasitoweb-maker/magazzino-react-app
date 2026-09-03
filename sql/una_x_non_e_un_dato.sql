@@ -38,6 +38,16 @@ returns trigger
 language plpgsql
 as $$
 begin
+  -- PRIMA SI PULISCE, POI SI GIUDICA. "40699 " con lo spazio in fondo (EDDY
+  -- CASH, Germania) passava tutti i controlli e restava sporco: gli incroci per
+  -- partita IVA e le tabelle delle zone non lo riconoscono. E' lo stesso errore
+  -- trovato nel preventivo: si valida il valore pulito e si salva quello sporco.
+  new.cap            := nullif(btrim(coalesce(new.cap,'')), '');
+  new.partita_iva    := nullif(btrim(coalesce(new.partita_iva,'')), '');
+  new.codice_univoco := nullif(btrim(coalesce(new.codice_univoco,'')), '');
+  new.pec            := nullif(btrim(coalesce(new.pec,'')), '');
+  new.email          := nullif(btrim(coalesce(new.email,'')), '');
+
   if e_un_segnaposto(new.partita_iva)    then new.partita_iva    := null; end if;
   if e_un_segnaposto(new.codice_univoco) then new.codice_univoco := null; end if;
   if e_un_segnaposto(new.pec)            then new.pec            := null; end if;
