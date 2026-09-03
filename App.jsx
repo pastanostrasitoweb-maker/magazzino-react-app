@@ -4533,6 +4533,13 @@ export default function App() {
   const [loggingIn, setLoggingIn] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
   const [loadError, setLoadError] = useState("");
+  // C'E' UNA VERSIONE NUOVA? (Luca 03/09/2026: "niente!!! appena faccio nuovo
+  // cliente do 10 secondi fa un aggiornamento e esce"). Il programma era gia'
+  // corretto e pubblicato: in ufficio si stava usando la pagina caricata la
+  // mattina, quella con i giri ogni 4 secondi, perche' nessuno ricarica mai.
+  // Ora l'app se ne accorge da sola e lo DICE. Non ricarica mai da sola:
+  // decide chi sta lavorando, con un bottone.
+  const [versioneNuova, setVersioneNuova] = useState(false);
   const [savingPreparedOrderId, setSavingPreparedOrderId] = useState("");
   const [expandedPreparedOrders, setExpandedPreparedOrders] = useState({});
 
@@ -5716,6 +5723,26 @@ export default function App() {
 
   useEffect(() => {
     loadDataFromSheets();
+  }, []);
+
+  useEffect(() => {
+    let mia = "";
+    const guarda = async () => {
+      try {
+        const r = await fetch("/versione.json?t=" + Date.now(), { cache: "no-store" });
+        const v = String((await r.json()).versione || "");
+        if (!v) return;
+        if (!mia) { mia = v; return; }
+        if (v !== mia) setVersioneNuova(true);
+      } catch (_) { /* senza rete si continua a lavorare */ }
+    };
+    guarda();
+    // Il controllo gira anche mentre compili: e' un file di trenta byte, non
+    // tocca niente a schermo e non ricarica. Serve solo ad accendere la barra.
+    const t = setInterval(() => { if (!document.hidden) guarda(); }, 5 * 60 * 1000);
+    const alRitorno = () => { if (!document.hidden) guarda(); };
+    document.addEventListener("visibilitychange", alRitorno);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", alRitorno); };
   }, []);
 
   useEffect(() => {
@@ -11135,6 +11162,38 @@ ${isConferma
             </div>
           </div>
         </div>
+
+        {versioneNuova ? (
+          <div
+            style={{
+              ...cardStyle(),
+              padding: "12px 16px",
+              marginBottom: 16,
+              background: "#0b2a5b",
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <strong>C'e' una versione nuova del magazzino.</strong>{" "}
+              Quella che stai usando e' di prima delle correzioni. Aggiorna quando
+              hai finito quello che stai scrivendo: niente va perso, ma quello che
+              non hai ancora salvato va salvato prima.
+            </div>
+            <button
+              type="button"
+              data-telemetria="versione-aggiorna"
+              style={{ ...btnStyle("primary"), background: "#fff", color: "#0b2a5b", whiteSpace: "nowrap" }}
+              onClick={() => window.location.reload()}
+            >
+              Prendi la versione nuova
+            </button>
+          </div>
+        ) : null}
 
         {loadError ? (
           <div
