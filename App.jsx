@@ -13211,9 +13211,13 @@ ${isConferma
                                 >
                                   <div>
                                     <div style={{ fontWeight: 950, color: "#07153a" }}>
-                                      {isOutsideStockLine(line)
-                                        ? line.productName
-                                        : product?.name || line.productName || line.productId}
+                                      {/* Anche qui comanda la riga, non il catalogo:
+                                          e' la schermata "Apri dettagli" dei
+                                          Preparati, ed era il terzo posto in cui
+                                          il cartone bollinato tornava a chiamarsi
+                                          "Mezzi Paccheri 250g" e basta. Il codice
+                                          articolo resta nella riga sotto. */}
+                                      {line.productName || product?.name || line.productId}
                                     </div>
                                     <div style={{ marginTop: 3, color: "#66758b", fontSize: 12 }}>
                                       {isOutsideStockLine(line)
