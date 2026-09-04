@@ -2411,6 +2411,15 @@ function normalizeProducts(rows) {
         const v = getField(row, ["IVA_Pct", "iva_pct", "IVA"]);
         return v === "" || v === null || v === undefined ? null : Number(v);
       })(),
+      // PEZZI DENTRO IL CARTONE. Si stampa in bolla accanto al lotto (Luca
+      // 04/09/2026: "mi piacerebbe che ci sia anche il numero dei PZ dentro il
+      // CT"). Dove il catalogo non lo dice resta 0 e non si stampa niente:
+      // meglio una riga muta che un numero inventato su un documento.
+      piecesPerBox: (() => {
+        const v = getField(row, ["Pezzi_Collo", "pezzi_collo", "Pezzi per collo", "PezziCollo"]);
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? n : 0;
+      })(),
       // Peso in kg per 1 unita' d'ordine (per l'UM del prodotto: peso del
       // cartone per i CT, del pezzo per i PZ). Fonte: tabella statica
       // PESI_PRODOTTI (dai cataloghi app agenti); fallback colonna peso_kg se
@@ -2875,8 +2884,19 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
   const [salvando, setSalvando] = useState(false);
   const [aperto, setAperto] = useState(false);
   const [regime, setRegime] = useState(order.regimeIva || "normale");
+  // LE RIGHE DELL'AGENTE PARTONO BLOCCATE. Il prezzo che l'agente ha concordato
+  // col cliente e' legge (Luca 03/09/2026): da qui non si tocca per sbaglio.
+  // Per cambiarlo si sblocca a mano, e quello e' il "modificato da noi" della
+  // regola. Cosi' ne' "Proponi dallo storico", ne' la tendina, ne' una battuta
+  // sulla tastiera possono degradare la promo BOX HOT -50% al 35% del listino,
+  // com'era successo a Farmacia Squarti.
+  const [sbloccati, setSbloccati] = useState({});
 
   const righe = order.lines || [];
+
+  // Bloccata = viene dall'app agenti, ha un prezzo, e nessuno l'ha sbloccata.
+  const rigaBloccata = (l) =>
+    l.prezzoOrigine === "app" && l.prezzoUnitario != null && !sbloccati[l.lineId];
 
   useEffect(() => {
     const iniziale = {};
@@ -2937,6 +2957,9 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
       const next = { ...prev };
       let riempite = 0;
       for (const l of righe) {
+        // Il prezzo dell'agente non si tocca dallo storico: e' un accordo col
+        // cliente, non una proposta da rimpiazzare.
+        if (rigaBloccata(l)) continue;
         const a = suggerimentoPer(l);
         if (!a || a.ultimoPrezzo == null) continue;
         // Non sovrascrivo un prezzo gia' messo a mano.
@@ -2991,10 +3014,16 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
       // adesso la correzione non resta sulla riga ma insegna al catalogo.
       let ivaCorrette = 0;
       for (const l of righe) {
-        const p = String(bozza[l.lineId]?.prezzo ?? "").trim();
-        const sc = String(bozza[l.lineId]?.sconto ?? "").trim();
-        const sc2 = String(bozza[l.lineId]?.sconto2 ?? "").trim();
-        const sc3 = String(bozza[l.lineId]?.sconto3 ?? "").trim();
+        // IL PREZZO DELL'AGENTE E' LEGGE: su una riga bloccata prezzo e sconti
+        // restano i suoi, qualunque cosa mostri il pannello. Si salva solo
+        // l'IVA, che e' del prodotto, non un accordo commerciale.
+        const bloc = rigaBloccata(l);
+        const p = bloc
+          ? (l.prezzoUnitario == null ? "" : String(l.prezzoUnitario))
+          : String(bozza[l.lineId]?.prezzo ?? "").trim();
+        const sc = bloc ? (l.scontoPct ? String(l.scontoPct) : "") : String(bozza[l.lineId]?.sconto ?? "").trim();
+        const sc2 = bloc ? (l.sconto2Pct ? String(l.sconto2Pct) : "") : String(bozza[l.lineId]?.sconto2 ?? "").trim();
+        const sc3 = bloc ? (l.sconto3Pct ? String(l.sconto3Pct) : "") : String(bozza[l.lineId]?.sconto3 ?? "").trim();
         const prima = l.prezzoUnitario === null || l.prezzoUnitario === undefined ? "" : String(l.prezzoUnitario);
         // L'ALIQUOTA CONTA COME UNA MODIFICA (Luca 17/08/2026: "non fa cambiare
         // l'IVA che e' il 10%, ho provato tre volte e non si cambia").
@@ -3200,11 +3229,22 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                   {/* Il prezzo dell'app agenti resta quello che e': da qui si
                       cambia listino solo se serve, e si vede prima quanto costa. */}
                   {l.prezzoOrigine === "app" && l.prezzoUnitario != null ? (
-                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#166534", marginTop: 2 }}>
-                      prezzo dall'app agenti
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#166534", marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <span>{rigaBloccata(l) ? "🔒 prezzo dell'agente (bloccato)" : "🔓 prezzo agente sbloccato"}</span>
+                      <button
+                        type="button"
+                        data-telemetria={rigaBloccata(l) ? "prezzo-agente-sblocca" : "prezzo-agente-riblocca"}
+                        onClick={() => setSbloccati((p) => ({ ...p, [l.lineId]: !p[l.lineId] }))}
+                        style={{ ...btnStyle("outline"), padding: "2px 8px", fontSize: 11.5 }}
+                        title="Il prezzo concordato dall'agente e' legge. Sbloccalo solo se lo cambi apposta."
+                      >
+                        {rigaBloccata(l) ? "Sblocca per modificare" : "Ripristina blocco"}
+                      </button>
                     </div>
                   ) : null}
-                  <TendinaListini
+                  {/* La tendina cambia prezzo/listino: sparisce quando la riga
+                      e' bloccata, cosi' non lo si sposta per sbaglio. */}
+                  {rigaBloccata(l) ? null : <TendinaListini
                     codice={a?.codice || String(l.productName || "").split(" ").slice(0, 2).join(" ")}
                     storico={a}
                     listini={listini}
@@ -3223,13 +3263,14 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                         },
                       }))
                     }
-                  />
+                  />}
                 </div>
                 <input
-                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  style={{ ...inputStyle(), padding: "6px 8px", ...(rigaBloccata(l) ? { background: "#f1f5f9", color: "#64748b" } : {}) }}
                   type="number"
                   step="0.01"
                   min="0"
+                  readOnly={rigaBloccata(l)}
                   placeholder="Prezzo €"
                   value={bozza[l.lineId]?.prezzo ?? ""}
                   onChange={(e) =>
@@ -3240,11 +3281,12 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                   }
                 />
                 <input
-                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  style={{ ...inputStyle(), padding: "6px 8px", ...(rigaBloccata(l) ? { background: "#f1f5f9", color: "#64748b" } : {}) }}
                   type="number"
                   step="0.1"
                   min="0"
                   max="100"
+                  readOnly={rigaBloccata(l)}
                   placeholder="Sc 1 %"
                   title="Primo sconto, sul prezzo di listino"
                   value={bozza[l.lineId]?.sconto ?? ""}
@@ -3258,11 +3300,12 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                 {/* Sconti 2 e 3, IN CASCATA: ognuno si applica al prezzo gia'
                     scontato dal precedente. 100 con 10+10+10 fa 72,90. */}
                 <input
-                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  style={{ ...inputStyle(), padding: "6px 8px", ...(rigaBloccata(l) ? { background: "#f1f5f9", color: "#64748b" } : {}) }}
                   type="number"
                   step="0.1"
                   min="0"
                   max="100"
+                  readOnly={rigaBloccata(l)}
                   placeholder="Sc 2 %"
                   title="Secondo sconto, sul prezzo gia' scontato dal primo"
                   value={bozza[l.lineId]?.sconto2 ?? ""}
@@ -3274,11 +3317,12 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                   }
                 />
                 <input
-                  style={{ ...inputStyle(), padding: "6px 8px" }}
+                  style={{ ...inputStyle(), padding: "6px 8px", ...(rigaBloccata(l) ? { background: "#f1f5f9", color: "#64748b" } : {}) }}
                   type="number"
                   step="0.1"
                   min="0"
                   max="100"
+                  readOnly={rigaBloccata(l)}
                   placeholder="Sc 3 %"
                   title="Terzo sconto, sul prezzo gia' scontato dai primi due"
                   value={bozza[l.lineId]?.sconto3 ?? ""}
@@ -4388,7 +4432,7 @@ function PannelloFatture({ onChiudi }) {
             if ((data || []).length < 1000) return out;
           }
         };
-        const [ordini, ov, gest, righe, metodi, fatte, recapiti] = await Promise.all([
+        const [ordini, ov, gest, righe, metodi, fatte, recapiti, abbuoni] = await Promise.all([
           tutte("ordini", "id_ordine,ddt_numero,cliente,id_cliente,totale_imponibile,campionatura,data_preparato,data_ordine",
             (q) => q.eq("archiviato", true)),
           tutte("clienti_override", "ragione_sociale,partita_iva,citta,provincia,cap,sede_legale,codice_univoco,pec,codice_cliente,persona_fisica,nome,cognome,nazione"),
@@ -4397,9 +4441,15 @@ function PannelloFatture({ onChiudi }) {
           tutte("metodi_fattura", "ddt_numero,effettivo,canonico"),
           tutte("fatture_generate", "ddt_numero,numero,data_fattura,cliente,totale,fuori_app"),
           tutte("recapiti_sdi", "piva,sdi,pec"),
+          // GLI ABBUONI PROMESSI E NON DATI (03/09/2026, dal DDT 2035). La
+          // fattura e' l'ultimo posto dove si puo' rimediare: se il cliente ha
+          // un credito aperto, chi fattura lo deve vedere prima di premere.
+          tutte("abbuoni_promessi", "id,codice_cliente,importo,motivo,ddt_riferimento",
+            (q) => q.eq("stato", "in attesa")),
         ]);
         if (!vivo) return;
         const r = selezionaFatture({ ordini, ov, gest, righe, metodi, fatte, recapiti });
+        r.abbuoniAperti = abbuoni || [];
         setSel(r);
         setDaNumero(String(r.prossimoNumero));
         setStato("pronto");
@@ -4420,6 +4470,27 @@ function PannelloFatture({ onChiudi }) {
         !window.confirm(
           `Il registro dice che la prossima fattura e' la ${sel.prossimoNumero}, tu hai scritto ${partenza}.\n` +
           `Un numero doppio o un buco nella serie e' un problema fiscale. Vai avanti lo stesso?`)) return;
+
+    // UN CREDITO APERTO NON SI FATTURA IN SILENZIO. Sul DDT 2035 l'abbuono
+    // concordato non era finito sul documento: la fattura sarebbe uscita piena
+    // e il cliente avrebbe pagato 33,50 euro che gli erano stati promessi.
+    const conCredito = (sel.abbuoniAperti || [])
+      .map((a) => {
+        const suo = sel.pronte.filter((p) => String(p.ordine?.id_cliente || "") === String(a.codice_cliente));
+        return suo.length ? { ...a, ddt: suo.map((p) => p.ddt).join(", "), cliente: suo[0].cliente } : null;
+      })
+      .filter(Boolean);
+    if (conCredito.length) {
+      const testo = conCredito
+        .map((a) => `- ${a.cliente}: ${fmtEur(a.importo)} € · ${a.motivo} (DDT in fattura: ${a.ddt})`)
+        .join("\n");
+      if (!window.confirm(
+        "ATTENZIONE: fra le fatture da generare ci sono clienti con un abbuono concordato e NON ancora dato.\n\n" +
+        testo +
+        "\n\nSe la fattura esce cosi', il cliente paga anche quello che gli era stato promesso.\n\n" +
+        "OK = genero comunque (il credito resta aperto)\nAnnulla = mi fermo e lo sistemo"
+      )) return;
+    }
 
     const file = [];
     const registro = [];
@@ -4488,8 +4559,30 @@ function PannelloFatture({ onChiudi }) {
     );
   }
 
+  // I crediti aperti fra le fatture in partenza: si vedono PRIMA di premere,
+  // non in un messaggio che compare dopo il click.
+  const creditiAperti = (sel.abbuoniAperti || [])
+    .map((a) => {
+      const suo = sel.pronte.filter((p) => String(p.ordine?.id_cliente || "") === String(a.codice_cliente));
+      return suo.length ? { ...a, ddt: suo.map((p) => p.ddt).join(", "), cliente: suo[0].cliente } : null;
+    })
+    .filter(Boolean);
+
   return (
     <div>
+      {creditiAperti.length ? (
+        <div style={{ marginBottom: 14, border: "1px solid #fcd34d", background: "#fffbeb",
+          borderRadius: 12, padding: 12, color: "#78350f", fontSize: 13, lineHeight: 1.55 }}>
+          <b>Abbuoni concordati e non ancora dati</b>, su clienti che stanno per essere fatturati.
+          Se la fattura esce così, pagano anche quello che gli era stato promesso.
+          {creditiAperti.map((a) => (
+            <div key={a.id} style={{ marginTop: 6 }}>
+              • <b>{a.cliente}</b>: {fmtEur(a.importo)} € — {a.motivo} <span style={{ opacity: 0.8 }}>(DDT {a.ddt})</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 12.5, color: "#66758b", marginBottom: 4 }}>Numero della prima fattura</div>
@@ -5481,6 +5574,10 @@ export default function App() {
   const [editProductCode, setEditProductCode] = useState("");
   const [editProductName, setEditProductName] = useState("");
   const [editProductUom, setEditProductUom] = useState("pz");
+  // Pezzi dentro il cartone: si stampa in bolla, quindi va potuto scrivere da
+  // qui. Senza questo campo i 10 articoli che non ce l'hanno resterebbero muti
+  // per sempre (Luca 04/09/2026).
+  const [editProductPieces, setEditProductPieces] = useState("");
   const [editProductManagesLots, setEditProductManagesLots] = useState(true);
   const [savingProduct, setSavingProduct] = useState(false);
   const [deletingProductId, setDeletingProductId] = useState("");
@@ -6632,6 +6729,24 @@ export default function App() {
       alert("Riga non trovata");
       return;
     }
+    // IL CARTONE BOLLINATO NON PASSA DA QUI. La riga bollinata non ha ancora un
+    // articolo: porta un segnaposto (BOLLINATO-...) finche' non le si sceglie un
+    // lotto DALL'ELENCO dei bollinati, ed e' quella scelta che la trasforma in
+    // merce vera. Creando un lotto al volo il segnaposto restava: nasceva un
+    // lotto intestato a un prodotto che non esiste, il magazzino non si
+    // scaricava, e in bolla al cliente finiva scritto "CARTONE BOLLINATO ·
+    // scegli il lotto dalla riga" (DDT 2052, Farmacie Comunali Torino).
+    // Un cartone bollinato e' per definizione un lotto che c'e' gia' ed e'
+    // vicino a scadenza: crearlo adesso non ha senso.
+    if (rigaSceltaBollinati(line)) {
+      alert(
+        "Per il cartone bollinato scegli il lotto dall'elenco dei bollinati, sulla riga.\n\n" +
+        "Il lotto al volo qui non si puo' usare: la riga non sa ancora quale articolo e', " +
+        "e il bollinato e' un lotto gia' in magazzino vicino alla scadenza."
+      );
+      return;
+    }
+
     const codeTrim = String(code || "").trim();
     if (!codeTrim) {
       alert("Inserisci il codice del lotto");
@@ -8399,8 +8514,18 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
         // in bolla confonde chi riceve (magazzino, 02/09/2026).
         const espositore = /^EXPO/i.test(String(prod?.code || line.productCode || ""));
         const lottoStr = espositore ? "" : lottiParts.join(" · ");
+        // QUANTI PEZZI CI SONO NEL CARTONE (Luca 04/09/2026). Si stampa solo
+        // dove ha senso e dove il dato c'e' davvero:
+        //  - non sugli espositori, che sono materiale da banco;
+        //  - non se l'unita' d'ordine e' gia' il pezzo (sarebbe "1 pz per PZ");
+        //  - non se il catalogo non lo dice o dice 1: su un documento un numero
+        //    inventato vale meno di niente.
+        const pzCollo = Number(prod?.piecesPerBox || 0);
+        const umRiga = String(prod?.uom || "").trim().toUpperCase();
+        const mostraPz = !espositore && pzCollo > 1 && umRiga !== "PZ";
+        const pzStr = mostraPz ? ` · ${pzCollo} pz per ${umRiga || "CT"}` : "";
         const descr = esc(line.productName || "") +
-          (lottoStr ? ` — Lotto: ${esc(lottoStr)}` : "") +
+          (lottoStr ? ` — Lotto: ${esc(lottoStr)}${pzStr}` : pzStr) +
           // Sul DDT senza prezzi l'importo dell'abbuono va nella descrizione:
           // e' l'unico posto dove il cliente puo' leggerlo.
           (abb && !conPrezzi ? ` — ${eur(importoAbbuono)} €` : "");
@@ -10220,6 +10345,7 @@ ${isConferma
     setEditProductCode(product.code);
     setEditProductName(product.name);
     setEditProductUom(product.uom || "pz");
+    setEditProductPieces(product.piecesPerBox ? String(product.piecesPerBox) : "");
     setEditProductManagesLots(productManagesLots(product));
     setEditProductDialogOpen(true);
   };
@@ -10242,6 +10368,7 @@ ${isConferma
       UM: editProductUom.trim() || "pz",
       managesLots: editProductManagesLots,
       Gestione_Lotti: editProductManagesLots ? "SI" : "NO",
+      piecesPerBox: editProductPieces.trim() === "" ? null : Number(editProductPieces),
     };
 
     setSavingProduct(true);
@@ -10269,6 +10396,7 @@ ${isConferma
                 name: editProductName.trim(),
                 uom: editProductUom.trim() || "pz",
                 managesLots: editProductManagesLots,
+                piecesPerBox: editProductPieces.trim() === "" ? 0 : Number(editProductPieces),
               }
             : product
         )
@@ -10279,6 +10407,7 @@ ${isConferma
       setEditProductCode("");
       setEditProductName("");
       setEditProductUom("pz");
+      setEditProductPieces("");
       setEditProductManagesLots(true);
 
       
@@ -12592,7 +12721,12 @@ ${isConferma
                                         </div>
                                       );
                                     })() : null}
-                                    {!isOutsideStockLine(line) ? (
+                                    {/* Sul cartone bollinato il lotto al volo non
+                                        si offre nemmeno: quel lotto esiste gia'
+                                        in magazzino e si sceglie dall'elenco
+                                        qui sopra. Un bottone che non deve essere
+                                        premuto e' meglio non metterlo. */}
+                                    {!isOutsideStockLine(line) && !rigaSceltaBollinati(line) ? (
                                       <button
                                         type="button"
                                         style={{
@@ -16120,6 +16254,24 @@ ${isConferma
                 value={editProductUom}
                 onChange={(event) => setEditProductUom(event.target.value)}
               />
+            </div>
+
+            <div>
+              <label style={labelStyle()}>Pezzi dentro il cartone</label>
+
+              <input
+                style={inputStyle()}
+                type="number"
+                min="1"
+                value={editProductPieces}
+                onChange={(event) => setEditProductPieces(event.target.value)}
+                placeholder="es. 8"
+              />
+              <div style={{ marginTop: 6, color: "#66758b", fontSize: 12.5, lineHeight: 1.45 }}>
+                Si stampa in bolla accanto al lotto, così chi riceve conta senza aprire.
+                Lasciato vuoto non si stampa niente: meglio muto che un numero sbagliato
+                su un documento.
+              </div>
             </div>
 
             <label
