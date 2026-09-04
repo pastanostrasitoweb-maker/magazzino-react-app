@@ -12394,7 +12394,23 @@ ${isConferma
                                   overflowWrap: "anywhere",
                                 }}
                               >
-                                {isOutsideStockLine(line) ? line.productName : product?.name}
+                                {/* IL NOME SCRITTO SULLA RIGA VIENE PRIMA DEL VUOTO.
+                                    Qui si mostrava sempre il nome preso dal
+                                    catalogo: per il cartone bollinato, che finche'
+                                    non gli si sceglie il lotto porta un segnaposto
+                                    (BOLLINATO-...) e a catalogo non c'e', il nome
+                                    restava VUOTO. A schermo compariva solo
+                                    "BOLLINATO-1788514959410" e spariva il fatto
+                                    che fosse un cartone da bollinare.
+                                    (Luca 03/09/2026: "quando carichi il lotto
+                                    dell'articolo bollinato scompare il fatto che
+                                    sia un CT bollinato".)
+                                    Vale per qualunque riga il cui prodotto non sia
+                                    a catalogo: meglio il nome scritto sulla riga
+                                    che niente. */}
+                                {isOutsideStockLine(line)
+                                  ? line.productName
+                                  : (product?.name || line.productName || "")}
                               </div>
                             </div>
 
