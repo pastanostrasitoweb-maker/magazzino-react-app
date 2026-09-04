@@ -12408,9 +12408,21 @@ ${isConferma
                                     Vale per qualunque riga il cui prodotto non sia
                                     a catalogo: meglio il nome scritto sulla riga
                                     che niente. */}
-                                {isOutsideStockLine(line)
-                                  ? line.productName
-                                  : (product?.name || line.productName || "")}
+                                {/* COMANDA IL NOME SCRITTO SULLA RIGA, non il
+                                    catalogo. E' la descrizione che finisce in
+                                    bolla, ed e' l'unica che porta quello che
+                                    distingue QUESTA riga: "🏷️ DA BOLLINARE
+                                    (31 gg) · lotto 2607…", "OMAGGIO bollini
+                                    1+1", "[SU RICHIESTA]". Il catalogo dice
+                                    solo "Mezzi Paccheri 250g" e si mangia tutto
+                                    il resto: su Pizza Flash il cartone bollinato
+                                    c'era, con il suo lotto e lo sconto 100, e a
+                                    schermo sembrava una riga qualunque.
+                                    (Luca 03/09/2026: "Pizza Flash aveva un
+                                    cartone bollinato e li' non si vede".)
+                                    Il catalogo resta come rete: righe vecchie
+                                    senza descrizione. */}
+                                {line.productName || product?.name || ""}
                               </div>
                             </div>
 
