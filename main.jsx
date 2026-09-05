@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './styles.css';
+import './apple.css'
 import { montaSegnala } from './lib/segnala.js'
 import { avviaTelemetria } from './lib/telemetria.js'
 
