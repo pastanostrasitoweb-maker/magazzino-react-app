@@ -16,8 +16,19 @@
  * "Designing Fluid Interfaces", WWDC 2020 "The Details of UI Typography",
  * WWDC 2026 "Principles of Great Design") e li applica dove le undici app
  * si assomigliano gia': .btn, .chip, .icon-btn, .card, .header, .tabbar,
- * .barra, .sheet, .toast, .login, .section-title. Non tocca i colori delle
- * app (ogni app ha il suo accento) e non tocca il layout.
+ * .sheet, .login, .section-title. Non tocca i colori delle app (ogni app ha
+ * il suo accento) e non tocca il layout.
+ *
+ * LEZIONI DALLA REVISIONE AVVERSARIA (Codex, 05/09/2026):
+ * - `.barra` NON e' qui: in sette app e' la barra di avanzamento, e farla
+ *   di vetro trasformava il riempimento colorato in materiale traslucido.
+ * - Niente `animation` su .sheet e .toast: e' una shorthand e cancellava le
+ *   animazioni delle app (il toast centrato con translateX saltava di lato).
+ *   I keyframe restano disponibili con classi opt-in (.ap-materializza).
+ * - `color-mix()` ha un ripiego rgba: un browser puo' avere il blur e non
+ *   color-mix, e allora lo sfondo diventava invalido.
+ * - `transition` solo su bottoni e chip veri, niente will-change permanente,
+ *   niente transizione su html/body.
  *
  * I quattro pilastri, in ordine di importanza:
  *   1. Risposta: il tasto reagisce al tocco, non al rilascio (100 ms, scala
@@ -25,7 +36,7 @@
  *   2. Tipografia: font di sistema con optical sizing, tracking negativo sui
  *      titoli e vicino a zero sul corpo, interlinea stretta sui titoli.
  *      Su touch i campi stanno a 16px: sotto, iPhone ingrandisce la pagina.
- *   3. Materiali: barre e tab traslucide con blur, il contenuto scorre sotto.
+ *   3. Materiali: header e tab traslucide con blur, il contenuto scorre sotto.
  *      Con "riduci trasparenza" tornano solide, con "riduci movimento" le
  *      animazioni diventano dissolvenze.
  *   4. Attenzione: anelli di fuoco visibili da tastiera, mai dal mouse.
@@ -35,10 +46,20 @@
 :root {
   --ap-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, "Segoe UI", Roboto, sans-serif;
   --ap-accento: var(--accento, var(--verde, var(--primario, #0071e3)));
-  --ap-materiale: color-mix(in srgb, var(--card, var(--bg, #ffffff)) 74%, transparent);
-  --ap-bordo-luce: color-mix(in srgb, #ffffff 45%, transparent);
+  /* ripieghi semplici prima, color-mix solo dove esiste */
+  --ap-materiale: rgba(255, 255, 255, 0.74);
+  --ap-bordo-luce: rgba(255, 255, 255, 0.45);
+  --ap-bordo-tenue: rgba(0, 0, 0, 0.08);
+  --ap-anello: rgba(0, 113, 227, 0.22);
   --ap-molla: cubic-bezier(.2, .8, .2, 1);      /* molla criticamente smorzata, niente rimbalzo */
   --ap-molla-out: cubic-bezier(.8, .2, .8, 0);  /* la stessa curva al contrario: entra e esce per la stessa strada */
+}
+@supports (background: color-mix(in srgb, red 50%, blue)) {
+  :root {
+    --ap-materiale: color-mix(in srgb, var(--card, var(--bg, #ffffff)) 74%, transparent);
+    --ap-bordo-tenue: color-mix(in srgb, var(--bordo, #e5e5ea) 60%, transparent);
+    --ap-anello: color-mix(in srgb, var(--ap-accento) 22%, transparent);
+  }
 }
 
 html {
@@ -67,26 +88,24 @@ small, .piccolo, .mini { letter-spacing: 0.012em; }
 }
 
 /* ---------- 2. risposta: al tocco, non al rilascio ---------- */
-button, .btn, .chip, .icon-btn, [role="button"], .tabbar a, .tabbar button {
+button, .btn, .chip, .icon-btn {
   touch-action: manipulation;             /* via il ritardo dei 300 ms */
   transition: transform 100ms ease-out, opacity 100ms ease-out, background-color 150ms var(--ap-molla), box-shadow 150ms var(--ap-molla);
-  will-change: transform;
 }
-button:active:not(:disabled), .btn:active:not(:disabled), .chip:active, .icon-btn:active, [role="button"]:active {
+button:active:not(:disabled), .btn:active:not(:disabled), .chip:active, .icon-btn:active {
   transform: scale(0.97);
 }
-.card:active[role="button"], .card[onclick]:active, a.card:active { transform: scale(0.99); }
 button:disabled, .btn:disabled { cursor: not-allowed; }
 
-/* ---------- 3. materiali: barre e tab traslucide, contenuto che scorre sotto ---------- */
+/* ---------- 3. materiali: header e tab traslucide, contenuto che scorre sotto ---------- */
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .header, .tabbar, .barra {
+  .header, .tabbar {
     background: var(--ap-materiale);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
     backdrop-filter: blur(20px) saturate(180%);
   }
-  .header, .barra { border-bottom-color: color-mix(in srgb, var(--bordo, #e5e5ea) 60%, transparent); }
-  .tabbar { border-top-color: color-mix(in srgb, var(--bordo, #e5e5ea) 60%, transparent); }
+  .header { border-bottom-color: var(--ap-bordo-tenue); }
+  .tabbar { border-top-color: var(--ap-bordo-tenue); }
   /* Le superfici grandi sono piu' spesse: piu' sfocatura e un'ombra piu' profonda dei chip. */
   .sheet {
     -webkit-backdrop-filter: blur(28px) saturate(160%);
@@ -97,20 +116,17 @@ button:disabled, .btn:disabled { cursor: not-allowed; }
 /* Il bordo chiaro in alto e' la luce che prende il materiale. */
 .card, .sheet { box-shadow: inset 0 1px 0 var(--ap-bordo-luce), var(--ombra, 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.04)); }
 
-/* Il foglio arriva come un materiale, non come una dissolvenza: sfocatura e scala insieme. */
-.sheet { animation: ap-materializza 320ms var(--ap-molla) both; transform-origin: bottom center; }
+/* Il foglio arriva come un materiale, non come una dissolvenza: sfocatura e
+ * scala insieme. OPT-IN con la classe, mai automatico: le app hanno gia' le
+ * loro animazioni su .sheet e .toast e `animation` le cancellerebbe. */
+.ap-materializza { animation: ap-materializza 320ms var(--ap-molla) both; transform-origin: bottom center; }
 @keyframes ap-materializza {
   from { opacity: 0; transform: translateY(12px) scale(0.985); filter: blur(6px); }
   to   { opacity: 1; transform: none; filter: none; }
 }
-.toast { animation: ap-toast 300ms var(--ap-molla) both; }
-@keyframes ap-toast {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: none; }
-}
 
 /* Lo scorrimento con inerzia, e i bordi morbidi invece del muro. */
-.content, .contenuto, .scroll, main { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.content, .contenuto, .scroll { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 
 /* ---------- 4. attenzione: anelli di fuoco solo da tastiera ---------- */
 :focus:not(:focus-visible) { outline: none; }
@@ -122,22 +138,20 @@ button:disabled, .btn:disabled { cursor: not-allowed; }
 input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: none;
   border-color: var(--ap-accento);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ap-accento) 22%, transparent);
+  box-shadow: 0 0 0 3px var(--ap-anello);
 }
 
 /* ---------- 5. rispetto delle preferenze ---------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
-  .sheet, .toast { animation: ap-dissolvenza 200ms ease both; transform: none !important; filter: none !important; }
+  .ap-materializza { animation: ap-dissolvenza 200ms ease both; transform: none !important; filter: none !important; }
   @keyframes ap-dissolvenza { from { opacity: 0 } to { opacity: 1 } }
   button:active, .btn:active, .chip:active, .icon-btn:active { transform: none; opacity: .85; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .header, .tabbar, .barra, .sheet { background: var(--card, var(--bg, #fff)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .header, .tabbar, .sheet { background: var(--card, var(--bg, #fff)); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 @media (prefers-contrast: more) {
-  .header, .tabbar, .barra, .sheet, .card { border: 1px solid var(--testo, #1d1d1f); background: var(--card, var(--bg, #fff)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .header, .tabbar, .sheet, .card { border: 1px solid var(--testo, #1d1d1f); background: var(--card, var(--bg, #fff)); -webkit-backdrop-filter: none; backdrop-filter: none; }
   :focus-visible { outline-width: 3px; }
 }
-/* Il passaggio chiaro/scuro non deve essere uno scatto di luminosita'. */
-html, body { transition: background-color 300ms ease, color 300ms ease; }
