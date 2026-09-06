@@ -458,6 +458,9 @@ async function caricaNodoVivo() {
     Sottocategoria: row.sottocategoria ?? "",
     Gestione_Lotti: boolToSiNo(row.gestione_lotti),
     IVA_Pct: row.iva_pct ?? "",
+    // Quanti pezzi ci sono dentro un cartone: va stampato in bolla accanto al
+    // lotto, cosi' chi riceve conta senza aprire (Luca 04/09/2026).
+    Pezzi_Collo: row.pezzi_collo ?? "",
   }));
 
   // Mappa id_prodotto -> codice_prodotto (dai prodotti caricati).
@@ -2320,6 +2323,12 @@ async function updateProduct(params) {
   if (p.UM !== undefined) patch.um = p.UM;
   if (p.category !== undefined) patch.categoria = p.category;
   if (p.subcategory !== undefined) patch.sottocategoria = p.subcategory;
+  // Pezzi dentro il cartone: serve in bolla (Luca 04/09/2026). Vuoto ->
+  // NULL, non zero: zero direbbe "un cartone senza niente dentro".
+  if (p.piecesPerBox !== undefined) {
+    const n = Number(p.piecesPerBox);
+    patch.pezzi_collo = Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  }
   if (p.managesLots !== undefined) patch.gestione_lotti = !!p.managesLots;
   if (p.gestioneLotti !== undefined) patch.gestione_lotti = siNoToBool(p.gestioneLotti);
   if (p.Gestione_Lotti !== undefined) patch.gestione_lotti = siNoToBool(p.Gestione_Lotti);
