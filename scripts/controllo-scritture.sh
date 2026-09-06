@@ -22,7 +22,7 @@
 
 set -u
 ORD="ORD-CONTROLLO-$(date +%s)"
-URL="https://wwjgjiybyrrkafymiuew.supabase.co"
+URL="https://api.pastanostrasenzaglutine.it"
 ANON=$(grep -ho "eyJ[A-Za-z0-9_-]\{20,\}\.[A-Za-z0-9_-]\{20,\}\.[A-Za-z0-9_-]\{10,\}" \
         "$(dirname "$0")/../.env.local" 2>/dev/null | head -1)
 TOK=$(security find-generic-password -s "Supabase CLI" -w 2>/dev/null)

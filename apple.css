@@ -155,3 +155,79 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   .header, .tabbar, .sheet, .card { border: 1px solid var(--testo, #1d1d1f); background: var(--card, var(--bg, #fff)); -webkit-backdrop-filter: none; backdrop-filter: none; }
   :focus-visible { outline-width: 3px; }
 }
+
+/* ---------- 6. movimento: le liste si muovono, non saltano ----------
+ *
+ * Il "livello 2" delle anteprime: quello che si ottiene con curve e durate,
+ * senza librerie. Tutto OPT-IN per classe `ap-`: senza le classi questo
+ * blocco e' inerte, quindi si puo' propagare a tutte le app e accenderlo
+ * un'app alla volta.
+ *
+ * COSA RISOLVE
+ * Una riga che cambia stato e si riordina sparisce e ricompare altrove:
+ * chi guarda deve ricostruire con la testa cosa e' successo. Se invece
+ * scivola nella nuova posizione, l'informazione arriva senza pensarci.
+ *
+ * REGOLA CHE NON SI TOCCA
+ * Nessuna animazione di comparsa puo' nascondere un dato. Le entrate
+ * partono da opacita' zero solo dentro `.ap-cascata`, che ha sempre uno
+ * stato finale garantito: se i fotogrammi si fermano (scheda in secondo
+ * piano, batteria bassa) l'elemento resta visibile lo stesso.
+ */
+
+:root {
+  /* molla criticamente smorzata con un filo di rimbalzo: entra decisa e si posa */
+  --ap-molla-fluida: linear(0,.006 1.1%,.0239 2.2%,.0956 4.6%,.2131 7.1%,.3728 9.8%,
+    .5687 12.8%,.7942 16.2%,1.0413 20.1%,1.0705 20.9%,1.0898 21.8%,1.0997 22.7%,
+    1.1004 23.7%,1.0922 24.9%,1.0755 26.2%,1.0507 27.7%,1.0185 29.5%,.9794 31.6%,
+    .9341 34.2%,.9071 36%,.8995 37.1%,.8998 38.3%,.9078 39.6%,.9234 41.1%,
+    .9464 42.8%,.9766 44.8%,1.0138 47.2%,1.0242 48%,1.0327 48.9%,1.0393 49.9%,
+    1.0439 51%,1.0463 52.3%,1.0462 53.9%,1.0426 56%,1.0346 58.6%,1.0213 62.2%,
+    1.0026 67.5%,.9986 69.2%,.9962 71.4%,.9957 74.3%,.9973 78.6%,1.0011 87.4%,1);
+  --ap-uscita: cubic-bezier(.32,.72,0,1);   /* la curva dei fogli iOS */
+  --ap-durata: 450ms;
+  --ap-passo: 55ms;                          /* distanza fra un elemento e il successivo */
+}
+
+/* Elementi che si spostano invece di saltare. Si mette sulle righe di una
+ * lista che puo' riordinarsi; il salto lo annulla `apMuovi()` in movimento.js. */
+.ap-fluido { transition: transform var(--ap-durata) var(--ap-molla-fluida), opacity 250ms ease; }
+.ap-fluido.ap-senza-transizione { transition: none; }
+
+/* Entrata a cascata dei figli diretti di un contenitore.
+ * `both` tiene lo stato finale: l'ultimo fotogramma e' opacita' 1, quindi
+ * un'animazione che non parte lascia comunque l'elemento leggibile. */
+.ap-cascata > * { animation: ap-entra var(--ap-durata) var(--ap-molla-fluida) both; }
+.ap-cascata > *:nth-child(1) { animation-delay: 0ms }
+.ap-cascata > *:nth-child(2) { animation-delay: calc(var(--ap-passo) * 1) }
+.ap-cascata > *:nth-child(3) { animation-delay: calc(var(--ap-passo) * 2) }
+.ap-cascata > *:nth-child(4) { animation-delay: calc(var(--ap-passo) * 3) }
+.ap-cascata > *:nth-child(5) { animation-delay: calc(var(--ap-passo) * 4) }
+.ap-cascata > *:nth-child(6) { animation-delay: calc(var(--ap-passo) * 5) }
+.ap-cascata > *:nth-child(7) { animation-delay: calc(var(--ap-passo) * 6) }
+.ap-cascata > *:nth-child(8) { animation-delay: calc(var(--ap-passo) * 7) }
+/* oltre l'ottavo non si scaglionna piu': sotto il pollice non si vede,
+ * e una lista di trecento righe con trecento ritardi diventa una tortura */
+.ap-cascata > *:nth-child(n+9) { animation-delay: calc(var(--ap-passo) * 8) }
+
+/* Un elemento appena arrivato in una lista gia' visibile. */
+.ap-arriva { animation: ap-entra var(--ap-durata) var(--ap-molla-fluida) both; }
+
+@keyframes ap-entra {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Il foglio che sale dal basso e il velo che lo accompagna.
+ * Opt-in perche' molte app hanno gia' le loro animazioni su .sheet. */
+.ap-sale  { animation: ap-sale var(--ap-durata) var(--ap-uscita) both; }
+.ap-velo  { animation: ap-velo 280ms var(--ap-uscita) both; }
+@keyframes ap-sale { from { transform: translateY(100%) } to { transform: none } }
+@keyframes ap-velo { from { opacity: 0 } to { opacity: 1 } }
+
+@media (prefers-reduced-motion: reduce) {
+  /* niente spostamenti: restano le dissolvenze, e i dati restano visibili */
+  .ap-fluido { transition: opacity 150ms ease; }
+  .ap-cascata > *, .ap-arriva, .ap-sale { animation: ap-dissolvi 180ms ease both; }
+  @keyframes ap-dissolvi { from { opacity: 0 } to { opacity: 1 } }
+}
