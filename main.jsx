@@ -2,6 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './styles.css';
+import { montaSegnala } from './lib/segnala.js'
+import { avviaTelemetria } from './lib/telemetria.js'
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -88,3 +90,13 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     </ErrorBoundary>
   </React.StrictMode>
 );
+
+
+// Bottone "Segnala un problema": chi usa l'app e' l'unico che vede
+// davvero cosa non va, e deve poterlo dire in dieci secondi.
+montaSegnala('magazzino')
+
+
+// Sensori d'uso per il consulente migliorie: registra schermate, click
+// ed errori, mai il contenuto. Vedi il commento in telemetria.js.
+avviaTelemetria('magazzino')
