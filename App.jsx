@@ -3605,6 +3605,25 @@ function RicercaSelect({
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Il codice resta in vista anche DOPO la scelta, non solo nella
+              tendina. Sul carico di produzione la sola descrizione non basta a
+              distinguere gli articoli: "Tonnarello 125 g" esiste in Pharma, in
+              Horeca e in Bis, e senza codice si carica il lotto sull'articolo
+              sbagliato. Vale anche per clienti e agenti, dove l'etichetta e' il
+              codice cliente e il codice agente, che comandano su ogni incrocio. */}
+          {scelto.etichetta ? (
+            <div
+              style={{
+                ...badgeStyle("outline"),
+                fontSize: 11,
+                padding: "3px 8px",
+                marginBottom: 4,
+                display: "inline-block",
+              }}
+            >
+              {scelto.etichetta}
+            </div>
+          ) : null}
           <div style={{ fontWeight: 850, color: "#07153a", fontSize: 14, overflowWrap: "anywhere" }}>
             {scelto.titolo}
           </div>
