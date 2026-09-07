@@ -35,6 +35,7 @@ export const CEDENTE = {
 // quelle fatture le ha gia' emesse lui.
 export const FATTURABILI_DAL = "2026-08-03";
 
+import { descrizioneStampata } from "./testo-riga.js";
 const UE = new Set(["AT","BE","BG","CY","CZ","DE","DK","EE","ES","FI","FR","GR",
   "HR","HU","IE","IT","LT","LU","LV","MT","NL","PL","PT","RO","SE","SI","SK"]);
 
@@ -229,7 +230,7 @@ export function xmlFattura(numero, dataDoc, ordine, a, righe) {
         .map((s) => `<ScontoMaggiorazione><Tipo>SC</Tipo><Percentuale>${q(s)}</Percentuale></ScontoMaggiorazione>`)
         .join("");
       return `<DettaglioLinee><NumeroLinea>${i + 1}</NumeroLinea>` +
-        `<Descrizione>${esc(String(r.descrizione_prodotto || "").trim().slice(0, 1000))}</Descrizione>` +
+        `<Descrizione>${esc(descrizioneStampata(r.descrizione_prodotto).slice(0, 1000))}</Descrizione>` +
         `<Quantita>${q(qta)}</Quantita><PrezzoUnitario>${q(pu, 4)}</PrezzoUnitario>${sconti}` +
         `<PrezzoTotale>${q(netto)}</PrezzoTotale><AliquotaIVA>${q(al)}</AliquotaIVA>` +
         (nat ? `<Natura>${nat}</Natura>` : "") + `</DettaglioLinee>`;

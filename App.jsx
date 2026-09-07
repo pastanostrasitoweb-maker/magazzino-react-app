@@ -10,6 +10,7 @@ import {
 } from "./src/supabase-adapter.js";
 import { PESI_PRODOTTI } from "./src/pesi-prodotti.js";
 import { selezionaFatture, xmlFattura, zipDiFile, nomeFile } from "./src/fatture.js";
+import { descrizioneAschermo, descrizioneStampata } from "./src/testo-riga.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
 import { CORRIERI } from "./src/logistica/data/corrieri.js";
 import {
@@ -4372,7 +4373,7 @@ function DettaglioSolaLettura({ order, assignments, lots }) {
               return (
                 <tr key={line.lineId} style={{ borderBottom: "1px solid #f1f5f9" }}>
                   <td style={{ padding: "7px 10px" }}>
-                    {line.productName}
+                    {descrizioneAschermo(line.productName, assegnati)}
                     {line.isOutsideStock ? (
                       <span style={{ marginLeft: 6, fontSize: 11, color: "#7c3aed" }}>fuori magazzino</span>
                     ) : null}
@@ -8543,7 +8544,9 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
         const umRiga = String(prod?.uom || "").trim().toUpperCase();
         const mostraPz = !espositore && pzCollo > 1 && umRiga !== "PZ";
         const pzStr = mostraPz ? ` · ${pzCollo} pz per ${umRiga || "CT"}` : "";
-        const descr = esc(line.productName || "") +
+        // Sul documento mai il marcatore "SU RICHIESTA": al cliente arriva la
+        // merce, non la storia di com'era il magazzino il giorno dell'ordine.
+        const descr = esc(descrizioneStampata(line.productName)) +
           (lottoStr ? ` — Lotto: ${esc(lottoStr)}${pzStr}` : pzStr) +
           // Sul DDT senza prezzi l'importo dell'abbuono va nella descrizione:
           // e' l'unico posto dove il cliente puo' leggerlo.
@@ -12441,7 +12444,7 @@ ${isConferma
                                     cartone bollinato e li' non si vede".)
                                     Il catalogo resta come rete: righe vecchie
                                     senza descrizione. */}
-                                {line.productName || product?.name || ""}
+                                {descrizioneAschermo(line.productName, lineAssignments.reduce((t, x) => t + Number(x.qty || 0), 0)) || product?.name || ""}
                               </div>
                             </div>
 
@@ -13236,7 +13239,7 @@ ${isConferma
                                           il cartone bollinato tornava a chiamarsi
                                           "Mezzi Paccheri 250g" e basta. Il codice
                                           articolo resta nella riga sotto. */}
-                                      {line.productName || product?.name || line.productId}
+                                      {descrizioneAschermo(line.productName, lineAssignments.reduce((t, x) => t + Number(x.qty || 0), 0)) || product?.name || line.productId}
                                     </div>
                                     <div style={{ marginTop: 3, color: "#66758b", fontSize: 12 }}>
                                       {isOutsideStockLine(line)
