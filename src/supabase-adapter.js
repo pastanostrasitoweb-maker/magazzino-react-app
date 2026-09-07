@@ -457,6 +457,11 @@ async function caricaNodoVivo() {
     Categoria: row.categoria ?? "",
     Sottocategoria: row.sottocategoria ?? "",
     Gestione_Lotti: boolToSiNo(row.gestione_lotti),
+    // CHI TIENE LA MERCE. Un codice commerciale (HORECA) puo' vendere il cartone
+    // di un altro articolo (NFARMA): stesso prodotto, listino diverso. Qui
+    // viaggia l'id dell'articolo che ha davvero il magazzino, cosi' l'app sa
+    // dove cercare i lotti e quale giacenza mostrare. Vuoto = ce l'ha lui.
+    Stock_Di: row.stock_di == null ? "" : String(row.stock_di),
     IVA_Pct: row.iva_pct ?? "",
     // Quanti pezzi ci sono dentro un cartone: va stampato in bolla accanto al
     // lotto, cosi' chi riceve conta senza aprire (Luca 04/09/2026).

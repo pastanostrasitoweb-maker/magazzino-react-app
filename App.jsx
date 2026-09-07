@@ -2382,6 +2382,10 @@ function normalizeProducts(rows) {
         ]) || `PROD-${index + 1}`
       ),
       code: String(getField(row, ["Codice_Prodotto", "Codice prodotto", "Codice", "code"])).trim(),
+      // L'articolo che tiene fisicamente la merce, quando non e' questo. Il
+      // codice HORECA vende il cartone del gemello NFARMA: stesso prodotto,
+      // listino diverso. Vuoto = il magazzino ce l'ha lui.
+      stockDi: String(getField(row, ["Stock_Di", "stock_di"]) || "").trim(),
       name: String(
         getField(row, ["Descrizione_Prodotto", "Descrizione prodotto", "Descrizione", "name"])
       ).trim(),
@@ -6218,9 +6222,28 @@ export default function App() {
       g.lots.push(row);
       g.totalLoaded += Number(row.loaded || 0);
     }
+    // 2-bis. I CODICI CHE NON HANNO MAGAZZINO PROPRIO vedono quello del gemello.
+    //    HORECA200 e NFARMA 007 sono lo stesso tonnarello: la merce sta su uno
+    //    solo, ma tutti e due devono mostrare la stessa quantita' e calare
+    //    insieme. Qui il gruppo del codice commerciale prende in prestito lotti
+    //    e impegnato del padrone, invece di dire zero con la cella piena.
+    //    (Luca 07/09/2026: "stessa quantita', scalati in ugual modo, ma codici
+    //    separati perche' sono due listini".)
+    for (const p of products) {
+      if (!p.stockDi) continue;
+      const suo = groups.get(String(p.id));
+      const padrone = groups.get(String(p.stockDi));
+      if (!suo || !padrone) continue;
+      suo.lots = padrone.lots;
+      suo.totalLoaded = padrone.totalLoaded;
+      suo.magazzinoDi = padrone.productCode || String(p.stockDi);
+    }
     // 3. Ricalcolo totalCommitted e totalAvailable usando productCommittedMap.
     const out = [...groups.values()].map((g) => {
-      const productCommitted = Number(productCommittedMap[String(g.productId)] || 0);
+      const idStock = String(
+        (products.find((p) => String(p.id) === String(g.productId)) || {}).stockDi || g.productId
+      );
+      const productCommitted = Number(productCommittedMap[idStock] || 0);
       return {
         ...g,
         totalCommitted: productCommitted,
@@ -6905,6 +6928,16 @@ export default function App() {
     }));
   };
 
+  // DOVE STA LA MERCE DI QUESTO CODICE. Il tonnarello e' un prodotto solo: che
+  // esca per una farmacia o per un ristorante cambia il prezzo, non il cartone.
+  // I codici commerciali (HORECA) non hanno magazzino proprio, si servono da
+  // quello del gemello, e cosi' i due vedono la stessa quantita' e scalano
+  // insieme senza doverli allineare a mano. (Luca 07/09/2026.)
+  const prodottoDelMagazzino = useCallback((productId) => {
+    const p = products.find((x) => String(x.id) === String(productId));
+    return p && p.stockDi ? String(p.stockDi) : String(productId ?? "");
+  }, [products]);
+
   const getAvailableLotsForLine = (line) => {
     if (!line) return [];
 
@@ -6923,9 +6956,10 @@ export default function App() {
 
     // Stesso criterio della vista dettaglio: lotti con giacenza fisica > 0,
     // anche se la disponibilita' calcolata e' 0 (impegnata altrove).
+    const magazzino = prodottoDelMagazzino(line.productId);
     const delloStessoProdotto = activeLots.filter(
       (lot) =>
-        String(lot.productId) === String(line.productId) &&
+        String(lot.productId) === magazzino &&
         (lotAssignedMap[String(lot.id)]?.total || 0) > 0
     );
     const perScadenza = (a, b) => new Date(a.expiry) - new Date(b.expiry);
