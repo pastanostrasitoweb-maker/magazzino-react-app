@@ -4736,7 +4736,6 @@ export default function App() {
   const [loginUsers, setLoginUsers] = useState([]);
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [loginRemember, setLoginRemember] = useState(true);
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
@@ -7965,16 +7964,23 @@ export default function App() {
         return;
       }
       const session = { username: user.username, etichetta: user.etichetta || user.username };
+      // SI RESTA COLLEGATI, E BASTA. (Luca 08/09/2026: "hanno fatto aggiorna
+      // dentro magazzino ed e' uscito, non deve piu' succedere e deve rimanere
+      // loggato".) Prima la sessione poteva finire in sessionStorage, che muore
+      // quando la scheda si chiude: bastava che qualcuno togliesse la spunta,
+      // o che il tablet riaprisse l'app, e il reparto si ritrovava fuori senza
+      // capire perche'. Ora la sessione sta sempre dove sopravvive a un
+      // aggiornamento e alla chiusura: si esce solo premendo Esci.
       try {
         const raw = JSON.stringify(session);
-        if (loginRemember) {
-          localStorage.setItem("magazzino_auth", raw);
-          sessionStorage.removeItem("magazzino_auth");
-        } else {
-          sessionStorage.setItem("magazzino_auth", raw);
-          localStorage.removeItem("magazzino_auth");
-        }
-      } catch {}
+        localStorage.setItem("magazzino_auth", raw);
+        sessionStorage.removeItem("magazzino_auth");
+      } catch {
+        // Se il dispositivo non lascia scrivere (navigazione privata, spazio
+        // finito) si ripiega sulla memoria della scheda: meglio restare dentro
+        // finche' la scheda e' aperta che essere buttati fuori subito.
+        try { sessionStorage.setItem("magazzino_auth", JSON.stringify(session)); } catch {}
+      }
       setAuthUser(session);
       // Da qui in avanti ogni scrittura porta con se' chi l'ha fatta: lo
       // storico degli stati smette di dire "non registrato".
@@ -11332,15 +11338,13 @@ ${isConferma
             </div>
           ) : null}
 
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "#40516a", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={loginRemember}
-              onChange={(e) => setLoginRemember(e.target.checked)}
-              style={{ width: 18, height: 18 }}
-            />
-            Rimani collegato su questo dispositivo
-          </label>
+          {/* La casella "Rimani collegato" non c'e' piu': si resta collegati
+              sempre, e si esce solo con Esci. Era un'opzione che nessuno doveva
+              togliere e che, tolta, buttava fuori il reparto al primo
+              aggiornamento. */}
+          <div style={{ fontSize: 13, color: "#66758b" }}>
+            Resti collegato su questo dispositivo finche' non premi <b>Esci</b>.
+          </div>
 
           <button type="submit" style={btnStyle("primary", loggingIn)} disabled={loggingIn}>
             <Lock size={16} /> {loggingIn ? "Accesso..." : "Entra"}
