@@ -1915,11 +1915,16 @@ async function salvaFotoBolla(params) {
   // lo agganciamo direttamente cosi' l'app acquisti lo trova gia' associato.
   if (p.ordineId) row.ordine_id = String(p.ordineId);
   if (p.fornitoreId) row.fornitore_id = String(p.fornitoreId);
-  const { data, error } = await supabase
-    .from("acq_ricevimenti_foto")
-    .insert(row)
-    .select("id")
-    .maybeSingle();
+  // B2: i controlli fatti davanti alla merce. La colonna `controlli` arriva
+  // con la 29_flusso_ricevimento.sql dell'app acquisti: finche' non c'e', la
+  // foto si salva lo stesso e si dice che i controlli non sono stati registrati.
+  if (p.controlli && typeof p.controlli === "object") row.controlli = p.controlli;
+  let { data, error } = await supabase.from("acq_ricevimenti_foto").insert(row).select("id").maybeSingle();
+  if (error && row.controlli && /controlli/i.test(String(error.message || ""))) {
+    const { controlli, ...senza } = row;
+    ({ data, error } = await supabase.from("acq_ricevimenti_foto").insert(senza).select("id").maybeSingle());
+    if (!error) return { success: true, id: data?.id ?? null, avviso: "Foto salvata, ma i controlli non sono stati registrati: manca la colonna sul database." };
+  }
   if (error) return failure(error);
   return { success: true, id: data?.id ?? null };
 }
@@ -2035,21 +2040,39 @@ async function inviaChatMessaggio(params) {
 // Storico ordini (archiviati) caricato A RICHIESTA dalla pagina Archivio: gli
 // ultimi N per data, con righe/assegnazioni/anagrafiche. Cosi' il caricamento
 // iniziale resta snello e l'archivio non pesa finche' non lo si apre.
+// L'ARCHIVIO IN UNA CHIAMATA SOLA (10/09/2026).
+//
+// Prima erano decine di richieste in fila: gli ordini, poi le righe a blocchi,
+// poi le assegnazioni a blocchi. Su Supabase costavano ~0,3 s l'una e non si
+// notava; dal trasloco su Cloudflare ogni chiamata al container costa **due
+// secondi**, e l'archivio non finiva piu' di caricare (Luca, 10/09: "non vedo
+// l'archivio"). PostgREST sa annidare le tabelle collegate: chiedendo
+// `ordini?select=*,righe_ordine(*,assegnazioni_lotti(*))` arriva tutto insieme.
+// Misurato: 300 ordini, 1.575 righe e 1.574 assegnazioni in **6 secondi**.
 async function getOrdiniArchiviati(params) {
   const p = parsePayload(params);
   const limit = Math.min(Math.max(Number(p.limit || 300), 1), 1000);
   try {
     const { data: ord, error } = await supabase
       .from("ordini")
-      .select("*")
+      .select("*,righe_ordine(*,assegnazioni_lotti(*))")
       .eq("archiviato", true)
       .order("data_preparato", { ascending: false, nullsFirst: false })
       .limit(limit);
     if (error) return failure(error);
     const ids = (ord || []).map((o) => String(o.id_ordine)).filter(Boolean);
-    const righeRows = ids.length ? await selectIn("righe_ordine", "id_ordine", ids) : [];
-    const rigaIds = righeRows.map((r) => String(r.id_riga)).filter(Boolean);
-    const assegRows = rigaIds.length ? await selectIn("assegnazioni_lotti", "id_riga", rigaIds) : [];
+    // Si riportano in piano: il resto dell'app si aspetta tre liste separate,
+    // come quando arrivavano da tre chiamate.
+    const righeRows = [];
+    const assegRows = [];
+    for (const o of ord || []) {
+      for (const r of o.righe_ordine || []) {
+        for (const a of r.assegnazioni_lotti || []) assegRows.push(a);
+        const { assegnazioni_lotti, ...riga } = r;
+        righeRows.push(riga.id_ordine ? riga : { ...riga, id_ordine: o.id_ordine });
+      }
+      delete o.righe_ordine;
+    }
     const anagraficheApp = await anagrafichePerOrdini(ids);
     return {
       success: true,
@@ -3686,6 +3709,34 @@ export async function callSheetsApi(params = {}) {
         if (error) return failure(error);
         const r = Array.isArray(data) ? data[0] : data;
         return { success: true, ...r };
+      }
+      // IL PREZZO DELL'ULTIMO DOCUMENTO (10/09/2026, regola di Luca dal caso
+      // F&G Carni). Tutto il listino personale del cliente in UNA chiamata:
+      // sul gateway ogni chiamata costa, e chiederlo riga per riga
+      // significherebbe far aspettare chi carica l'ordine.
+      case "prezziGiaFatti": {
+        const pf = parsePayload(params);
+        const codice = String(pf.codiceCliente || pf.codice_cliente || pf.clientId || "").trim();
+        if (!codice) return { success: true, prezzi: [] };
+        const { data, error } = await supabase.rpc("prezzi_gia_fatti", { p_codice_cliente: codice });
+        // Se lo storico non risponde l'ordine si carica lo stesso: si perde il
+        // suggerimento, non il lavoro.
+        if (error) return { success: true, prezzi: [], avviso: error.message };
+        return {
+          success: true,
+          prezzi: (data || []).map((r) => ({
+            productId: String(r.id_prodotto),
+            productCode: r.codice_prodotto || "",
+            prezzo: Number(r.prezzo),
+            scontoPct: Number(r.sconto1_pct || 0),
+            sconto2Pct: Number(r.sconto2_pct || 0),
+            sconto3Pct: Number(r.sconto3_pct || 0),
+            netto: Number(r.netto_unitario || 0),
+            fonte: r.fonte || "",
+            documento: r.documento || "",
+            quando: r.quando || null,
+          })),
+        };
       }
       case "getDatiVivi":
         // Il nodo vivo da solo: ordini attivi, lotti, prodotti, assegnazioni.

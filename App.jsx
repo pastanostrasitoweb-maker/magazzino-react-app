@@ -4756,6 +4756,7 @@ export default function App() {
 
   const [orderDialogOpen, setOrderDialogOpen] = useState(false);
   const [addLineDialogOpen, setAddLineDialogOpen] = useState(false);
+  const [caricoPrezziFatti, setCaricoPrezziFatti] = useState(false);
   const [editLineDialogOpen, setEditLineDialogOpen] = useState(false);
   const [productDialogOpen, setProductDialogOpen] = useState(false);
   const [lotDialogOpen, setLotDialogOpen] = useState(false);
@@ -5524,6 +5525,12 @@ export default function App() {
   const [newLineQty, setNewLineQty] = useState("");
   // Prezzo e sconto proposti dallo storico del cliente, sempre correggibili.
   const [newLinePrezzo, setNewLinePrezzo] = useState("");
+  // IL PREZZO DELL'ULTIMO DOCUMENTO (10/09/2026, regola di Luca dal caso F&G
+  // Carni: "nel documento di agosto aveva 24 euro al cartone e al riordino non
+  // gliel'ha proposto"). Si carica una volta sola all'apertura della maschera,
+  // per CODICE cliente, e si tiene per id prodotto.
+  const [prezziGiaFatti, setPrezziGiaFatti] = useState({});
+
   const [newLineSconto, setNewLineSconto] = useState("");
   const [savingNewLine, setSavingNewLine] = useState(false);
 
@@ -5563,6 +5570,12 @@ export default function App() {
   // Ordini fornitore in arrivo (da Acquisti) per abbinare la foto della bolla.
   const [ordiniArrivo, setOrdiniArrivo] = useState([]);
   const [fotoOrdineId, setFotoOrdineId] = useState("");
+  // B2: i controlli all'accettazione si fanno QUI, subito dopo la foto, e
+  // viaggiano con la foto nella coda dell'app acquisti. Niente preselezionato.
+  const [bollaControlli, setBollaControlli] = useState({
+    quantita_ok: null, prezzo_ok: null, temperatura_c: "", temperatura_ok: null, imballo_ok: null, certificato_sg: null,
+  });
+  const setControllo = (k, v) => setBollaControlli((c) => ({ ...c, [k]: v }));
   // Storico ordini caricato a richiesta (la vista principale carica solo l'attivo).
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [loadingArchive, setLoadingArchive] = useState(false);
@@ -6586,6 +6599,52 @@ export default function App() {
   const selectedLine =
     selectedOrder?.lines.find((line) => String(line.lineId) === String(selectedLineId)) ||
     selectedOrder?.lines[0];
+
+  // ATTENZIONE ALLA POSIZIONE: questo effetto legge `selectedOrder`, quindi deve
+  // stare SOTTO la sua definizione. Messo piu' in alto la lista delle dipendenze
+  // lo tocca prima che esista e l'app si spegne per tutti con "Cannot access
+  // before initialization" (fatto e disfatto il 10/09/2026, stessa trappola gia'
+  // scritta nel catalogo dell'app agenti).
+  // Si chiede quando si apre "Aggiungi riga": una chiamata sola per cliente,
+  // e se non risponde si va avanti senza suggerimento (l'ordine non si blocca
+  // per un prezzo proposto).
+  useEffect(() => {
+    if (!addLineDialogOpen) return;
+    const cod = String(selectedOrder?.clientId || "").trim();
+    if (!cod) { setPrezziGiaFatti({}); return; }
+    let vivo = true;
+    setCaricoPrezziFatti(true);
+    (async () => {
+      try {
+        const res = await callSheetsApi({
+          action: "prezziGiaFatti",
+          payload: JSON.stringify({ codiceCliente: cod }),
+        });
+        if (!vivo) return;
+        const mappa = {};
+        for (const p of (res && res.prezzi) || []) mappa[String(p.productId)] = p;
+        setPrezziGiaFatti(mappa);
+      } catch (e) {
+        if (vivo) setPrezziGiaFatti({});
+      } finally {
+        if (vivo) setCaricoPrezziFatti(false);
+      }
+    })();
+    return () => { vivo = false; };
+  }, [addLineDialogOpen, selectedOrder?.clientId]);
+
+  // Scelto l'articolo, il prezzo dell'ultima volta si scrive da solo nei campi.
+  // Non e' un blocco: chi carica lo puo' cambiare, ma parte da quello che il
+  // cliente ha gia' pagato invece che dal vuoto.
+  const prezzoFattoDi = (productId) => prezziGiaFatti[String(productId || "")] || null;
+
+  useEffect(() => {
+    if (!addLineDialogOpen || !newLineProductId) return;
+    const g = prezzoFattoDi(newLineProductId);
+    if (!g) return;
+    setNewLinePrezzo((prec) => (String(prec).trim() === "" ? String(g.prezzo) : prec));
+    setNewLineSconto((prec) => (String(prec).trim() === "" && g.scontoPct ? String(g.scontoPct) : prec));
+  }, [addLineDialogOpen, newLineProductId, prezziGiaFatti]);
 
   const selectedLotProduct = products.find(
     (product) => String(product.id) === String(newLotProductId)
@@ -10057,6 +10116,10 @@ ${isConferma
           operatore: authUser?.etichetta || authUser?.username || "magazzino",
           ordineId: ordineSel ? ordineSel.id : "",
           fornitoreId: ordineSel ? ordineSel.fornitoreId : "",
+          controlli: {
+            ...bollaControlli,
+            temperatura_c: bollaControlli.temperatura_c === "" ? null : Number(bollaControlli.temperatura_c),
+          },
         }),
       });
       if (res && res.success) {
@@ -10065,6 +10128,7 @@ ${isConferma
           ...prev,
         ]);
         setBollaPreview("");
+        setBollaControlli({ quantita_ok: null, prezzo_ok: null, temperatura_c: "", temperatura_ok: null, imballo_ok: null, certificato_sg: null });
         setBollaCaption("");
         setFotoOrdineId("");
       } else {
@@ -13754,6 +13818,36 @@ ${isConferma
                 </div>
               ) : null}
 
+              <div style={{ ...cardStyle({}), padding: 12, display: "grid", gap: 10 }}>
+                <div style={{ fontWeight: 900 }}>Controlli all'arrivo</div>
+                <div style={{ fontSize: 13, color: "#555" }}>Si compilano adesso, davanti alla merce. Vanno all'ufficio acquisti insieme alla foto.</div>
+                <div>La quantità è quella ordinata?</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button type="button" style={btnStyle(bollaControlli.quantita_ok === true ? "primary" : "outline")} onClick={() => setControllo("quantita_ok", true)}>Sì</button>
+                  <button type="button" style={btnStyle(bollaControlli.quantita_ok === false ? "primary" : "outline")} onClick={() => setControllo("quantita_ok", false)}>No</button>
+                </div>
+                <div>Il prezzo in bolla è quello ordinato? (se la bolla ha i prezzi)</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button type="button" style={btnStyle(bollaControlli.prezzo_ok === true ? "primary" : "outline")} onClick={() => setControllo("prezzo_ok", true)}>Sì</button>
+                  <button type="button" style={btnStyle(bollaControlli.prezzo_ok === false ? "primary" : "outline")} onClick={() => setControllo("prezzo_ok", false)}>No</button>
+                </div>
+                <div>Temperatura all'arrivo (°C)</div>
+                <input type="number" step="0.1" inputMode="decimal" value={bollaControlli.temperatura_c} onChange={(e) => setControllo("temperatura_c", e.target.value)} placeholder="es. 3.5" style={{ padding: 8 }} />
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button type="button" style={btnStyle(bollaControlli.temperatura_ok === true ? "primary" : "outline")} onClick={() => setControllo("temperatura_ok", true)}>In range</button>
+                  <button type="button" style={btnStyle(bollaControlli.temperatura_ok === false ? "primary" : "outline")} onClick={() => setControllo("temperatura_ok", false)}>Fuori range</button>
+                </div>
+                <div>Imballo integro?</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button type="button" style={btnStyle(bollaControlli.imballo_ok === true ? "primary" : "outline")} onClick={() => setControllo("imballo_ok", true)}>Sì</button>
+                  <button type="button" style={btnStyle(bollaControlli.imballo_ok === false ? "primary" : "outline")} onClick={() => setControllo("imballo_ok", false)}>No</button>
+                </div>
+                <div>Certificato senza glutine presente e valutato?</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button type="button" style={btnStyle(bollaControlli.certificato_sg === true ? "primary" : "outline")} onClick={() => setControllo("certificato_sg", true)}>Sì, valutato</button>
+                  <button type="button" style={btnStyle(bollaControlli.certificato_sg === false ? "primary" : "outline")} onClick={() => setControllo("certificato_sg", false)}>No / mancante</button>
+                </div>
+              </div>
               <button
                 style={btnStyle("success", savingBolla)}
                 disabled={savingBolla || !bollaPreview}
@@ -16511,6 +16605,39 @@ ${isConferma
                   onChange={(event) => setNewLinePrezzo(event.target.value)}
                   placeholder="—"
                 />
+                {/* DA DOVE VIENE IL PREZZO. Un numero che compare da solo, se
+                    non dice da dove arriva, non lo usa nessuno. */}
+                {(() => {
+                  const g = prezzoFattoDi(newLineProductId);
+                  if (!g) return caricoPrezziFatti && newLineProductId ? (
+                    <div style={{ marginTop: 6, fontSize: 12, color: "#66758b" }}>Cerco l'ultimo prezzo…</div>
+                  ) : null;
+                  const diverso = String(newLinePrezzo).trim() !== "" &&
+                    Math.abs(Number(newLinePrezzo) - Number(g.prezzo)) > 0.005;
+                  return (
+                    <div style={{
+                      marginTop: 6, padding: "7px 9px", borderRadius: 9, fontSize: 12.5, lineHeight: 1.45,
+                      background: diverso ? "#fffbeb" : "#ecfdf5",
+                      border: `1px solid ${diverso ? "#fcd34d" : "#6ee7b7"}`,
+                      color: diverso ? "#78350f" : "#065f46",
+                    }}>
+                      Ultima volta a questo cliente: <b>{fmtEur(g.prezzo)} €</b>
+                      {g.scontoPct ? <> meno <b>{g.scontoPct}%</b> (netto {fmtEur(g.netto)} €)</> : null}
+                      <span style={{ opacity: 0.85 }}> · {g.documento}</span>
+                      {diverso ? (
+                        <>
+                          {" "}<b>Stai scrivendo un prezzo diverso.</b>
+                          {" "}
+                          <button
+                            type="button"
+                            onClick={() => { setNewLinePrezzo(String(g.prezzo)); setNewLineSconto(g.scontoPct ? String(g.scontoPct) : ""); }}
+                            style={{ background: "none", border: "none", padding: 0, color: "#0b63d6", fontWeight: 800, cursor: "pointer", fontSize: 12.5 }}
+                          >rimetti quello di prima</button>
+                        </>
+                      ) : null}
+                    </div>
+                  );
+                })()}
               </div>
               <div>
                 <label style={labelStyle()}>Sconto %</label>
