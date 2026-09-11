@@ -1889,20 +1889,15 @@ async function uploadDocumento(params) {
 // coda condivisa dell'APP ACQUISTI (acq_ricevimenti_foto, stesso Supabase): con
 // stato 'Da analizzare' entra nella pipeline esistente (la routine la analizza e
 // la propone all'ufficio, come le foto del bot Telegram). RLS off su quella tabella.
-// La foto va su Storage (bucket documenti/bolle); in foto_locale finisce l'URL,
-// non piu' il base64. Se il bucket non c'e' ancora, fallback al base64 nel DB.
+// La foto sta nel record (data URL), consegnata alla funzione del database.
 async function salvaFotoBolla(params) {
   const p = parsePayload(params);
   if (!p.foto) return failure("foto mancante");
-  let fotoField = String(p.foto);
-  try {
-    const now = new Date();
-    const giorno = now.toISOString().slice(0, 10);
-    const nome = `${now.getTime()}-${Math.floor(Math.random() * 1e6)}.jpg`;
-    fotoField = "storage:documenti/" + (await caricaSuStorage(`bolle/${giorno}/${nome}`, String(p.foto)));
-  } catch (_) {
-    fotoField = String(p.foto); // bucket non pronto: resta il base64 (retrocompatibile)
-  }
+  // La foto (data URL ridotta, <= 400 KB) viaggia DENTRO acq_deposita_foto_bolla:
+  // e' l'unica porta, e controlla codice del dispositivo, formato, dimensione
+  // e ritmo. Niente upload diretto sul bucket: la chiave anon e' pubblica e
+  // un upload libero non passerebbe dal codice del dispositivo (11/09/2026).
+  const fotoField = String(p.foto);
   const row = {
     canale: "magazzino",
     mittente: p.operatore || "magazzino",
