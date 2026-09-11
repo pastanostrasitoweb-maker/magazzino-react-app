@@ -1925,7 +1925,7 @@ async function salvaFotoBolla(params) {
     const r = await supabase.rpc("acq_deposita_foto_bolla", {
       // il token del dispositivo (VITE_MAGAZZINO_TOKEN): revocabile, separato
       // dalla chiave anon; senza, la funzione rifiuta la foto
-      p: { token: import.meta.env.VITE_MAGAZZINO_TOKEN || "", foto: fotoField, caption: row.caption, operatore: row.mittente, ordineId: row.ordine_id || "", fornitoreId: row.fornitore_id || "", controlli: row.controlli || null },
+      p: { token: tokenDispositivo(), foto: fotoField, caption: row.caption, operatore: row.mittente, ordineId: row.ordine_id || "", fornitoreId: row.fornitore_id || "", controlli: row.controlli || null },
     });
     if (!r.error) return { success: true, id: r.data ?? null };
     if (!/acq_deposita_foto_bolla|function/i.test(String(r.error.message || ""))) return failure(r.error);
@@ -1944,6 +1944,15 @@ async function salvaFotoBolla(params) {
 // Ordini fornitore IN ARRIVO (caricati dall'app acquisti): quelli aperti non
 // ancora ricevuti. Servono al magazzino per abbinare la foto della bolla
 // selezionando l'ordine giusto. Best-effort (RLS off sulle tabelle acq_).
+// Il codice del dispositivo: si digita UNA volta su questo tablet (pagina
+// Foto bolle) e resta qui, non nel bundle pubblico. Si revoca dal database.
+export function tokenDispositivo() {
+  try { return localStorage.getItem("magazzino.dispositivo") || ""; } catch (_) { return ""; }
+}
+export function impostaTokenDispositivo(t) {
+  try { localStorage.setItem("magazzino.dispositivo", String(t || "").trim()); } catch (_) {}
+}
+
 async function getOrdiniAcquistiInArrivo() {
   try {
     // La vista acq_v_ordini_in_arrivo porta gia' nome fornitore e descrizioni,
@@ -1954,7 +1963,7 @@ async function getOrdiniAcquistiInArrivo() {
     {
       // la funzione vuole il token del dispositivo: con la sola chiave
       // pubblica non si legge niente
-      const r = await supabase.rpc("acq_ordini_in_arrivo", { p_token: import.meta.env.VITE_MAGAZZINO_TOKEN || "" });
+      const r = await supabase.rpc("acq_ordini_in_arrivo", { p_token: tokenDispositivo() });
       if (!r.error) { ordini = r.data; dallaVista = true; }
     }
     if (!dallaVista) {
@@ -3704,6 +3713,11 @@ export async function callSheetsApi(params = {}) {
       }
       case "salvaFotoBolla":
         return await salvaFotoBolla(params);
+      case "tokenDispositivo":
+        return { success: true, token: tokenDispositivo() };
+      case "impostaTokenDispositivo":
+        impostaTokenDispositivo(parsePayload(params).token);
+        return { success: true };
       case "uploadDocumento":
         return await uploadDocumento(params);
       case "getOrdiniAcquistiInArrivo":

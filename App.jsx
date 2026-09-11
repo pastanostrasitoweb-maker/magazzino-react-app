@@ -5572,6 +5572,10 @@ export default function App() {
   const [fotoOrdineId, setFotoOrdineId] = useState("");
   // B2: i controlli all'accettazione si fanno QUI, subito dopo la foto, e
   // viaggiano con la foto nella coda dell'app acquisti. Niente preselezionato.
+  // Codice del dispositivo per parlare con l'app acquisti: si scrive una
+  // volta, resta su questo tablet, non sta nel bundle.
+  const [codiceDispositivo, setCodiceDispositivo] = useState(() => { try { return localStorage.getItem("magazzino.dispositivo") || ""; } catch (_) { return ""; } });
+  const salvaCodiceDispositivo = (t) => { setCodiceDispositivo(t); try { localStorage.setItem("magazzino.dispositivo", String(t || "").trim()); } catch (_) {} };
   const [bollaControlli, setBollaControlli] = useState({
     quantita_ok: null, prezzo_ok: null, temperatura_c: "", temperatura_ok: null, imballo_ok: null, certificato_sg: null,
   });
@@ -13818,6 +13822,13 @@ ${isConferma
                 </div>
               ) : null}
 
+              {!codiceDispositivo && (
+                <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 12, border: "1px solid #fed7aa" }}>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Codice del dispositivo</div>
+                  <div style={{ fontSize: 13, color: "#7c2d12", marginBottom: 8 }}>Senza, questo tablet non legge gli ordini in arrivo e non manda le foto. Lo dà Luca, si scrive una volta sola.</div>
+                  <input type="password" placeholder="Incolla qui il codice" onChange={(e) => salvaCodiceDispositivo(e.target.value)} style={{ padding: 8, width: "100%" }} />
+                </div>
+              )}
               <div style={{ ...cardStyle({}), padding: 12, display: "grid", gap: 10 }}>
                 <div style={{ fontWeight: 900 }}>Controlli all'arrivo</div>
                 <div style={{ fontSize: 13, color: "#555" }}>Si compilano adesso, davanti alla merce. Vanno all'ufficio acquisti insieme alla foto.</div>
