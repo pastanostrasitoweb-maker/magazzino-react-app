@@ -1919,6 +1919,16 @@ async function salvaFotoBolla(params) {
   // con la 29_flusso_ricevimento.sql dell'app acquisti: finche' non c'e', la
   // foto si salva lo stesso e si dice che i controlli non sono stati registrati.
   if (p.controlli && typeof p.controlli === "object") row.controlli = p.controlli;
+  // La via giusta: la funzione acq_deposita_foto_bolla, che controlla
+  // dimensione, formato e ordine (anon non scrive piu' sulla tabella).
+  {
+    const r = await supabase.rpc("acq_deposita_foto_bolla", {
+      p: { foto: fotoField, caption: row.caption, operatore: row.mittente, ordineId: row.ordine_id || "", fornitoreId: row.fornitore_id || "", controlli: row.controlli || null },
+    });
+    if (!r.error) return { success: true, id: r.data ?? null };
+    if (!/acq_deposita_foto_bolla|function/i.test(String(r.error.message || ""))) return failure(r.error);
+    // funzione non ancora sul database: ripiego sull'insert diretto
+  }
   let { data, error } = await supabase.from("acq_ricevimenti_foto").insert(row).select("id").maybeSingle();
   if (error && row.controlli && /controlli/i.test(String(error.message || ""))) {
     const { controlli, ...senza } = row;
@@ -1934,14 +1944,29 @@ async function salvaFotoBolla(params) {
 // selezionando l'ordine giusto. Best-effort (RLS off sulle tabelle acq_).
 async function getOrdiniAcquistiInArrivo() {
   try {
-    const { data: ordini, error } = await supabase
-      .from("acq_ordini")
-      .select("id_ordine,fornitore_id,stato,data_ordine,consegna_attesa,righe")
-      .in("stato", ["Inviato", "Confermato", "In consegna"])
-      .order("consegna_attesa", { ascending: true });
+    // La vista acq_v_ordini_in_arrivo porta gia' nome fornitore e descrizioni,
+    // senza prezzi: e' l'unica cosa che il magazzino legge senza login.
+    // Finche' la migrazione dell'app acquisti non e' applicata, ripiego sulla
+    // tabella (che dopo la migrazione anon non legge piu').
+    let ordini = null; let error = null; let dallaVista = false;
+    {
+      const r = await supabase
+        .from("acq_v_ordini_in_arrivo")
+        .select("id_ordine,fornitore_id,fornitore_nome,stato,data_ordine,consegna_attesa,righe")
+        .order("consegna_attesa", { ascending: true });
+      if (!r.error) { ordini = r.data; dallaVista = true; }
+    }
+    if (!dallaVista) {
+      const r = await supabase
+        .from("acq_ordini")
+        .select("id_ordine,fornitore_id,stato,data_ordine,consegna_attesa,righe")
+        .in("stato", ["Inviato", "Confermato", "In consegna", "Ricevuto in parte"])
+        .order("consegna_attesa", { ascending: true });
+      ordini = r.data; error = r.error;
+    }
     if (error) return { success: false, error: error.message, ordini: [] };
-    const fornIds = [...new Set((ordini || []).map((o) => o.fornitore_id).filter(Boolean))];
-    let nomi = {};
+    const fornIds = dallaVista ? [] : [...new Set((ordini || []).map((o) => o.fornitore_id).filter(Boolean))];
+    let nomi = Object.fromEntries((ordini || []).filter((o) => o.fornitore_nome).map((o) => [String(o.fornitore_id), o.fornitore_nome]));
     if (fornIds.length) {
       const { data: forn } = await supabase
         .from("acq_fornitori")
@@ -1958,7 +1983,7 @@ async function getOrdiniAcquistiInArrivo() {
             .map((r) => r && r.articolo_id).filter(Boolean)
         ),
       ];
-      if (artIds.length) {
+      if (artIds.length && !dallaVista) {
         const { data: arts } = await supabase
           .from("acq_articoli")
           .select("id,nome,descrizione")
