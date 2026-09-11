@@ -1952,10 +1952,9 @@ async function getOrdiniAcquistiInArrivo() {
     // tabella (che dopo la migrazione anon non legge piu').
     let ordini = null; let error = null; let dallaVista = false;
     {
-      const r = await supabase
-        .from("acq_v_ordini_in_arrivo")
-        .select("id_ordine,fornitore_id,fornitore_nome,stato,data_ordine,consegna_attesa,righe")
-        .order("consegna_attesa", { ascending: true });
+      // la funzione vuole il token del dispositivo: con la sola chiave
+      // pubblica non si legge niente
+      const r = await supabase.rpc("acq_ordini_in_arrivo", { p_token: import.meta.env.VITE_MAGAZZINO_TOKEN || "" });
       if (!r.error) { ordini = r.data; dallaVista = true; }
     }
     if (!dallaVista) {
