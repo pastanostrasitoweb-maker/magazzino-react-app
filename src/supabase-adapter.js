@@ -1863,14 +1863,11 @@ async function caricaSuStorage(path, dataUrl) {
       .upload(destinazione, blob, { contentType: blob.type || "application/octet-stream", upsert: false });
   }
   if (esito.error) throw esito.error;
-  // LINK FIRMATO A SCADENZA, non indirizzo pubblico eterno (02/09/2026): il
-  // bucket non e' piu' pubblico, quindi un indirizzo indovinato non apre
-  // niente. Un anno: abbastanza per l'uso normale, non per sempre.
-  const { data, error } = await supabase.storage
-    .from("documenti")
-    .createSignedUrl(destinazione, 60 * 60 * 24 * 365);
-  if (error) throw error;
-  return data?.signedUrl || "";
+  // Si restituisce il PERCORSO dell'oggetto, non un link: il database lo
+  // verifica in storage.objects (esiste, e' un'immagine, impronta dello
+  // storage) e chi deve vederlo chiede un link firmato a scadenza con la
+  // propria sessione. Un link nel record sarebbe un dato del client.
+  return destinazione;
 }
 
 // Azione generica: carica un documento su Storage e ritorna l'URL (per DDT,
@@ -1879,8 +1876,10 @@ async function uploadDocumento(params) {
   const p = parsePayload(params);
   if (!p.path || !p.dataUrl) return failure("path o file mancante");
   try {
-    const url = await caricaSuStorage(String(p.path), String(p.dataUrl));
-    return { success: true, url, path: String(p.path) };
+    const path = await caricaSuStorage(String(p.path), String(p.dataUrl));
+    const { data, error } = await supabase.storage.from("documenti").createSignedUrl(path, 60 * 60 * 24);
+    if (error) throw error;
+    return { success: true, url: data?.signedUrl || "", path };
   } catch (e) {
     return failure(e);
   }
@@ -1900,7 +1899,7 @@ async function salvaFotoBolla(params) {
     const now = new Date();
     const giorno = now.toISOString().slice(0, 10);
     const nome = `${now.getTime()}-${Math.floor(Math.random() * 1e6)}.jpg`;
-    fotoField = await caricaSuStorage(`bolle/${giorno}/${nome}`, String(p.foto));
+    fotoField = "storage:documenti/" + (await caricaSuStorage(`bolle/${giorno}/${nome}`, String(p.foto)));
   } catch (_) {
     fotoField = String(p.foto); // bucket non pronto: resta il base64 (retrocompatibile)
   }
@@ -1923,8 +1922,8 @@ async function salvaFotoBolla(params) {
   // dimensione, formato e ordine (anon non scrive piu' sulla tabella).
   {
     const r = await supabase.rpc("acq_deposita_foto_bolla", {
-      // il token del dispositivo (VITE_MAGAZZINO_TOKEN): revocabile, separato
-      // dalla chiave anon; senza, la funzione rifiuta la foto
+      // il codice del dispositivo digitato sul tablet (localStorage), mai nel
+      // bundle: revocabile, separato dalla chiave anon; senza, niente foto
       p: { token: tokenDispositivo(), foto: fotoField, caption: row.caption, operatore: row.mittente, ordineId: row.ordine_id || "", fornitoreId: row.fornitore_id || "", controlli: row.controlli || null },
     });
     if (!r.error) return { success: true, id: r.data ?? null };
