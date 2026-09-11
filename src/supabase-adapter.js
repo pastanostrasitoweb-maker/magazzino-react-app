@@ -1923,7 +1923,9 @@ async function salvaFotoBolla(params) {
   // dimensione, formato e ordine (anon non scrive piu' sulla tabella).
   {
     const r = await supabase.rpc("acq_deposita_foto_bolla", {
-      p: { foto: fotoField, caption: row.caption, operatore: row.mittente, ordineId: row.ordine_id || "", fornitoreId: row.fornitore_id || "", controlli: row.controlli || null },
+      // il token del dispositivo (VITE_MAGAZZINO_TOKEN): revocabile, separato
+      // dalla chiave anon; senza, la funzione rifiuta la foto
+      p: { token: import.meta.env.VITE_MAGAZZINO_TOKEN || "", foto: fotoField, caption: row.caption, operatore: row.mittente, ordineId: row.ordine_id || "", fornitoreId: row.fornitore_id || "", controlli: row.controlli || null },
     });
     if (!r.error) return { success: true, id: r.data ?? null };
     if (!/acq_deposita_foto_bolla|function/i.test(String(r.error.message || ""))) return failure(r.error);
