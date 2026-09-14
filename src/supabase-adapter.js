@@ -1555,6 +1555,10 @@ async function createOrder(params) {
       ...(p.id_destinazione || p.idDestinazione
         ? { id_destinazione: String(p.id_destinazione || p.idDestinazione) }
         : {}),
+      // DA QUALE ORDINE APP E' NATO. Sotto c'e' un indice unico: al secondo
+      // import dello stesso ordine agente il database rifiuta la riga, e il
+      // doppione non nasce proprio (14/09/2026).
+      ...(p.idOrdineApp ? { id_ordine_app: String(p.idOrdineApp) } : {}),
       ...(p.agenteId ? { agente_id: String(p.agenteId) } : {}),
       ...(p.agenteNome ? { agente_nome: String(p.agenteNome) } : {}),
       ...(p.listino ? { listino: String(p.listino) } : {}),
@@ -3272,7 +3276,39 @@ async function spostaOrdineInOrdini(params) {
   const g = await supabase.from("ordini_agenti").select("*").eq("id_ordine", String(idApp)).maybeSingle();
   if (g.error || !g.data) return { success: false, error: "ordine app non trovato" };
   const src = g.data;
-  if (src.stato === "Importato") return { success: false, error: "ordine già spostato" };
+
+  // LA PRENOTAZIONE VIENE PRIMA (14/09/2026).
+  // Qui c'era `if (src.stato === "Importato") return`: leggi-poi-scrivi. Fra
+  // quella lettura e la scrittura di "Importato", in fondo alla funzione,
+  // l'ordine magazzino era GIA' creato. Due copie del magazzino aperte, o un
+  // secondo tentativo dopo una conferma non andata a buon fine, passavano
+  // tutte e due il controllo: nascevano due ordini, il link si spostava sul
+  // secondo e il primo restava orfano, lavorato da qualcuno e poi da
+  // cancellare a mano. La mattina del 14/09 ne sono usciti tre in 55 secondi.
+  // Adesso si prenota per primi: e' il database ad assegnare la riga a uno
+  // solo, e chi arriva secondo riceve zero righe.
+  const presa = await supabase
+    .from("ordini_agenti")
+    .update({ stato: "Importato", importato_il: new Date().toISOString() })
+    .eq("id_ordine", String(idApp))
+    .neq("stato", "Importato")
+    .select("id_ordine");
+  if (presa.error) return { success: false, error: presa.error.message };
+  // Zero righe con la RLS puo' voler dire anche "scrittura vietata"; qui il
+  // ruolo scrive di sicuro (l'app importa tutto il giorno), quindi zero
+  // significa che l'ordine l'ha preso qualcun altro.
+  if (!presa.data || presa.data.length === 0) {
+    return { success: false, error: "ordine già spostato" };
+  }
+  // Se da qui in poi qualcosa va storto, la prenotazione si restituisce: se no
+  // l'ordine resta segnato "Importato" senza esistere in magazzino, e non lo
+  // importa piu' nessuno.
+  const restituisciPrenotazione = async () => {
+    await supabase
+      .from("ordini_agenti")
+      .update({ stato: src.stato || "Da controllare", importato_il: src.importato_il || null })
+      .eq("id_ordine", String(idApp));
+  };
 
   const cli = src.cliente || {};
   const nomeCliente = cli.ragione_sociale || src.cliente_id || "Cliente app";
@@ -3359,6 +3395,8 @@ async function spostaOrdineInOrdini(params) {
   const created = await createOrder({
     payload: JSON.stringify({
       id: idOrdine,
+      // Il filo verso l'ordine di partenza, protetto da indice unico.
+      idOrdineApp: String(idApp),
       customer: nomeCliente,
       clienteId: src.cliente_id || "",
       notes: noteParts.join(" · "),
@@ -3390,7 +3428,35 @@ async function spostaOrdineInOrdini(params) {
       lines,
     }),
   });
-  if (!created?.success) return { success: false, error: created?.error || "errore creazione ordine" };
+  if (!created?.success) {
+    const msg = String(created?.error || "");
+    // L'indice unico ha detto no: l'ordine magazzino per questo ordine app
+    // esiste gia'. Non e' un errore da riprovare e la prenotazione NON si
+    // restituisce, se no si riapre la porta al doppione.
+    if (/ordini_id_ordine_app_unico|duplicate key|23505/i.test(msg)) {
+      // E GIA' CHE CI SIAMO, SI RICUCE IL FILO.
+      // Questo caso vuol dire che l'ordine magazzino c'e' ma l'app agenti non
+      // sa quale sia: e' la forma dei nove orfani trovati il 14/09, nati
+      // quando la conferma finale non passava. L'ordine si ritrova per
+      // id_ordine_app e il riferimento si riscrive, invece di lasciare l'app
+      // agenti a dire "Importato" senza saper dire dove.
+      const esistente = await supabase
+        .from("ordini")
+        .select("id_ordine")
+        .eq("id_ordine_app", String(idApp))
+        .maybeSingle();
+      if (esistente.data && esistente.data.id_ordine) {
+        await supabase
+          .from("ordini_agenti")
+          .update({ id_ordine_magazzino: esistente.data.id_ordine })
+          .eq("id_ordine", String(idApp));
+        return { success: false, error: `ordine già spostato (${esistente.data.id_ordine})` };
+      }
+      return { success: false, error: "ordine già spostato" };
+    }
+    await restituisciPrenotazione();
+    return { success: false, error: created?.error || "errore creazione ordine" };
+  }
 
   // L'INDIRIZZO CONFERMATO DALL'AGENTE NON SI BUTTA (31/08/2026).
   // Per un cliente NUOVO le sedi in anagrafica non esistono ancora, quindi
@@ -3408,11 +3474,9 @@ async function spostaOrdineInOrdini(params) {
   // Flag "preso in gestione dal magazzino" verso l'app agenti: stato=Importato
   // (già letto dall'app agenti) + numero ordine magazzino + orario. Aggiungiamo
   // stato_magazzino='Preso in gestione' se la colonna c'e' (best-effort).
-  const base = {
-    stato: "Importato",
-    id_ordine_magazzino: idOrdine,
-    importato_il: new Date().toISOString(),
-  };
+  // Lo stato l'ha gia' scritto la prenotazione: qui si aggiunge solo il
+  // riferimento all'ordine magazzino appena creato.
+  const base = { id_ordine_magazzino: idOrdine };
   let upd = await supabase
     .from("ordini_agenti")
     .update({
@@ -3424,7 +3488,21 @@ async function spostaOrdineInOrdini(params) {
   if (upd.error) {
     upd = await supabase.from("ordini_agenti").update(base).eq("id_ordine", String(idApp));
   }
-  if (upd.error) return { success: false, error: upd.error.message };
+  if (upd.error) {
+    // L'ordine magazzino ESISTE: non si torna indietro e non si rifa'. Il
+    // legame e' comunque salvo, perche' l'ordine magazzino si porta dentro
+    // id_ordine_app. Qui si lascia la traccia e si dice com'e' andata.
+    await supabase
+      .from("ordini_agenti")
+      .update({ id_ordine_magazzino_perso: idOrdine, ponte_perso_il: new Date().toISOString() })
+      .eq("id_ordine", String(idApp));
+    return {
+      success: true,
+      idOrdine,
+      idApp: String(idApp),
+      avviso: `Ordine ${idOrdine} creato, ma la conferma all'app agenti non e' passata (${upd.error.message}).`,
+    };
+  }
 
   return { success: true, idOrdine, idApp: String(idApp) };
 }
