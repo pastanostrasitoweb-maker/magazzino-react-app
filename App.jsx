@@ -4684,13 +4684,17 @@ export default function App() {
   const [gestionale, setGestionale] = useState(null);
   const [ordiniAppBusy, setOrdiniAppBusy] = useState("");
 
-  // DUE ORDINI ALLO STESSO CLIENTE NELLO STESSO GIORNO SI GUARDANO IN FACCIA.
-  // Il 26/08 Facciliaci ha ricevuto lo stesso ordine due volte (DDT 1955 e
-  // 1966, 17 colli per parte) e l'11/08 e' toccato a Non C'E' Grano (DDT 1928
-  // e 1929): l'agente aveva rifatto l'ordine cinque minuti dopo, con qualche
-  // riga corretta, e il primo non l'ha fermato nessuno. Sono uscite quattro
-  // fatture per due ordini. Pantha Rei il 24/08 si e' salvata solo perche'
-  // qualcuno se n'e' accorto a mano e ne ha annullati tre.
+  // DUE ORDINI ALLO STESSO CLIENTE E ALLA STESSA SEDE SI GUARDANO IN FACCIA.
+  // LA SEDE E' TUTTA LA DIFFERENZA (14/09/2026). Pantha Rei il 24/08 ha
+  // mandato quattro ordini in sette minuti, tutti da 134,00 e tutti a ROMA:
+  // quello era un doppione vero, e infatti ne hanno annullati tre a mano.
+  // Facciliaci il 26/08 e Non C'E' Grano l'11/08 sembravano la stessa cosa
+  // (stesso cliente, cinque minuti, righe quasi identiche) ma NON lo erano:
+  // erano due NEGOZI diversi dello stesso cliente (San Bonifacio e Montecchio
+  // Maggiore; Varese e Como). Una catena che rifornisce due punti vendita
+  // ordina per forza roba quasi uguale: guardare le righe porta fuori strada,
+  // comanda la destinazione. Stessa lezione dell'unione ordini, che dal 31/08
+  // non unisce piu' due sedi diverse.
   // Un avviso c'era gia', ma DOPO: `ordiniUnibiliCon` lo mostra sulla scheda
   // di preparazione, e per vederlo bisogna aver gia' importato l'ordine E
   // aperto proprio quello. Alla PORTA, nel momento in cui si decide di far
@@ -4699,7 +4703,7 @@ export default function App() {
   // e aggiungere): si SEGNALA, in rosso, dove si decide.
   // L'incrocio e' per CODICE cliente (regola 18); il nome vale solo per i
   // clienti nuovi, che un codice non ce l'hanno ancora.
-  const ordiniGemelli = useCallback((codiceCliente, nomeCliente, escludiId) => {
+  const ordiniGemelli = useCallback((codiceCliente, nomeCliente, idDestinazione, escludiId) => {
     const cod = String(codiceCliente || "").trim();
     const nome = String(nomeCliente || "").trim().toLowerCase();
     if (!cod && !nome) return [];
@@ -4709,12 +4713,20 @@ export default function App() {
     // veri i gemelli erano tutti e due qui, importati a pochi minuti l'uno
     // dall'altro e preparati nella stessa mattina. Quello che e' gia' partito
     // non lo si ferma piu' comunque.
+    const dest = String(idDestinazione || "").trim();
     return orders.filter((o) => {
       if (escludiId && String(o.id) === String(escludiId)) return false;
       if (o.archived) return false;
-      return cod
+      const stessoCliente = cod
         ? String(o.clientId || "").trim() === cod
         : String(o.customer || "").trim().toLowerCase() === nome;
+      if (!stessoCliente) return false;
+      // Sedi diverse = due consegne vere, non un doppione: non si dice niente.
+      // Se una delle due la sede non ce l'ha non si puo' sapere, e allora si
+      // segnala: meglio una domanda in piu' che un secondo camion.
+      const suo = String(o.idDestinazione || "").trim();
+      if (dest && suo && dest !== suo) return false;
+      return true;
     });
   }, [orders]);
 
@@ -4726,7 +4738,7 @@ export default function App() {
         background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b",
         fontSize: 13, fontWeight: 600,
       }}>
-        ⚠️ Questo cliente ha già {gemelli.length === 1 ? "un altro ordine" : `altri ${gemelli.length} ordini`} di questi giorni.
+        ⚠️ Questo cliente ha già {gemelli.length === 1 ? "un altro ordine" : `altri ${gemelli.length} ordini`} in casa per la stessa sede.
         {" "}Controlla che non sia lo stesso prima di {dove}.
         <div style={{ marginTop: 6, fontWeight: 500 }}>
           {gemelli.map((g) => (
@@ -15349,7 +15361,7 @@ ${isConferma
                     </div>
 
                     <AvvisoGemelli
-                      gemelli={ordiniGemelli(o.cliente_id, cli.ragione_sociale)}
+                      gemelli={ordiniGemelli(o.cliente_id, cli.ragione_sociale, o.id_destinazione)}
                       dove="spostarlo in ordini"
                     />
 
