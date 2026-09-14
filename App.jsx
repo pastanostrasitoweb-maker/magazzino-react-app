@@ -7281,9 +7281,44 @@ export default function App() {
           [String(line.lineId)]: form,
         }));
 
+        // QUESTA RIGA NE HA GIA'. (Luca 14/09/2026, con la foto del tablet:
+        // "guarda che problema ha dato stamattina".) Il database si rifiuta di
+        // far uscire piu' merce di quella scritta in bolla, e fa bene. Ma
+        // all'operatore arrivava la frase tecnica del database, in mezzo a una
+        // preparazione, senza dire ne' cosa fosse successo ne' cosa fare.
+        //
+        // Quasi sempre la ragione e' che la riga era gia' assegnata e lo
+        // schermo non lo mostrava ancora: allora la cosa giusta e' ricaricare,
+        // non insistere. Ma a volte si vuole davvero mandare un pezzo in piu'
+        // (la riga si corregge dopo), e quella porta esiste: la funzione del
+        // database la apre solo se glielo si dice. Prima era usata solo dal
+        // lotto al volo, non da qui, cioe' non dove si lavora tutto il giorno.
+        const messaggio = String((result && result.error) || "");
+        if (/OLTRE_ORDINATO/i.test(messaggio)) {
+          const spiega = messaggio.replace(/^.*OLTRE_ORDINATO:\s*/i, "").trim();
+          const vuoleLoStesso = window.confirm(
+            spiega + "\n\n" +
+            "Di solito vuol dire che questa riga era gia' stata assegnata e lo schermo non lo mostrava ancora.\n\n" +
+            "Annulla = ricarico l'ordine e ti mostro come sta davvero (quasi sempre e' questo).\n" +
+            "OK = assegno lo stesso: il pezzo in piu' esce dal magazzino ma in bolla non compare, quindi la riga va corretta dopo."
+          );
+          if (vuoleLoStesso) {
+            const forzata = await callSheetsApi({
+              action: "assignLot",
+              payload: JSON.stringify({ ...newAssignment, oltreOrdinato: true }),
+            });
+            if (forzata && forzata.success) {
+              await loadDatiVivi();
+              return;
+            }
+            alert("Non sono riuscito ad assegnare lo stesso: " + ((forzata && forzata.error) || "errore"));
+          }
+          await loadDatiVivi();
+          return;
+        }
+
         alert(
-          "Errore nel salvataggio assegnazione sul foglio: " +
-            ((result && result.error) || "errore sconosciuto")
+          "Errore nel salvataggio assegnazione sul foglio: " + (messaggio || "errore sconosciuto")
         );
         // Riga non piu' allineata col database: ricarico cosi' l'ordine si
         // aggiorna con gli id reali e la nuova prova va a buon fine.
