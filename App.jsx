@@ -4683,6 +4683,62 @@ export default function App() {
   // pagamento AUTO. null = non ancora caricata → i badge restano manuali.
   const [gestionale, setGestionale] = useState(null);
   const [ordiniAppBusy, setOrdiniAppBusy] = useState("");
+
+  // DUE ORDINI ALLO STESSO CLIENTE NELLO STESSO GIORNO SI GUARDANO IN FACCIA.
+  // Il 26/08 Facciliaci ha ricevuto lo stesso ordine due volte (DDT 1955 e
+  // 1966, 17 colli per parte) e l'11/08 e' toccato a Non C'E' Grano (DDT 1928
+  // e 1929): l'agente aveva rifatto l'ordine cinque minuti dopo, con qualche
+  // riga corretta, e il primo non l'ha fermato nessuno. Sono uscite quattro
+  // fatture per due ordini. Pantha Rei il 24/08 si e' salvata solo perche'
+  // qualcuno se n'e' accorto a mano e ne ha annullati tre.
+  // Un avviso c'era gia', ma DOPO: `ordiniUnibiliCon` lo mostra sulla scheda
+  // di preparazione, e per vederlo bisogna aver gia' importato l'ordine E
+  // aperto proprio quello. Alla PORTA, nel momento in cui si decide di far
+  // entrare la seconda copia, non c'era niente. Questo sta li'.
+  // Non si blocca (un secondo ordine vero esiste: un cliente puo' richiamare
+  // e aggiungere): si SEGNALA, in rosso, dove si decide.
+  // L'incrocio e' per CODICE cliente (regola 18); il nome vale solo per i
+  // clienti nuovi, che un codice non ce l'hanno ancora.
+  const ordiniGemelli = useCallback((codiceCliente, nomeCliente, escludiId) => {
+    const cod = String(codiceCliente || "").trim();
+    const nome = String(nomeCliente || "").trim().toLowerCase();
+    if (!cod && !nome) return [];
+    // Si guarda fra gli ordini ANCORA IN CASA: l'archivio non sta in memoria
+    // e caricarlo all'avvio costerebbe secondi a tutti (vedi
+    // reference-viaggio-al-gateway-si-paga-ogni-volta). Basta: nei due casi
+    // veri i gemelli erano tutti e due qui, importati a pochi minuti l'uno
+    // dall'altro e preparati nella stessa mattina. Quello che e' gia' partito
+    // non lo si ferma piu' comunque.
+    return orders.filter((o) => {
+      if (escludiId && String(o.id) === String(escludiId)) return false;
+      if (o.archived) return false;
+      return cod
+        ? String(o.clientId || "").trim() === cod
+        : String(o.customer || "").trim().toLowerCase() === nome;
+    });
+  }, [orders]);
+
+  const AvvisoGemelli = ({ gemelli, dove }) => {
+    if (!gemelli || gemelli.length === 0) return null;
+    return (
+      <div style={{
+        marginTop: 10, padding: "10px 12px", borderRadius: 10,
+        background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b",
+        fontSize: 13, fontWeight: 600,
+      }}>
+        ⚠️ Questo cliente ha già {gemelli.length === 1 ? "un altro ordine" : `altri ${gemelli.length} ordini`} di questi giorni.
+        {" "}Controlla che non sia lo stesso prima di {dove}.
+        <div style={{ marginTop: 6, fontWeight: 500 }}>
+          {gemelli.map((g) => (
+            <div key={g.id}>
+              · {fmtDate(g.date)} — {g.id}
+              {g.ddtNumero ? ` — DDT ${g.ddtNumero}` : ""} — {g.status}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
   const [lots, setLots] = useState([]);
   const [products, setProducts] = useState([]);
   const [clients, setClients] = useState([]);
@@ -15291,6 +15347,11 @@ ${isConferma
                       )}
                       {o.note && <div style={{ fontSize: 12.5, color: "#64748b", marginTop: 6 }}>📝 {o.note}</div>}
                     </div>
+
+                    <AvvisoGemelli
+                      gemelli={ordiniGemelli(o.cliente_id, cli.ragione_sociale)}
+                      dove="spostarlo in ordini"
+                    />
 
                     <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                       <button
