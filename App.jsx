@@ -4882,14 +4882,27 @@ export default function App() {
   };
 
   const caricaDaConfermare = useCallback(async () => {
-    try {
-      const { data, error } = await supabase
+    // LE DUE LISTE PARTONO INSIEME. Erano una dopo l'altra e il bollino
+    // "confermato" aspettava che finisse l'elenco dei clienti da sistemare:
+    // due secondi di attesa in piu' su ogni apertura dell'Archivio, per niente,
+    // perche' nessuna delle due serve all'altra.
+    const nulla = () => ({ data: null, error: true });
+    const [daConfermareR, confermatiR] = await Promise.all([
+      supabase
         .from("v_clienti_da_confermare")
         .select("chiave, codice_cliente, ragione_sociale, metodo_pagamento, agente_nome, mancano, ultimo_ordine, gia_confermato, codice_r, pagamento_da_sistemare, metodo_ricavato")
-        // Il pagamento in cima: blocca la fattura e falsa il Cashflow, viene
-        // prima di una provincia mancante.
         .order("pagamento_da_sistemare", { ascending: false })
-        .order("ultimo_ordine", { ascending: false, nullsFirst: false });
+        .order("ultimo_ordine", { ascending: false, nullsFirst: false })
+        .then((r) => r, nulla),
+      supabase
+        .from("clienti_confermati")
+        .select("codice_cliente, codice_r, confermato_il, confermato_da")
+        .then((r) => r, nulla),
+    ]);
+    try {
+      const { data, error } = daConfermareR;
+      // (l'ordinamento e' nella query qui sopra: il pagamento in cima, perche'
+      // blocca la fattura e falsa il Cashflow, prima di una provincia mancante)
       // CHI BLOCCA LA FATTURA VIENE PRIMA. Il pagamento resta in testa perche'
       // falsa anche il Cashflow, poi chi ha un documento fermo che aspetta
       // solo questo dato, poi tutti gli altri.
@@ -4900,9 +4913,7 @@ export default function App() {
       if (!error) setDaConfermare([...(data || [])].sort((a, b) => peso(a) - peso(b)));
     } catch (_) { /* la lista e' un aiuto, non deve fermare l'archivio */ }
     try {
-      const { data } = await supabase
-        .from("clienti_confermati")
-        .select("codice_cliente, codice_r, confermato_il, confermato_da");
+      const { data } = confermatiR;
       const per = {};
       for (const c of data || []) if (c.codice_cliente) per[String(c.codice_cliente)] = c;
       setConfermati(per);

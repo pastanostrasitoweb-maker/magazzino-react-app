@@ -103,15 +103,30 @@ const failure = (e) => {
 };
 
 // Fetch con .in() a blocchi (PostgREST/URL-length safe) su liste di id.
+// I PEZZI SI CHIEDONO INSIEME, NON IN FILA.
+// La lista di id si spezza a 150 per non fare un indirizzo lungo un chilometro,
+// ma i pezzi non dipendono l'uno dall'altro: chiesti in fila si paga il viaggio
+// fino al gateway una volta per pezzo (~1,5 secondi l'uno). All'avvio del
+// magazzino le assegnazioni_lotti sono tre pezzi: erano 4,3 secondi in fila,
+// chiesti insieme sono uno solo. A ondate di SEI per non aprire cento
+// connessioni in faccia al container quando gli id sono tanti.
 async function selectIn(table, col, ids, cols = "*") {
   const out = [];
   const CHUNK = 150;
+  const INSIEME = 6;
+  const pezzi = [];
   for (let i = 0; i < ids.length; i += CHUNK) {
     const batch = ids.slice(i, i + CHUNK);
-    if (!batch.length) continue;
-    const { data, error } = await supabase.from(table).select(cols).in(col, batch);
-    if (error) throw error;
-    out.push(...(data || []));
+    if (batch.length) pezzi.push(batch);
+  }
+  for (let i = 0; i < pezzi.length; i += INSIEME) {
+    const esiti = await Promise.all(
+      pezzi.slice(i, i + INSIEME).map((batch) => supabase.from(table).select(cols).in(col, batch))
+    );
+    for (const { data, error } of esiti) {
+      if (error) throw error;
+      out.push(...(data || []));
+    }
   }
   return out;
 }
@@ -496,6 +511,12 @@ async function caricaNodoVivo() {
   // Righe e assegnazioni SOLO degli ordini attivi (caricamento snello): niente
   // storico in memoria, niente taglio a 1000 righe.
   const activeOrderIds = (ordiniR.data || []).map((o) => String(o.id_ordine)).filter(Boolean);
+  // Le anagrafiche degli ordini arrivati dall'app agenti dipendono solo dagli
+  // id degli ordini, che qui si conoscono gia': si chiedono SUBITO e si
+  // aspettano in fondo, mentre righe e assegnazioni fanno il loro giro.
+  // Prima stavano in coda alla catena e ci mettevano il loro secondo e mezzo
+  // in piu' buttato via.
+  const anagraficheAppP = anagrafichePerOrdini(activeOrderIds);
   const righeRows = activeOrderIds.length
     ? await selectIn("righe_ordine", "id_ordine", activeOrderIds)
     : [];
@@ -511,7 +532,7 @@ async function caricaNodoVivo() {
   // con l'ordine). Serve al semaforo "Anagrafica OK/KO" e al DDT.
   // Mappa: id_ordine_magazzino -> oggetto cliente.
   // Solo per gli ordini attivi (lo storico porta le sue anagrafiche a richiesta).
-  const anagraficheApp = await anagrafichePerOrdini(activeOrderIds);
+  const anagraficheApp = await anagraficheAppP;
   // Se il registro degli abbuoni non risponde il magazzino lavora comunque:
   // un elenco vuoto vale "nessuno da dare", non un blocco.
   const abbuoniPromessi = (abbuoniR && !abbuoniR.error ? abbuoniR.data || [] : []).map((a) => ({
@@ -529,11 +550,97 @@ async function caricaNodoVivo() {
   return { prodotti, lotti, ordini, righeOrdine, assegnazioniLotti, anagraficheApp, abbuoniPromessi };
 }
 
+// LE PAGINE SI CHIEDONO INSIEME, NON IN FILA (14/09/2026).
+//
+// PostgREST serve al massimo 1000 righe per richiesta: e' un tetto voluto e non
+// si alza (regola di Luca). Quindi le tabelle grosse si leggono a pagine. Il
+// modo di prima era: chiedi 1000, guarda se sono 1000, chiedi le prossime.
+// Sequenziale. Finche' una chiamata costava tre decimi non si notava; dal
+// trasloco sul gateway ne costa **uno e mezzo**, e i clienti (3 pagine) da soli
+// si mangiavano sette secondi.
+//
+// Qui la prima pagina arriva col conteggio esatto (`count: 'exact'`): da quello
+// si sa quante pagine mancano e si chiedono **tutte insieme**. Due viaggi
+// invece di N, senza toccare il tetto delle mille righe.
+//
+// Misurato all'avvio del magazzino: clienti_master, clienti_override e
+// v_destinazioni passano da otto chiamate in fila a tre piu' un parallelo.
+const PAGINA_PIENA = 1000;
+
+// `fabbrica(conConteggio)` deve restituire la query gia' con select e order:
+// il conteggio esatto si chiede SOLO alla prima pagina (e' una scansione, non
+// si paga N volte).
+async function aPagine(fabbrica) {
+  const prima = await fabbrica(true).range(0, PAGINA_PIENA - 1);
+  if (prima.error) return { data: [], error: prima.error };
+
+  const righe = prima.data || [];
+  // Pagina non piena: non c'e' altro, e' finita qui.
+  if (righe.length < PAGINA_PIENA) return { data: righe, error: null };
+
+  // SE IL CONTEGGIO NON ARRIVA NON SI DA' PER FINITA.
+  // Con la pagina piena e nessun conteggio, fidarsi di `righe.length` vorrebbe
+  // dire fermarsi a mille righe in silenzio: esattamente il taglio da cui
+  // questa funzione difende. Senza conteggio si torna a chiedere una pagina
+  // alla volta finche' non ne arriva una corta: piu' lento, ma completo.
+  const totale = Number(prima.count);
+  if (!Number.isFinite(totale) || totale <= 0) {
+    for (let da = PAGINA_PIENA; ; da += PAGINA_PIENA) {
+      const p = await fabbrica(false).range(da, da + PAGINA_PIENA - 1);
+      if (p.error) return { data: righe, error: p.error };
+      const d = p.data || [];
+      righe.push(...d);
+      if (d.length < PAGINA_PIENA) break;
+    }
+    return { data: righe, error: null };
+  }
+
+  if (totale <= righe.length) return { data: righe, error: null };
+
+  const restanti = [];
+  for (let da = PAGINA_PIENA; da < totale; da += PAGINA_PIENA) {
+    restanti.push(fabbrica(false).range(da, da + PAGINA_PIENA - 1));
+  }
+  const esiti = await Promise.all(restanti);
+  for (const e of esiti) {
+    if (e.error) return { data: righe, error: e.error };
+    righe.push(...(e.data || []));
+  }
+  return { data: righe, error: null };
+}
+
 async function bulkLoad() {
-  const vivo = await caricaNodoVivo();
-  // clienti: tabella nuova (06_clienti.sql). maybe non esiste su ambienti
-  // non ancora migrati -> tollerante: se errore, lista vuota, app gira lo stesso.
-  const clientiR = await supabase.from("clienti").select("*").order("ragione_sociale", { ascending: true });
+  // TUTTE LE LETTURE DELL'AVVIO PARTONO INSIEME.
+  // Erano sei attese in fila: nodo vivo, clienti, registro, agenti, override,
+  // destinazioni. Nessuna serve all'altra per essere CHIESTA (l'incrocio fra
+  // registro e clienti locali si fa dopo, sui dati gia' arrivati), ma in fila
+  // si pagava sei volte il viaggio fino al gateway: ~1,2 secondi l'uno,
+  // sempre, anche su una tabella da quattro righe. Chiedendole insieme si
+  // paga un viaggio solo. (Misurato 14/09/2026: l'avvio era 34 secondi.)
+  // Ogni lettura si difende da sola: un ramo che cade non ferma gli altri.
+  const nulla = (e) => ({ data: null, error: e });
+  const [vivo, clientiR, masterP, agentiR, ovP, destP] = await Promise.all([
+    caricaNodoVivo(),
+    // clienti: tabella nuova (06_clienti.sql). maybe non esiste su ambienti
+    // non ancora migrati -> tollerante: se errore, lista vuota, app gira lo stesso.
+    supabase.from("clienti").select("*").order("ragione_sociale", { ascending: true }).then((r) => r, nulla),
+    aPagine((conConteggio) =>
+      supabase.from("clienti_master")
+        .select("codice,codice_gestionale,ragione_sociale,piva,citta,provincia,telefono,email,origine",
+                conConteggio ? { count: "exact" } : undefined)
+        .order("ragione_sociale")).then((r) => r, nulla),
+    supabase.from("agenti").select("agente_id, nome, canali, zona").eq("attivo", true).order("nome").then((r) => r, nulla),
+    aPagine((conConteggio) =>
+      supabase.from("clienti_override")
+        .select("*", conConteggio ? { count: "exact" } : undefined)
+        .order("chiave")).then((r) => r, nulla),
+    aPagine((conConteggio) =>
+      supabase.from("v_destinazioni")
+        .select("*", conConteggio ? { count: "exact" } : undefined)
+        .order("codice_cliente")
+        .order("predefinita", { ascending: false })
+        .order("etichetta")).then((r) => r, nulla),
+  ]);
 
   // clienti: tollerante alla tabella mancante (clientiR.error -> lista vuota).
   const clientiLocali = (clientiR && !clientiR.error ? clientiR.data || [] : []).map((row) => ({
@@ -568,15 +675,9 @@ async function bulkLoad() {
     const pivaViste = new Set(
       clientiLocali.map((c) => String(c.PIVA || "").replace(/\D/g, "")).filter((x) => x.length === 11)
     );
-    const PAGE = 1000;
-    for (let from = 0; from < 20000; from += PAGE) {
-      const { data, error } = await supabase
-        .from("clienti_master")
-        .select("codice,codice_gestionale,ragione_sociale,piva,citta,provincia,telefono,email,origine")
-        .order("ragione_sociale")
-        .range(from, from + PAGE - 1);
-      if (error) break;
-      for (const r of data || []) {
+    const masterRows = masterP.data;
+    {
+      for (const r of masterRows || []) {
         const cod = String(r.codice || "");
         if (!cod || !r.ragione_sociale) continue;
         if (r.codice_gestionale && codici.has(String(r.codice_gestionale))) continue;
@@ -603,7 +704,6 @@ async function bulkLoad() {
           Email: r.email || "",
         });
       }
-      if (!data || data.length < PAGE) break;
     }
   } catch (_) {
     // registro non disponibile: il selettore resta coi clienti locali
@@ -612,11 +712,7 @@ async function bulkLoad() {
   // Anagrafica agenti: serve al selettore sugli ordini caricati in casa.
   let agenti = [];
   try {
-    const r = await supabase
-      .from("agenti")
-      .select("agente_id, nome, canali, zona")
-      .eq("attivo", true)
-      .order("nome");
+    const r = agentiR;
     agenti = (r.data || []).map((a) => ({
       Agente_Id: a.agente_id,
       Nome: a.nome,
@@ -638,21 +734,10 @@ async function bulkLoad() {
     // clienti oltre quella soglia si ritroverebbero l'anagrafica vuota, agente e
     // sconti compresi. Il taglio non da' errore, quindi non si vedrebbe finche'
     // qualcuno non se ne accorge su un DDT.
-    const PAGINA = 1000;
-    for (let da = 0; ; da += PAGINA) {
-      const { data, error } = await supabase
-        .from("clienti_override")
-        .select("*")
-        .order("chiave")
-        .range(da, da + PAGINA - 1);
-      if (error) {
-        console.warn("clienti_override:", error.message);
-        break;
-      }
-      for (const r of data || []) {
-        if (r && r.chiave) overridesClienti[String(r.chiave)] = r;
-      }
-      if (!data || data.length < PAGINA) break;
+    const { data: ovRows, error: errOv } = ovP;
+    if (errOv) console.warn("clienti_override:", errOv.message);
+    for (const r of ovRows || []) {
+      if (r && r.chiave) overridesClienti[String(r.chiave)] = r;
     }
   } catch (_) {
     // tabella non ancora creata: nessun override
@@ -668,25 +753,12 @@ async function bulkLoad() {
     // destinazioni sono gia' 1.519, e senza paginare i clienti oltre il
     // millesimo restavano senza indirizzo di consegna. Il taglio e' silenzioso,
     // quindi non si vede finche' qualcuno non se ne accorge sul campo.
-    const PAGINA = 1000;
-    for (let da = 0; ; da += PAGINA) {
-      const { data, error: errDest } = await supabase
-        .from("v_destinazioni")
-        .select("*")
-        .order("codice_cliente")
-        .order("predefinita", { ascending: false })
-        .order("etichetta")
-        .range(da, da + PAGINA - 1);
-      if (errDest) {
-        console.warn("v_destinazioni:", errDest.message, errDest.hint || "");
-        break;
-      }
-      for (const d of data || []) {
-        const k = String(d.codice_cliente || "");
-        if (!k) continue;
-        (destinazioni[k] = destinazioni[k] || []).push(d);
-      }
-      if (!data || data.length < PAGINA) break;
+    const { data: destRows, error: errDest } = destP;
+    if (errDest) console.warn("v_destinazioni:", errDest.message, errDest.hint || "");
+    for (const d of destRows || []) {
+      const k = String(d.codice_cliente || "");
+      if (!k) continue;
+      (destinazioni[k] = destinazioni[k] || []).push(d);
     }
   } catch (e) {
     // vista non ancora creata: si va avanti con l'indirizzo unico di prima
@@ -3071,20 +3143,20 @@ async function getSituazioneGestionale(params) {
   if (params && params.soloScaduti) {
     return { success: true, scaduti, anagrafica: [] };
   }
-  const anagrafica = [];
-  const PAGE = 1000;
-  for (let from = 0; from < 20000; from += PAGE) {
-    const { data, error } = await supabase
+  // Le ~2.000 righe del gestionale stanno in tre pagine: chieste in fila
+  // erano tre attese di seguito, con aPagine la seconda e la terza partono
+  // insieme (vedi il commento sopra aPagine).
+  const { data: anaRows, error: errAna } = await aPagine((conConteggio) =>
+    supabase
       .from("clienti_gestionale")
-      .select("codice_cliente,ragione_sociale")
+      .select("codice_cliente,ragione_sociale", conConteggio ? { count: "exact" } : undefined)
       .order("codice_cliente")
-      .range(from, from + PAGE - 1);
-    if (error) return { success: false, error: error.message };
-    for (const r of data || []) {
-      anagrafica.push({ codice: String(r.codice_cliente), nome: r.ragione_sociale || "" });
-    }
-    if (!data || data.length < PAGE) break;
-  }
+  );
+  if (errAna) return { success: false, error: errAna.message };
+  const anagrafica = (anaRows || []).map((r) => ({
+    codice: String(r.codice_cliente),
+    nome: r.ragione_sociale || "",
+  }));
   return { success: true, scaduti, anagrafica };
 }
 
