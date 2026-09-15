@@ -1998,6 +1998,11 @@ async function salvaFotoBolla(params) {
       p: { token: tokenDispositivo(), foto: fotoField, caption: row.caption, operatore: row.mittente, ordineId: row.ordine_id || "", fornitoreId: row.fornitore_id || "", controlli: row.controlli || null },
     });
     if (!r.error) return { success: true, id: r.data ?? null };
+    // stesso trattamento dell'elenco ordini: il codice rifiutato si segnala
+    // come tale, cosi' l'app puo' richiederlo invece di ripetere l'errore
+    if (/dispositivo non riconosciuto/i.test(String(r.error.message || ""))) {
+      return { success: false, dispositivoIgnoto: true, error: "dispositivo non riconosciuto" };
+    }
     if (!/acq_deposita_foto_bolla|function/i.test(String(r.error.message || ""))) return failure(r.error);
     // funzione non ancora sul database: ripiego sull'insert diretto
   }
@@ -2035,6 +2040,15 @@ async function getOrdiniAcquistiInArrivo() {
       // pubblica non si legge niente
       const r = await supabase.rpc("acq_ordini_in_arrivo", { p_token: tokenDispositivo() });
       if (!r.error) { ordini = r.data; dallaVista = true; }
+      // IL CODICE RIFIUTATO SI DEVE POTER RISCRIVERE (15/09/2026). Con un
+      // codice vecchio in memoria il tablet non era "senza codice", quindi il
+      // riquadro per inserirlo non compariva: chi spedisce faceva la foto,
+      // compilava i controlli, premeva invia e leggeva "dispositivo non
+      // riconosciuto" senza avere nessun modo di rimediare. Qui lo diciamo
+      // subito, all'apertura della pagina, prima che qualcuno lavori a vuoto.
+      else if (/dispositivo non riconosciuto/i.test(String(r.error.message || ""))) {
+        return { success: false, dispositivoIgnoto: true, error: "dispositivo non riconosciuto", ordini: [] };
+      }
     }
     if (!dallaVista) {
       const r = await supabase

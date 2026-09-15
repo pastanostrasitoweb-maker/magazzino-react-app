@@ -49,6 +49,14 @@ import {
 //   "https://script.google.com/macros/s/AKfycbxNom4UmYHZhcUNKBJt5BOtDEWzRiCKdiiXl-_3Na3qAONmzLqTRpxyU0gOaLLuffQE/exec";
 const ADMIN_PIN = "1234";
 
+// LA SENTINELLA STA FUORI DAI COMPONENTI (15/09/2026). "Qualcuno sta
+// compilando una finestra" la decide App(), ma la leggono anche componenti
+// che App() non contiene: ChatPanel la chiedeva e trovava il vuoto, quindi
+// ogni battito del suo timer moriva con "staCompilandoRef is not defined" e
+// la chat smetteva di aggiornarsi da sola. Un riferimento di modulo lo
+// vedono tutti e non ha zone morte: si dichiara qui, lo scrive App().
+const staCompilandoRef = { current: false };
+
 const fallbackProducts = [
   { id: "1", code: "NFARMA 013", name: "Pici 250", uom: "pz", category: "", subcategory: "" },
   { id: "2", code: "NFARMA 007", name: "Tonnarelli 250", uom: "pz", category: "", subcategory: "" },
@@ -5654,7 +5662,12 @@ export default function App() {
   // Codice del dispositivo per parlare con l'app acquisti: si scrive una
   // volta, resta su questo tablet, non sta nel bundle.
   const [codiceDispositivo, setCodiceDispositivo] = useState(() => { try { return localStorage.getItem("magazzino.dispositivo") || ""; } catch (_) { return ""; } });
-  const salvaCodiceDispositivo = (t) => { setCodiceDispositivo(t); try { localStorage.setItem("magazzino.dispositivo", String(t || "").trim()); } catch (_) {} };
+  const salvaCodiceDispositivo = (t) => { setCodiceDispositivo(t); setDispositivoRifiutato(false); try { localStorage.setItem("magazzino.dispositivo", String(t || "").trim()); } catch (_) {} };
+  // Il codice c'e' ma il database l'ha rifiutato (revocato, rigenerato,
+  // scritto male): senza questo il riquadro per riscriverlo non compariva
+  // mai, perche' compariva solo quando il codice mancava del tutto.
+  const [dispositivoRifiutato, setDispositivoRifiutato] = useState(false);
+  const [codiceInserito, setCodiceInserito] = useState("");
   const [bollaControlli, setBollaControlli] = useState({
     quantita_ok: null, prezzo_ok: null, temperatura_c: "", temperatura_ok: null, imballo_ok: null, certificato_sg: null,
   });
@@ -7755,7 +7768,8 @@ export default function App() {
     adminDialogOpen || prodLoadOpen || Boolean(abbuonoPer) ||
     Boolean(transportModalOrderId) || Boolean(lotOnFlyDialog?.open) ||
     Boolean(fermoDialog?.open);
-  const staCompilandoRef = useRef(false);
+  // il riferimento vive in cima al file (lo leggono anche ChatPanel e gli
+  // altri componenti): qui si scrive soltanto
   useEffect(() => { staCompilandoRef.current = staCompilando; }, [staCompilando]);
 
   // I campi arricchiti si salvano su clienti_override; quelli di identita' sulla
@@ -10208,7 +10222,10 @@ ${isConferma
   // Ordini fornitore in arrivo (da Acquisti) per abbinare la foto della bolla.
   const loadOrdiniArrivo = async () => {
     const res = await callSheetsApi({ action: "getOrdiniAcquistiInArrivo" });
-    if (res && res.success) setOrdiniArrivo(res.ordini || []);
+    if (res && res.success) { setOrdiniArrivo(res.ordini || []); setDispositivoRifiutato(false); return; }
+    // il codice di questo tablet non vale piu': lo si dice adesso, non dopo
+    // che qualcuno ha fotografato la bolla e compilato tutti i controlli
+    if (res && res.dispositivoIgnoto) setDispositivoRifiutato(true);
   };
 
   // Quando si apre la pagina Foto bolle, carica gli ordini fornitore in arrivo.
@@ -10249,6 +10266,15 @@ ${isConferma
         setBollaControlli({ quantita_ok: null, prezzo_ok: null, temperatura_c: "", temperatura_ok: null, imballo_ok: null, certificato_sg: null });
         setBollaCaption("");
         setFotoOrdineId("");
+      } else if (res && res.dispositivoIgnoto) {
+        // LA FOTO NON SI PERDE (15/09/2026): resta in anteprima con i controlli
+        // gia' compilati, si riscrive il codice e si preme di nuovo Invia.
+        setDispositivoRifiutato(true);
+        alert(
+          "Questo tablet ha un codice che non vale piu'.\n\n" +
+            "Qui sopra e' comparso il riquadro 'Codice del dispositivo': chiedilo a Luca, incollalo e premi di nuovo Invia.\n\n" +
+            "La foto e i controlli che hai compilato restano dove sono, non devi rifarli."
+        );
       } else {
         alert("Foto non inviata: " + ((res && res.error) || "errore sconosciuto"));
       }
@@ -13794,7 +13820,12 @@ ${isConferma
               </div>
               {ordiniArrivo.length === 0 ? (
                 <div style={{ ...cardStyle({ background: "#f8fafc" }), padding: 12, color: "#66758b", fontSize: 13, border: "1px solid #e5edf6" }}>
-                  Nessun ordine fornitore in arrivo al momento. Puoi comunque inviare la foto: l'ufficio acquisti la abbina.
+                  {/* "Nessuno" e "non riesco a leggerli" sono due cose diverse:
+                      col codice rifiutato l'elenco era vuoto e sembrava che di
+                      ordini non ce ne fosse nessuno, mentre ce n'erano tre. */}
+                  {dispositivoRifiutato
+                    ? "Gli ordini in arrivo non si leggono finché il codice di questo tablet non è valido: non vuol dire che non ce ne siano."
+                    : "Nessun ordine fornitore in arrivo al momento. Puoi comunque inviare la foto: l'ufficio acquisti la abbina."}
                 </div>
               ) : (
                 <div style={{ display: "grid", gap: 8 }}>
@@ -13936,11 +13967,34 @@ ${isConferma
                 </div>
               ) : null}
 
-              {!codiceDispositivo && (
+              {(!codiceDispositivo || dispositivoRifiutato) && (
                 <div style={{ ...cardStyle({ background: "#fff7ed" }), padding: 12, border: "1px solid #fed7aa" }}>
                   <div style={{ fontWeight: 900, marginBottom: 6 }}>Codice del dispositivo</div>
-                  <div style={{ fontSize: 13, color: "#7c2d12", marginBottom: 8 }}>Senza, questo tablet non legge gli ordini in arrivo e non manda le foto. Lo dà Luca, si scrive una volta sola.</div>
-                  <input type="password" placeholder="Incolla qui il codice" onChange={(e) => salvaCodiceDispositivo(e.target.value)} style={{ padding: 8, width: "100%" }} />
+                  <div style={{ fontSize: 13, color: "#7c2d12", marginBottom: 8 }}>
+                    {dispositivoRifiutato
+                      ? "Il codice scritto su questo tablet non vale più: il database non lo riconosce. Chiedi quello nuovo a Luca, incollalo qui e riprova. La foto e i controlli restano dove sono."
+                      : "Senza, questo tablet non legge gli ordini in arrivo e non manda le foto. Lo dà Luca, si scrive una volta sola."}
+                  </div>
+                  {/* IL CAMPO NON SPARISCE MENTRE SI SCRIVE. Salvando a ogni
+                      tasto, il riquadro si chiudeva al primo carattere e sul
+                      tablet restava dentro mezzo codice. Si salva col bottone. */}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      type="password"
+                      value={codiceInserito}
+                      placeholder="Incolla qui il codice"
+                      onChange={(e) => setCodiceInserito(e.target.value)}
+                      style={{ padding: 8, flex: 1, minWidth: 0 }}
+                    />
+                    <button
+                      type="button"
+                      style={btnStyle("primary", !codiceInserito.trim())}
+                      disabled={!codiceInserito.trim()}
+                      onClick={() => { salvaCodiceDispositivo(codiceInserito.trim()); setCodiceInserito(""); loadOrdiniArrivo(); }}
+                    >
+                      Salva
+                    </button>
+                  </div>
                 </div>
               )}
               <div style={{ ...cardStyle({}), padding: 12, display: "grid", gap: 10 }}>
