@@ -2087,9 +2087,14 @@ function normalizeTipologia(raw) {
   return "";
 }
 
-// Riduce una foto (File) a data URL JPEG, lato lungo max ~1400px, qualita' 0.7:
-// la bolla resta leggibile ma pesa poco (~100-250KB) in acq_ricevimenti_foto.
+// Riduce una foto (File) a data URL JPEG. Il database (acq_foto_verificata)
+// accetta al massimo 300.000 byte decodificati: un solo giro a dimensione
+// fissa (1400px, qualita' 0.7) puo' superarli su bolle dense di testo o
+// scattate con una fotocamera che comprime poco. Si stringe lato e qualita'
+// a scalare finche' la foto vera e propria (non la stima) non ci sta,
+// senza scendere sotto una soglia ancora leggibile. (16/09/2026)
 function riduciImmagine(file, maxLato = 1400, qualita = 0.7) {
+  const LIMITE_BYTE = 280000; // margine sotto i 300.000 del database
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("lettura file fallita"));
@@ -2097,19 +2102,39 @@ function riduciImmagine(file, maxLato = 1400, qualita = 0.7) {
       const img = new Image();
       img.onerror = () => reject(new Error("immagine non valida"));
       img.onload = () => {
-        let { width, height } = img;
-        if (width >= height && width > maxLato) {
-          height = Math.round((height * maxLato) / width);
-          width = maxLato;
-        } else if (height > width && height > maxLato) {
-          width = Math.round((width * maxLato) / height);
-          height = maxLato;
+        const disegna = (lato, q) => {
+          let { width, height } = img;
+          if (width >= height && width > lato) {
+            height = Math.round((height * lato) / width);
+            width = lato;
+          } else if (height > width && height > lato) {
+            width = Math.round((width * lato) / height);
+            height = lato;
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+          return canvas.toDataURL("image/jpeg", q);
+        };
+        const bytePesati = (dataUrl) => {
+          try { return atob(dataUrl.split(",")[1] || "").length; } catch { return Infinity; }
+        };
+        const passi = [
+          [maxLato, qualita],
+          [1200, Math.min(qualita, 0.6)],
+          [1000, 0.55],
+          [900, 0.5],
+          [800, 0.45],
+          [700, 0.4],
+          [600, 0.35],
+        ];
+        let ultimo = "";
+        for (const [lato, q] of passi) {
+          ultimo = disegna(lato, q);
+          if (bytePesati(ultimo) <= LIMITE_BYTE) { resolve(ultimo); return; }
         }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", qualita));
+        resolve(ultimo); // il piu' piccolo tentato: meglio questo che bloccare l'invio
       };
       img.src = reader.result;
     };
