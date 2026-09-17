@@ -7402,6 +7402,32 @@ export default function App() {
         const messaggio = String((result && result.error) || "");
         if (/OLTRE_ORDINATO/i.test(messaggio)) {
           const spiega = messaggio.replace(/^.*OLTRE_ORDINATO:\s*/i, "").trim();
+          // UN CARTONE MUOVE UN CARTONE (Luca 17/09/2026). Sul bollinato la
+          // domanda "lo mando lo stesso?" non si fa nemmeno: "1+1" vuol dire
+          // che il cartone ha il bollino ed e' in omaggio, non che sono due.
+          // Chi prepara leggeva "2 bollinati in totale" nella nota dell'agente
+          // e scriveva 2 sulla riga, poi si trovava davanti la scelta di
+          // forzare. Qui la scorciatoia non c'e': se i cartoni sono due, sono
+          // due righe da uno, e cosi' anche la bolla ne dichiara due.
+          if (rigaSceltaBollinati(line) || rigaBollata(line)) {
+            // E se la riga era GIA' a posto, non si dice niente: il database
+            // conta anche quello che lo schermo non aveva ancora, e allora
+            // l'unica cosa sensata e' ricaricare in silenzio. L'errore usciva
+            // anche quando non c'era piu' niente da fare.
+            const numeri = spiega.match(/ne ordina\s+([\d.,]+)\s+ma ne staresti assegnando\s+([\d.,]+)/i);
+            const ordinata = numeri ? Number(String(numeri[1]).replace(",", ".")) : NaN;
+            const totale = numeri ? Number(String(numeri[2]).replace(",", ".")) : NaN;
+            const giaCoperta = Number.isFinite(ordinata) && Number.isFinite(totale) && totale - qty >= ordinata;
+            if (!giaCoperta) {
+              alert(
+                "Su un cartone bollinato vale sempre: uno sulla riga, uno che esce dal magazzino.\n\n" +
+                  "Se i bollinati da dare sono due, aggiungi una seconda riga col bottone “Cartone bollinato” e dai un lotto a ciascuna: " +
+                  "cosi' anche in bolla ne risultano due."
+              );
+            }
+            await loadDatiVivi();
+            return;
+          }
           const vuoleLoStesso = window.confirm(
             spiega + "\n\n" +
             "Di solito vuol dire che questa riga era gia' stata assegnata e lo schermo non lo mostrava ancora.\n\n" +
