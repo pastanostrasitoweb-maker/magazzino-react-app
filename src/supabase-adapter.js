@@ -1234,6 +1234,40 @@ async function archiveOrder(params) {
   return { success: true };
 }
 
+// UNA CAMPIONATURA GRATUITA SI CHIUDE, NON SI FATTURA (Luca 18/09/2026).
+// A importo zero non c'e' niente da fatturare: senza un posto dove metterla la
+// riga restava per sempre nella lista "Fuori, e perche'", che cosi' non si
+// svuotava mai e smetteva di voler dire qualcosa. Qui si archivia lasciando
+// scritto chi e' stato: il documento non si tocca, si toglie solo dalla coda.
+async function chiudiDdtSenzaFattura(params) {
+  const p = parsePayload(params);
+  const ddt = String(p.ddt || "").trim();
+  if (!ddt) return { success: false, error: "numero DDT mancante" };
+  const { error } = await supabase
+    .from("ddt_chiusi_senza_fattura")
+    .upsert(
+      {
+        ddt_numero: ddt,
+        motivo: String(p.motivo || "campionatura gratuita").slice(0, 200),
+        chi: String(p.chi || "").slice(0, 60),
+        quando: new Date().toISOString(),
+      },
+      { onConflict: "ddt_numero" }
+    );
+  if (error) return failure(error);
+  return { success: true };
+}
+
+// E si puo' sempre rimettere in lista: archiviare non e' buttare via.
+async function riapriDdtSenzaFattura(params) {
+  const p = parsePayload(params);
+  const ddt = String(p.ddt || "").trim();
+  if (!ddt) return { success: false, error: "numero DDT mancante" };
+  const { error } = await supabase.from("ddt_chiusi_senza_fattura").delete().eq("ddt_numero", ddt);
+  if (error) return failure(error);
+  return { success: true };
+}
+
 // L'OK al prezzo diverso, firmato da chi lo da'. Poi si archivia davvero.
 async function autorizzaPrezzo(params) {
   const p = parsePayload(params);
@@ -3831,6 +3865,10 @@ export async function callSheetsApi(params = {}) {
         return await markOrderViewed(params);
       case "archiveOrder":
         return await archiveOrder(params);
+      case "chiudiDdtSenzaFattura":
+        return await chiudiDdtSenzaFattura(params);
+      case "riapriDdtSenzaFattura":
+        return await riapriDdtSenzaFattura(params);
       case "autorizzaPrezzo":
         return await autorizzaPrezzo(params);
       case "setMotivoFermo":

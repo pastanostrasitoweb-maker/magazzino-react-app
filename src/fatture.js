@@ -320,10 +320,14 @@ export function selezionaFatture(d) {
   }
   const metodi = new Map(d.metodi.map((m) => [String(m.ddt_numero).trim(), m]));
   const fatti = new Map(d.fatte.map((f) => [String(f.ddt_numero).trim(), f]));
+  // ARCHIVIATI A MANO, SENZA FATTURA. Una campionatura a zero non si fattura
+  // mai: senza un posto dove metterla restava fra le escluse per sempre.
+  const chiusi = new Map((d.chiusi || []).map((c) => [String(c.ddt_numero).trim(), c]));
 
   const pronte = [];
   const escluse = [];
   const gia = [];
+  const archiviati = [];
   for (const o of d.ordini) {
     const data = String(o.data_preparato || o.data_ordine || "").slice(0, 10);
     const n = String(o.ddt_numero || "").trim();
@@ -332,8 +336,15 @@ export function selezionaFatture(d) {
     const riga = { ddt: n, data, cliente: a.denom, imponibile: Number(o.totale_imponibile) || 0 };
 
     if (fatti.has(n)) { gia.push({ ...riga, ...fatti.get(n) }); continue; }
+    if (chiusi.has(n)) {
+      const c = chiusi.get(n);
+      archiviati.push({ ...riga, motivo: c.motivo || "chiusa senza fattura", chi: c.chi || "", quando: c.quando || "" });
+      continue;
+    }
     if (o.campionatura && riga.imponibile === 0) {
-      escluse.push({ ...riga, motivo: "campionatura gratuita: non c'e' niente da fatturare" }); continue;
+      // si puo' archiviare: non c'e' niente da sistemare, e' gratis per davvero
+      escluse.push({ ...riga, motivo: "campionatura gratuita: non c'e' niente da fatturare", archiviabile: true });
+      continue;
     }
     if (a.persona) {
       if (!/^[A-Z0-9]{16}$/.test(String(a.cf || "").toUpperCase())) {
@@ -359,8 +370,9 @@ export function selezionaFatture(d) {
   }
   pronte.sort((x, y) => (x.data === y.data ? Number(x.ddt) - Number(y.ddt) : x.data < y.data ? -1 : 1));
   escluse.sort((x, y) => Number(x.ddt) - Number(y.ddt));
+  archiviati.sort((x, y) => Number(y.ddt) - Number(x.ddt));
   const usati = d.fatte.map((f) => Number(f.numero)).filter((x) => x > 0);
-  return { pronte, escluse, gia, prossimoNumero: usati.length ? Math.max(...usati) + 1 : 1653 };
+  return { pronte, escluse, gia, archiviati, prossimoNumero: usati.length ? Math.max(...usati) + 1 : 1653 };
 }
 
 // UNO ZIP SCRITTO A MANO, senza librerie: sono file piccoli e si mettono

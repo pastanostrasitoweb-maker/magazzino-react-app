@@ -4463,7 +4463,7 @@ function DettaglioSolaLettura({ order, assignments, lots }) {
 // Il numero di partenza NON si digita a caso: lo propone il registro delle
 // fatture gia' generate (ultimo emesso + 1). Un numero doppio o un buco nella
 // serie e' un problema fiscale, non un fastidio.
-function PannelloFatture({ onChiudi }) {
+function PannelloFatture({ onChiudi, operatore = "" }) {
   const [stato, setStato] = useState("carico");
   const [errore, setErrore] = useState("");
   const [sel, setSel] = useState(null);
@@ -4489,7 +4489,7 @@ function PannelloFatture({ onChiudi }) {
             if ((data || []).length < 1000) return out;
           }
         };
-        const [ordini, ov, gest, righe, metodi, fatte, recapiti, abbuoni] = await Promise.all([
+        const [ordini, ov, gest, righe, metodi, fatte, recapiti, abbuoni, chiusi] = await Promise.all([
           tutte("ordini", "id_ordine,ddt_numero,cliente,id_cliente,totale_imponibile,campionatura,data_preparato,data_ordine",
             (q) => q.eq("archiviato", true)),
           tutte("clienti_override", "ragione_sociale,partita_iva,citta,provincia,cap,sede_legale,codice_univoco,pec,codice_cliente,persona_fisica,nome,cognome,nazione"),
@@ -4503,9 +4503,13 @@ function PannelloFatture({ onChiudi }) {
           // un credito aperto, chi fattura lo deve vedere prima di premere.
           tutte("abbuoni_promessi", "id,codice_cliente,importo,motivo,ddt_riferimento",
             (q) => q.eq("stato", "in attesa")),
+          // I DDT CHIUSI SENZA FATTURA. Una campionatura a zero non si fattura
+          // mai: restava per sempre fra le "Fuori, e perche'", e la lista
+          // cresceva di riga in riga senza che nessuno potesse toglierla.
+          tutte("ddt_chiusi_senza_fattura", "ddt_numero,motivo,chi,quando"),
         ]);
         if (!vivo) return;
-        const r = selezionaFatture({ ordini, ov, gest, righe, metodi, fatte, recapiti });
+        const r = selezionaFatture({ ordini, ov, gest, righe, metodi, fatte, recapiti, chiusi });
         r.abbuoniAperti = abbuoni || [];
         setSel(r);
         setDaNumero(String(r.prossimoNumero));
@@ -4591,7 +4595,41 @@ function PannelloFatture({ onChiudi }) {
   if (stato === "errore") return <div style={{ padding: 24, color: "#b91c1c" }}>Non riesco a leggere: {errore}</div>;
 
   const lordo = sel.pronte.reduce((s, p) => s + p.imponibile, 0);
-  const elenco = mostra === "pronte" ? sel.pronte : mostra === "escluse" ? sel.escluse : sel.gia;
+  const elenco =
+    mostra === "pronte" ? sel.pronte
+    : mostra === "escluse" ? sel.escluse
+    : mostra === "archiviati" ? (sel.archiviati || [])
+    : sel.gia;
+
+  // ARCHIVIA UNA CAMPIONATURA GRATUITA. Non si fattura e non si sistema: si
+  // chiude, dicendo chi e' stato. Torna indietro dal suo elenco.
+  const archiviaSenzaFattura = async (riga, indietro = false) => {
+    const azione = indietro ? "riapriDdtSenzaFattura" : "chiudiDdtSenzaFattura";
+    const res = await callSheetsApi({
+      action: azione,
+      payload: JSON.stringify({ ddt: riga.ddt, motivo: riga.motivo || "", chi: operatore }),
+    });
+    if (!res || !res.success) {
+      alert((indietro ? "Non sono riuscito a rimetterla in lista: " : "Non sono riuscito ad archiviarla: ") + ((res && res.error) || "errore"));
+      return;
+    }
+    setSel((prev) => {
+      if (!prev) return prev;
+      if (indietro) {
+        const r = (prev.archiviati || []).find((x) => x.ddt === riga.ddt);
+        return {
+          ...prev,
+          archiviati: (prev.archiviati || []).filter((x) => x.ddt !== riga.ddt),
+          escluse: [...prev.escluse, { ...(r || riga), archiviabile: true }].sort((x, y) => Number(x.ddt) - Number(y.ddt)),
+        };
+      }
+      return {
+        ...prev,
+        escluse: prev.escluse.filter((x) => x.ddt !== riga.ddt),
+        archiviati: [{ ...riga, chi: operatore, quando: new Date().toISOString() }, ...(prev.archiviati || [])],
+      };
+    });
+  };
 
   if (fatto) {
     return (
@@ -4662,6 +4700,7 @@ function PannelloFatture({ onChiudi }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         {[["pronte", `Da fatturare (${sel.pronte.length})`],
           ["escluse", `Fuori, e perche' (${sel.escluse.length})`],
+          ["archiviati", `Archiviate senza fattura (${(sel.archiviati || []).length})`],
           ["gia", `Gia' fatturate (${sel.gia.length})`]].map(([id, testo]) => (
           <button key={id} style={btnStyle(mostra === id ? "primary" : "outline")} onClick={() => setMostra(id)}>{testo}</button>
         ))}
@@ -4688,7 +4727,32 @@ function PannelloFatture({ onChiudi }) {
                     : (Number(r.imponibile) || Number(r.totale) || 0).toFixed(2) + " €"}
                 </td>
                 {mostra === "escluse" ? (
-                  <td style={{ padding: "7px 10px", color: "#b45309", maxWidth: 300 }}>{r.motivo}</td>
+                  <td style={{ padding: "7px 10px", color: "#b45309", maxWidth: 300 }}>
+                    {r.motivo}
+                    {r.archiviabile ? (
+                      <button
+                        style={{ ...btnStyle("outline"), marginLeft: 8, padding: "3px 8px", fontSize: 12 }}
+                        onClick={() => archiviaSenzaFattura(r)}
+                        title="Non c'e' niente da fatturare: la tolgo dalla lista e resta scritto chi l'ha chiusa"
+                      >
+                        <Archive size={13} /> Archivia
+                      </button>
+                    ) : null}
+                  </td>
+                ) : null}
+                {mostra === "archiviati" ? (
+                  <td style={{ padding: "7px 10px", color: "#64748b", maxWidth: 320 }}>
+                    {r.motivo}
+                    {r.chi ? ` · ${r.chi}` : ""}
+                    {r.quando ? ` · ${String(r.quando).slice(0, 10)}` : ""}
+                    <button
+                      style={{ ...btnStyle("outline"), marginLeft: 8, padding: "3px 8px", fontSize: 12 }}
+                      onClick={() => archiviaSenzaFattura(r, true)}
+                      title="Rimettila fra quelle da guardare"
+                    >
+                      <RotateCcw size={13} /> Rimetti in lista
+                    </button>
+                  </td>
                 ) : null}
               </tr>
             ))}
@@ -14155,7 +14219,7 @@ ${isConferma
               onClose={() => setPannelloFatture(false)}
               maxWidth={860}
             >
-              {pannelloFatture ? <PannelloFatture onChiudi={() => setPannelloFatture(false)} /> : null}
+              {pannelloFatture ? <PannelloFatture onChiudi={() => setPannelloFatture(false)} operatore={authUser?.etichetta || authUser?.username || ""} /> : null}
             </Modal>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
