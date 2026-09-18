@@ -1488,6 +1488,13 @@ async function createOrder(params) {
       ...(p.scontoClientePct === undefined || p.scontoClientePct === null
         ? {}
         : { sconto_cliente_pct: Number(p.scontoClientePct) }),
+      // CAMPIONATURA: merce mandata a far provare, non venduta. Se non si
+      // segna qui entra nel fatturato e tira giu' la media degli ordini
+      // (LAFARGES risultava con 49,92 euro comprati senza aver pagato niente).
+      // Il kit campionatura dell'app agenti arriva marcato nella nota, perche'
+      // su ordini_agenti non si puo' aggiungere una colonna: il database e' in
+      // sola lettura per le modifiche di struttura.
+      ...(p.campionatura ? { campionatura: true } : {}),
     })
     .select()
     .maybeSingle();
@@ -3227,12 +3234,18 @@ async function spostaOrdineInOrdini(params) {
     );
   }
 
+  // La campionatura si riconosce dalla nota scritta dall'app agenti. E' un
+  // canale scomodo ma e' l'unico che arriva fin qui senza perdersi, e la nota
+  // la scrive il codice, non l'agente a mano (data/campionatura.js).
+  const eCampionatura = /CAMPIONATURA/i.test(String(src.note || ""));
+
   const created = await createOrder({
     payload: JSON.stringify({
       id: idOrdine,
       customer: nomeCliente,
       clienteId: src.cliente_id || "",
       notes: noteParts.join(" · "),
+      campionatura: eCampionatura,
       date: src.creato_il || null,
       status: "Da preparare",
       workStatus: "Nuovo",
