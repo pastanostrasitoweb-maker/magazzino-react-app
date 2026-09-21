@@ -1221,6 +1221,18 @@ async function updateOrder(params) {
     .select()
     .maybeSingle();
   if (error) return failure(error);
+  // E anche qui la riga si pretende: senza, il tasto "Spedito" diceva fatto su
+  // un ordine che il database non aveva toccato (stesso silenzio di
+  // archiveOrder: 200 con lista vuota).
+  if (!data) {
+    return {
+      success: false,
+      error:
+        "Il database non ha trovato l'ordine " + idOrdine + ". " +
+        "Puo' essere stato archiviato o modificato da un'altra postazione: " +
+        "premi Aggiorna e guarda com'e' messo adesso.",
+    };
+  }
   // Se e' cambiato lo stato (es. Spedito / Preparato / Fermo), avvisa l'app agenti.
   if (patch.stato) await notificaStatoAgenti(idOrdine, patch.stato);
   return { success: true, ordine: data };
@@ -1253,10 +1265,16 @@ async function markOrderViewed(params) {
 async function archiveOrder(params) {
   const idOrdine = params.orderId || params.idOrdine;
   if (!idOrdine) return { success: false, error: "orderId mancante" };
-  const { error } = await supabase
+  // SI PRETENDE LA RIGA INDIETRO. Un PATCH che non trova niente da aggiornare
+  // risponde 200 con una lista vuota: nessun errore, e da qui usciva
+  // "success: true" su un ordine che nessuno aveva archiviato. L'app lo faceva
+  // sparire dalla lista e il giorno dopo tornava su (Luca 21/09/2026: "li ho
+  // archiviati verso l'ora di pranzo, adesso sono di nuovo in Pronti").
+  const { data, error } = await supabase
     .from("ordini")
     .update({ archiviato: true })
-    .eq("id_ordine", String(idOrdine));
+    .eq("id_ordine", String(idOrdine))
+    .select("id_ordine, archiviato, ddt_numero, stato");
   if (error) {
     // IL PREZZO SI SEGNALA E SI DECIDE (Luca 31/08/2026). Il guardiano
     // risponde con un messaggio riconoscibile: qui si passa il codice
@@ -1271,7 +1289,17 @@ async function archiveOrder(params) {
     }
     return failure(error);
   }
-  return { success: true };
+  const riga = Array.isArray(data) ? data[0] : data;
+  if (!riga) {
+    return {
+      success: false,
+      error:
+        "Il database non ha trovato l'ordine " + idOrdine + " da archiviare. " +
+        "Puo' essere stato archiviato o modificato da un'altra postazione: " +
+        "premi Aggiorna e guarda com'e' messo adesso.",
+    };
+  }
+  return { success: true, ordine: riga, ddtNumero: String(riga.ddt_numero || "").trim() };
 }
 
 // UNA CAMPIONATURA GRATUITA SI CHIUDE, NON SI FATTURA (Luca 18/09/2026).

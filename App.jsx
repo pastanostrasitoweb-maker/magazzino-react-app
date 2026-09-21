@@ -8656,9 +8656,12 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
         setOrders(previousOrders);
         alert("Errore nel segnare spedito: " + ((result && result.error) || "sconosciuto"));
       } else {
-        // Il numero DDT lo stacca il database nello stesso momento in cui
-        // scrive "Spedito" (trigger, sql/ddt_alla_spedizione.sql). Qui lo si
-        // rilegge per mostrarlo subito, senza aspettare un refresh.
+        // IL NUMERO DDT NON NASCE QUI. Il trigger ddt_alla_spedizione scatta
+        // sull'ARCHIVIAZIONE (BEFORE UPDATE OF archiviato), non sul passaggio a
+        // "Spedito": provato il 21/09/2026 facendo passare un ordine vero per i
+        // tre stati dentro una transazione annullata. Se un numero torna, e'
+        // perche' l'ordine ce l'aveva gia' (tirato indietro dopo l'archivio):
+        // si rilegge per non perderlo a schermo.
         const numero = String(result.ordine?.ddt_numero || result.ordine?.DDT_Numero || "").trim();
         if (numero) {
           setOrders((prev) =>
@@ -9278,11 +9281,19 @@ ${isConferma
       // e va riportato per intero perche' dice anche come si sistema
       for (const r of result.rifiutati || []) fuori.push(r.motivo);
       if (quanti === 0) {
+        // Se non c'e' niente qui ma ci sono ordini gia' spediti, si dice dove
+        // sono: questo tasto guarda solo i Preparato, e chi e' passato per
+        // "Spedito" si chiude dalla sua sezione.
+        const altrove = speditiOrders.length
+          ? `\n\nCi sono pero' ${speditiOrders.length} ordini gia' segnati SPEDITI: ` +
+            "quelli si archiviano dalla sezione Spediti, col tasto Archivia spediti."
+          : "";
         alert(
           "Non ho archiviato niente." +
             (fuori.length
               ? "\n\nRestano indietro:\n- " + fuori.join("\n- ") + "\n\nSistema quelli e riprova."
-              : "\n\nNon c'era nessun ordine preparato da archiviare.")
+              : "\n\nNon c'era nessun ordine preparato da archiviare.") +
+            altrove
         );
         return;
       }
@@ -9298,8 +9309,29 @@ ${isConferma
     }
   };
 
-  const archivePreparedOrder = async (orderId) => {
-    if (!orderId) return;
+  // Archiviato davvero: si segna a schermo, e col numero di DDT che il database
+  // ha staccato in quel momento (nasce qui, non quando si preme Spedito).
+  const segnaArchiviato = (orderId, risposta) => {
+    const numero = String(risposta?.ddtNumero || risposta?.ordine?.ddt_numero || "").trim();
+    setOrders((prev) =>
+      prev.map((order) =>
+        String(order.id) === String(orderId)
+          ? { ...order, archived: true, ...(numero ? { ddtNumero: numero } : null) }
+          : order
+      )
+    );
+  };
+
+  // Un ordine solo. Con `chiedi: false` non apre finestre e torna l'esito:
+  // cosi' lo stesso identico percorso (stessi cancelli, stesso errore del
+  // database) serve anche l'archiviazione in blocco degli Spediti, invece di
+  // averne due che col tempo si scostano.
+  const archivePreparedOrder = async (orderId, { chiedi = true } = {}) => {
+    if (!orderId) return { ok: false, motivo: "ordine mancante" };
+    const esito = (ok, motivo) => {
+      if (chiedi && !ok && motivo) alert(motivo);
+      return { ok, motivo };
+    };
 
     // IL CANCELLO. Archiviare apre la partita a Cashflow, e la scadenza la
     // calcola il metodo di pagamento: senza un metodo leggibile nascerebbe una
@@ -9312,28 +9344,29 @@ ${isConferma
       orders.find((o) => String(o.id) === String(orderId));
     if (ord && pagamentoScoperto(ord)) {
       const attuale = metodoEffettivo(ord.metodoPagamento, metodoDelCliente(ord));
-      alert(
+      return esito(
+        false,
         (attuale
           ? `Il metodo di pagamento e' "${attuale}", e non dice quando si incassa.`
           : "Questo ordine non ha un metodo di pagamento.") +
           "\n\nArchiviando adesso, la scadenza a Cashflow sarebbe una stima." +
           "\nScegli il metodo dal bollino 💸 sull'ordine, poi archivia."
       );
-      return;
     }
 
     if (colliDaConfermare(ord)) {
-      alert(
+      return esito(
+        false,
         "I COLLI non sono confermati.\n\n" +
           `Il numero che si vede (${Number(ord?.colliSuggested ?? ord?.colli ?? 0)}) e' la somma delle ` +
           "quantita' delle righe, non un conteggio delle scatole, e finisce in bolla.\n\n" +
           "Scrivi i colli nel campo sull'ordine e premi Salva, poi archivia."
       );
-      return;
     }
 
-    const conferma = window.confirm("Vuoi archiviare questo ordine preparato?");
-    if (!conferma) return;
+    if (chiedi && !window.confirm("Vuoi archiviare questo ordine preparato?")) {
+      return { ok: false, motivo: "" };
+    }
 
     try {
       const result = await callSheetsApi({
@@ -9346,49 +9379,87 @@ ${isConferma
       // guardiano non e' un muro: dice cosa non torna, e chi guarda decide.
       // L'ok resta scritto col nome di chi l'ha dato (v_prezzi_autorizzati).
       if (result && result.code === "PREZZO_DA_AUTORIZZARE") {
+        // In blocco NON si autorizza: dare l'ok a un prezzo diverso da quello
+        // dell'agente e' una decisione su quell'ordine, e resta scritta col
+        // nome di chi la prende. Qui si lascia indietro e si dice quale.
+        if (!chiedi) {
+          return esito(false, "prezzi diversi da quelli dell'agente, da autorizzare uno per uno");
+        }
         const ok = window.confirm(
           "PREZZI DIVERSI DA QUELLI CONCORDATI DALL'AGENTE\n\n" +
             String(result.error || "") +
             "\n\nOK = va bene cosi', archivia (resta scritto che l'hai deciso tu)." +
             "\nAnnulla = non archivio, prima sistemo i prezzi."
         );
-        if (!ok) return;
+        if (!ok) return { ok: false, motivo: "" };
         const aut = await callSheetsApi({
           action: "autorizzaPrezzo",
           payload: JSON.stringify({ orderId, operatore: authUser?.username || "" }),
         });
         if (!aut || !aut.success) {
-          alert("Non sono riuscito a registrare l'ok: " + ((aut && aut.error) || "errore"));
-          return;
+          return esito(false, "Non sono riuscito a registrare l'ok: " + ((aut && aut.error) || "errore"));
         }
         const secondo = await callSheetsApi({ action: "archiveOrder", orderId });
         if (!secondo || !secondo.success) {
-          alert("Ok registrato, ma l'archiviazione non e' riuscita: " + ((secondo && secondo.error) || "errore"));
-          return;
+          return esito(false, "Ok registrato, ma l'archiviazione non e' riuscita: " + ((secondo && secondo.error) || "errore"));
         }
-        setOrders((prev) =>
-          prev.map((order) =>
-            String(order.id) === String(orderId) ? { ...order, archived: true } : order
-          )
-        );
-        return;
+        segnaArchiviato(orderId, secondo);
+        return { ok: true, motivo: "" };
       }
       if (!result || !result.success) {
-        alert(
+        return esito(
+          false,
           "Errore nell'archiviazione ordine: " +
             ((result && result.error) || "errore sconosciuto")
         );
-        return;
       }
 
-      setOrders((prev) =>
-        prev.map((order) =>
-          String(order.id) === String(orderId) ? { ...order, archived: true } : order
-        )
-      );
+      segnaArchiviato(orderId, result);
+      return { ok: true, motivo: "" };
     } catch (error) {
-      alert("Errore di collegamento con Google Sheet: " + String(error));
+      return esito(false, "Errore di collegamento con Google Sheet: " + String(error));
     }
+  };
+
+
+  // TUTTI GLI SPEDITI IN UNA VOLTA (Luca 21/09/2026: "poi da Spediti premiamo
+  // Archiviati... funzionano tutti?"). Il tasto "Archivia preparati" dei Pronti
+  // guarda solo gli ordini in stato Preparato: chi e' gia' passato per il tasto
+  // Spedito esce da quella lista e quel tasto non lo vede piu', quindi a fine
+  // giornata restavano da chiudere uno per uno. Qui si chiudono in blocco,
+  // passando per lo stesso identico percorso del tasto singolo: stessi cancelli,
+  // stessi errori del database, e chi resta fuori viene detto per nome.
+  const archiveAllShippedOrders = async () => {
+    const lista = speditiOrders;
+    if (!lista.length) {
+      alert("Non c'e' nessun ordine spedito da archiviare.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Archivio tutti gli ordini spediti (${lista.length})?\n\n` +
+          "L'archiviazione e' il punto di non ritorno: stacca il numero di DDT, " +
+          "apre la partita a Cashflow e da li' l'ordine non si modifica piu'.\n\n" +
+          "Quelli che hanno qualcosa da sistemare restano dove sono e te li elenco."
+      )
+    ) {
+      return;
+    }
+
+    const fatti = [];
+    const restano = [];
+    for (const o of lista) {
+      const r = await archivePreparedOrder(o.id, { chiedi: false });
+      if (r && r.ok) fatti.push(o.customer || o.id);
+      else restano.push(`${o.customer || o.id}: ${(r && r.motivo) || "non archiviato"}`);
+    }
+
+    alert(
+      (fatti.length ? `Archiviati ${fatti.length} ordini.` : "Non ho archiviato niente.") +
+        (restano.length
+          ? `\n\nRestano in Spediti (${restano.length}):\n- ` + restano.join("\n- ")
+          : "")
+    );
   };
 
   const togglePreparedDetails = (orderId) => {
@@ -13562,7 +13633,7 @@ ${isConferma
                           {order.computedStatus !== "Spedito" ? (
                             <button
                               style={btnStyle("success")}
-                              onClick={() => markOrderShipped(order)}
+                              onClick={() => azioneUnica("spedito-" + order.id, () => markOrderShipped(order))}
                               title={order.courier ? `Corriere: ${order.courier}` : order.transport?.consigliato ? `Corriere consigliato: ${order.transport.consigliato.corriere}` : "Nessun corriere selezionato"}
                             >
                               🚚 Spedito
@@ -13584,7 +13655,10 @@ ${isConferma
                             📄 {order.ddtNumero ? "Ristampa DDT" : "Genera DDT"}
                           </button>
 
-                          <button style={btnStyle("primary")} onClick={() => archivePreparedOrder(order.id)}>
+                          <button
+                            style={btnStyle("primary")}
+                            onClick={() => azioneUnica("archivia-" + order.id, () => archivePreparedOrder(order.id))}
+                          >
                             <Archive size={16} /> Archivia
                           </button>
                         </div>
@@ -13826,11 +13900,31 @@ ${isConferma
 
         {page === "spediti" && (
           <div style={{ ...cardStyle(), padding: 20 }}>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 22, fontWeight: 800 }}>🚚 Ordini spediti</div>
-              <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
-                Gli ordini usciti, ciascuno col suo corriere. Restano qui finché non premi Archivia.
+            <div
+              style={{
+                marginBottom: 16,
+                display: "flex",
+                gap: 12,
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>🚚 Ordini spediti</div>
+                <div style={{ marginTop: 4, color: "#617086", fontSize: 14 }}>
+                  Gli ordini usciti, ciascuno col suo corriere. Restano qui finché non premi Archivia.
+                </div>
               </div>
+              {speditiOrders.length > 0 && !isProduzione ? (
+                <button
+                  style={btnStyle("primary")}
+                  onClick={() => azioneUnica("archivia-spediti", archiveAllShippedOrders)}
+                  title="Archivia in una volta tutti gli ordini di questa lista"
+                >
+                  <Archive size={18} /> Archivia spediti ({speditiOrders.length})
+                </button>
+              ) : null}
             </div>
 
             {speditiOrders.length > 0 ? (
@@ -13936,7 +14030,10 @@ ${isConferma
                       >
                         📄 {order.ddtNumero ? "Ristampa DDT" : "Genera DDT"}
                       </button>
-                      <button style={btnStyle("primary")} onClick={() => archivePreparedOrder(order.id)}>
+                      <button
+                        style={btnStyle("primary")}
+                        onClick={() => azioneUnica("archivia-" + order.id, () => archivePreparedOrder(order.id))}
+                      >
                         <Archive size={16} /> Archivia
                       </button>
                     </div>
