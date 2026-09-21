@@ -1675,6 +1675,17 @@ async function createOrder(params) {
         : {
             prezzo_unitario: Number(prezzo),
             sconto_pct: Number(sconto || 0),
+            // IL SECONDO SCONTO SI SCRIVE (21/09/2026).
+            // Qui c'era solo sconto_pct, e il secondo sconto si perdeva
+            // nell'insert. Il ponte agenti lo calcola e lo passa
+            // (spostaOrdineInOrdini manda sconto2Pct), ma la riga nasceva
+            // senza: un omaggio al 100%, che sta TUTTO nel secondo sconto,
+            // atterrava a listino pieno. Le campionature di Ivan del 18 e 19/09
+            // sono entrate a 154,68 euro invece che a zero, e in tutto sono
+            // 475,58 euro addebitati di troppo su 11 ordini. Lo sconto sta
+            // nella sua colonna (regola Luca 11/08/2026): se non la si scrive,
+            // la regola non serve a niente.
+            sconto2_pct: Number(line.sconto2Pct ?? line.sconto2_pct ?? 0),
             natura_iva: line.naturaIva ?? line.natura_iva ?? null,
             prezzo_origine: origine || "manuale",
           }),
