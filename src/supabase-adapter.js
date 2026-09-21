@@ -791,7 +791,13 @@ const METODI_PAGAMENTO_CANONICI = new Set([
 const PAGAMENTI_ALLINEATI_DAL_ADAPTER = "2026-08-03";
 const COLLI_CONFERMATI_DAL_ADAPTER = "2026-08-17";
 
-async function archivePreparedOrders() {
+// QUANDO LO CHIEDE UNA PERSONA, LE GUARDIE DELL'AUTOMATISMO NON VALGONO.
+// `aMano` = qualcuno ha premuto "Archivia preparati". Allora passano anche gli
+// ordini col numero di DDT gia' staccato e quelli preparati oggi: erano esclusi
+// per proteggere chi tira indietro un ordine di notte (21/08/2026), non per
+// impedire di chiudere la giornata. Il cancello del pagamento resta in piedi
+// anche qui: quello riguarda i soldi, non l'orario.
+async function archivePreparedOrders({ aMano = false } = {}) {
   // REGOLA: gli ordini preparati NON si archiviano subito. Si archiviano solo
   // alla prima esecuzione del bulk-load successiva alla mezzanotte locale: in
   // pratica, oggi gli ordini preparati restano visibili nella tab "Preparati";
@@ -801,7 +807,7 @@ async function archivePreparedOrders() {
   midnight.setHours(0, 0, 0, 0);
   const midnightIso = midnight.toISOString();
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("ordini")
     // id_cliente DEVE esserci: senza, il ripiego sul metodo dell'anagrafica
     // era morto (codiciCandidati sempre vuoto) e un ordine col metodo grezzo
@@ -809,8 +815,10 @@ async function archivePreparedOrders() {
     // "TRANSFER" sull'ordine, "Bonifico 30 gg fine mese" sul cliente, e il
     // cancello la segnalava lo stesso.
     .select("id_ordine, id_cliente, stato, archiviato, data_preparato, data_ordine, metodo_pagamento, campionatura, totale_imponibile, colli, ddt_numero, prezzo_ok_da")
-    .or("archiviato.is.null,archiviato.eq.false")
-    .lt("data_preparato", midnightIso);
+    .or("archiviato.is.null,archiviato.eq.false");
+  // l'automatismo guarda solo il lavoro di ieri; a mano si chiude anche oggi
+  if (!aMano) query = query.lt("data_preparato", midnightIso);
+  const { data, error } = await query;
   if (error) return failure(error);
 
   // Solo i PREPARATO si auto-archiviano a mezzanotte. Gli SPEDITI restano
@@ -832,7 +840,7 @@ async function archivePreparedOrders() {
   const candidati = (data || []).filter(
     (r) =>
       String(r.stato || "").trim().toLowerCase() === "preparato" &&
-      String(r.ddt_numero || "").trim() === ""
+      (aMano || String(r.ddt_numero || "").trim() === "")
   );
 
   // IL CANCELLO DEL PAGAMENTO, e sta QUI e non solo sul bottone.
@@ -958,16 +966,48 @@ async function archivePreparedOrders() {
     );
   }
 
+  // CHI CHIAMA DEVE SAPERE COS'E' RIMASTO INDIETRO. Prima tornava solo
+  // "success": l'app dava per archiviato tutto quello che aveva in lista, anche
+  // quando il database non aveva toccato niente, e al primo ricaricamento gli
+  // ordini ricomparivano (Luca 21/09/2026: "li ho archiviati verso l'ora di
+  // pranzo, adesso sono di nuovo in Pronti").
+  const restano = {
+    scopertiPagamento: scoperti.length,
+    senzaColli: senzaColli.length,
+    prezzoDaAutorizzare: prezzoTradito.length,
+    candidati: candidati.length,
+  };
   if (toArchive.length === 0) {
-    return { success: true, archiviati: 0, scopertiPagamento: scoperti.length };
+    return { success: true, archiviati: 0, idArchiviati: [], ...restano };
   }
 
+  // UN ORDINE MALATO NON FERMA GLI ALTRI (Luca 21/09/2026). In blocco e' una
+  // UPDATE sola: se il database rifiuta un ordine (una riga senza aliquota IVA,
+  // per esempio) fallisce tutto il gruppo, e dodici ordini sani restano in
+  // Pronti per colpa del tredicesimo senza che nessuno capisca perche'. Si
+  // prova prima in blocco, che e' una chiamata sola e nel caso normale basta;
+  // se il blocco viene rifiutato si ripiega uno per uno, cosi' passano i sani
+  // e si sa il nome di chi non passa.
   const up = await supabase
     .from("ordini")
     .update({ archiviato: true })
     .in("id_ordine", toArchive);
-  if (up.error) return failure(up.error);
-  return { success: true, archiviati: toArchive.length, scopertiPagamento: scoperti.length };
+  if (!up.error) {
+    return { success: true, archiviati: toArchive.length, idArchiviati: toArchive, ...restano };
+  }
+
+  const presi = [];
+  const rifiutati = [];
+  for (const id of toArchive) {
+    const r = await supabase.from("ordini").update({ archiviato: true }).eq("id_ordine", id);
+    if (r.error) rifiutati.push({ id, motivo: String(r.error.message || "").split("\n")[0].slice(0, 200) });
+    else presi.push(id);
+  }
+  if (!presi.length) return failure(up.error);
+  return {
+    success: true, archiviati: presi.length, idArchiviati: presi,
+    rifiutati, ...restano,
+  };
 }
 
 const OUTSIDE_STOCK_LOT = "FUORI_MAGAZZINO";
@@ -3864,8 +3904,9 @@ export async function callSheetsApi(params = {}) {
       case "listAppUsers":
         return await listAppUsers();
       case "archivePreparedOrders":
-      case "archiveAllPreparedOrders":
         return await archivePreparedOrders();
+      case "archiveAllPreparedOrders":
+        return await archivePreparedOrders({ aMano: true });
       case "assignLot":
         return await assignLot(params);
       case "unarchiveOrder":

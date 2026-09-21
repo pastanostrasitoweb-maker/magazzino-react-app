@@ -9254,13 +9254,43 @@ ${isConferma
         return;
       }
 
-      setOrders((prev) =>
-        prev.map((order) =>
-          String(order.status || "").trim().toLowerCase() === "preparato"
-            ? { ...order, archived: true }
-            : order
-        )
-      );
+      // SI SEGNA ARCHIVIATO SOLO QUELLO CHE LO E' DAVVERO (Luca 21/09/2026:
+      // "li ho archiviati verso l'ora di pranzo, adesso sono di nuovo in
+      // Pronti"). Prima qui si marcavano archiviati TUTTI i preparati che
+      // c'erano a schermo, senza guardare quanti ne avesse presi il database:
+      // sparivano dalla lista, la pagina passava all'Archivio, e al primo
+      // ricaricamento tornavano su come se niente fosse. Adesso comanda
+      // l'elenco che torna dal database.
+      const presi = new Set((result.idArchiviati || []).map(String));
+      const quanti = Number(result.archiviati || 0);
+      if (quanti > 0) {
+        setOrders((prev) =>
+          prev.map((order) => (presi.has(String(order.id)) ? { ...order, archived: true } : order))
+        );
+      }
+
+      // e si dice com'e' andata, invece di lasciarlo capire dalla lista
+      const fuori = [];
+      if (result.scopertiPagamento) fuori.push(`${result.scopertiPagamento} senza metodo di pagamento leggibile`);
+      if (result.senzaColli) fuori.push(`${result.senzaColli} con i colli da confermare`);
+      if (result.prezzoDaAutorizzare) fuori.push(`${result.prezzoDaAutorizzare} con prezzi diversi da quelli dell'agente`);
+      // quelli che il database ha rifiutato uno per uno: il motivo lo dice lui,
+      // e va riportato per intero perche' dice anche come si sistema
+      for (const r of result.rifiutati || []) fuori.push(r.motivo);
+      if (quanti === 0) {
+        alert(
+          "Non ho archiviato niente." +
+            (fuori.length
+              ? "\n\nRestano indietro:\n- " + fuori.join("\n- ") + "\n\nSistema quelli e riprova."
+              : "\n\nNon c'era nessun ordine preparato da archiviare.")
+        );
+        return;
+      }
+      if (fuori.length) {
+        alert(
+          `Archiviati ${quanti} ordini.\n\nRestano in Pronti:\n- ` + fuori.join("\n- ")
+        );
+      }
 
       setPage("archivio");
     } catch (error) {
