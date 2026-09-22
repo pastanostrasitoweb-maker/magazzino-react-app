@@ -403,21 +403,49 @@ async function ricalcolaImponibile(idOrdine) {
                               r.sconto2_pct, r.sconto3_pct),
       0
     );
-    await supabase
+    // SI GUARDA SE LA SCRITTURA E' ANDATA. Prima l'esito non si leggeva
+    // nemmeno: un rifiuto (permessi, trigger, rete) lasciava la testata col
+    // valore vecchio e nessuno lo sapeva. E' l'importo che va a Cashflow.
+    const { error: errUp } = await supabase
       .from("ordini")
       .update({ totale_imponibile: Math.round(tot * 100) / 100 })
       .eq("id_ordine", String(idOrdine));
-  } catch (_) {}
+    if (errUp) {
+      console.warn(
+        `Imponibile NON aggiornato sull'ordine ${idOrdine}: ${errUp.message}. ` +
+          "La testata resta al valore precedente."
+      );
+    }
+  } catch (e) {
+    console.warn(`Imponibile non ricalcolato sull'ordine ${idOrdine}: ${String(e)}`);
+  }
 }
 
 // Imponibile di un ordine dalle sue righe valorizzate.
+// L'IMPONIBILE DI TESTATA SI CALCOLA COME LE RIGHE (22/09/2026).
+// Qui c'era un conto suo che applicava SOLO sconto_pct e ignorava il secondo e
+// il terzo sconto, mentre nettoRiga (usata dappertutto) li applica tutti e tre.
+// Conseguenza: un omaggio o una campionatura, che stanno TUTTI nel secondo
+// sconto, avevano le righe a zero e la testata a listino pieno. Gufetto rosso
+// portava 154,68 con cinque righe a zero, Grano Srls 23,88. Non e' solo un
+// numero brutto: `totale_imponibile = 0` e' la condizione per cui una
+// campionatura non si fattura e non chiede l'IVA, quindi la testata sbagliata
+// faceva emettere fattura su merce regalata e nascere una scadenza a Cashflow
+// che nessuno avrebbe pagato. Misurati il 22/09: sei ordini dal 01/08, 184,61
+// euro di troppo.
 function imponibileDaRighe(righe) {
-  const tot = (righe || []).reduce((s, r) => {
-    const q = Number(r.quantita_ordinata ?? r.qtyOrdered ?? 0);
-    const p = Number(r.prezzo_unitario ?? r.prezzoUnitario ?? 0);
-    const sc = Number(r.sconto_pct ?? r.scontoPct ?? 0);
-    return s + q * p * (1 - sc / 100);
-  }, 0);
+  const tot = (righe || []).reduce(
+    (s, r) =>
+      s +
+      nettoRiga(
+        r.quantita_ordinata ?? r.qtyOrdered,
+        r.prezzo_unitario ?? r.prezzoUnitario,
+        r.sconto_pct ?? r.scontoPct,
+        r.sconto2_pct ?? r.sconto2Pct,
+        r.sconto3_pct ?? r.sconto3Pct
+      ),
+    0
+  );
   return Math.round(tot * 100) / 100;
 }
 
@@ -837,10 +865,20 @@ async function archivePreparedOrders({ aMano = false } = {}) {
   // che ha gia': la numerazione non fa buchi.
   // La stessa guardia sta nel lavoro notturno del database
   // (archive_old_prepared_orders), che e' l'altra strada per cui passa.
+  // IL DDT STAMPATO NON E' UN ORDINE TIRATO INDIETRO (22/09/2026).
+  // Qui c'era `aMano || ddt_numero === ""`: il giro automatico saltava ogni
+  // ordine con un numero, credendo che l'avesse tirato indietro una persona.
+  // Ma il numero lo stacca `assegna_numero_ddt` quando si preme "Genera DDT",
+  // cioe' alla stampa della bolla, che nel flusso vero succede SEMPRE prima
+  // dell'archiviazione. Risultato: il giro automatico non archiviava piu'
+  // niente e la coda cresceva (22 ordini fermi, i piu' vecchi dal 04/09).
+  // Chi tira indietro un ordine lo rimette in "Da preparare", e il filtro qui
+  // sotto lo esclude gia'; e un ordine archiviato non si disarchivia piu',
+  // ci pensa il trigger spedito_non_torna_indietro. Stessa correzione nella
+  // funzione del database: sql/il_ddt_stampato_non_e_un_ordine_tirato_indietro.sql
+  // Restano in piedi gli altri cancelli: colli, pagamento, prezzo dell'agente.
   const candidati = (data || []).filter(
-    (r) =>
-      String(r.stato || "").trim().toLowerCase() === "preparato" &&
-      (aMano || String(r.ddt_numero || "").trim() === "")
+    (r) => String(r.stato || "").trim().toLowerCase() === "preparato"
   );
 
   // IL CANCELLO DEL PAGAMENTO, e sta QUI e non solo sul bottone.

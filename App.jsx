@@ -6640,10 +6640,25 @@ export default function App() {
       // I COLLI SONO SCATOLE: l'abbuono non e' una scatola. Contarlo faceva
       // partire in bolla un collo in piu' di quelli veri, ed e' il numero su
       // cui il corriere fattura.
-      const colliSuggested = lines.reduce(
-        (sum, line) => sum + (line.abbuono ? 0 : Number(line.qtyOrdered || 0)),
+      // UN POLYBOX E' UN COLLO, E DENTRO CI STA TUTTO (22/09/2026).
+      // La somma delle righe vale per gli ordini a CARTONI, dove ogni riga e'
+      // un cartone. Negli ordini in polybox le righe sono PEZZI e i colli sono
+      // le scatole isotermiche: su marie sas e VINTAGE la somma dava 92 contro
+      // i 2 polybox veri, e 92 e' il numero su cui il corriere fattura. Chi
+      // preparava lo correggeva a mano ogni volta.
+      const colliPolybox = lines.reduce(
+        (sum, line) =>
+          sum +
+          (/polybox/i.test(String(line.productName || "")) ? Number(line.qtyOrdered || 0) : 0),
         0
       );
+      const colliSuggested =
+        colliPolybox > 0
+          ? colliPolybox
+          : lines.reduce(
+              (sum, line) => sum + (line.abbuono ? 0 : Number(line.qtyOrdered || 0)),
+              0
+            );
       const colli =
         order.colliManual !== null && order.colliManual !== undefined
           ? Number(order.colliManual)
@@ -8798,6 +8813,27 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
       setOrders((prev) =>
         prev.map((o) => (String(o.id) === String(order.id) ? { ...o, ddtNumero: numero } : o))
       );
+      // I COLLI SI FISSANO QUANDO ESCE LA BOLLA (22/09/2026).
+      // `ordini.colli` e' solo la correzione a mano: lasciato vuoto vuol dire
+      // "usa il conto automatico", e il cancello dell'archiviazione leggeva
+      // quel vuoto come "colli mancanti". La conferma pero' la chiedeva solo il
+      // tasto Spedito, e il flusso vero passa di qui (preparato -> Genera DDT
+      // -> spedito -> archiviato): cosi' non la chiedeva nessuno e il 22/09
+      // c'erano tredici ordini fermi per una domanda mai fatta.
+      // Qui si scrive il numero che in quel momento e' GIA' stampato sulla
+      // bolla, quindi non cambia niente di quello che esce: lo rende solo
+      // esplicito. Resta modificabile dal campo Colli finche' si spedisce.
+      // Si rilegge dall'elenco calcolato invece di fidarsi dell'oggetto che
+      // arriva: il tasto "Genera DDT" sta in cinque punti diversi e non tutti
+      // passano per forza un ordine con i campi calcolati addosso.
+      const ordCalc =
+        (ordersWithComputed || []).find((o) => String(o.id) === String(order.id)) || order;
+      if (!ordCalc.colliIsManual) {
+        const daScrivere = Number(ordCalc.colliSuggested ?? 0);
+        if (Number.isFinite(daScrivere) && daScrivere > 0) {
+          await saveOrderColli(order.id, String(daScrivere));
+        }
+      }
     }
 
     // Dati destinatario: snapshot APP / GAMMA arricchito col nostro override.
