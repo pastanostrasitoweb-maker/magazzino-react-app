@@ -3293,6 +3293,39 @@ async function getSituazioneGestionale(params) {
 
 // Elenco degli ordini in arrivo dall'app agenti, ancora da controllare.
 // Se la tabella non esiste ancora, ritorna lista vuota (non rompe la UI).
+// ALLARME: ordini dell'app agenti che NON sono arrivati in magazzino.
+// Due casi diversi, stessa urgenza per chi guarda: il ponte si e' rotto
+// (id_ordine_magazzino_perso valorizzato, l'ordine magazzino non esiste o
+// non si sa piu' trovarlo) OPPURE l'import e' rimasto a meta' (stato
+// "Importato" da piu' di 10 minuti ma senza id_ordine_magazzino: nessuno lo
+// sta lavorando, e' semplicemente bloccato). Prima questi ordini sparivano
+// nel nulla finche' non li scopriva il cliente (Gerati/Porta Fiorentina,
+// Ivan/Piga, Ivan/Da Davidino, 22/09/2026). (Luca 22/09/2026)
+async function getOrdiniBloccatiVersoMagazzino() {
+  const dieciMinutiFa = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const [perso, bloccati] = await Promise.all([
+    supabase
+      .from("ordini_agenti")
+      .select("id_ordine,agente_id,agente_nome,cliente,totale,stato,creato_il,id_ordine_magazzino_perso,ponte_perso_il")
+      .not("id_ordine_magazzino_perso", "is", null)
+      .neq("stato", "Annullato"),
+    supabase
+      .from("ordini_agenti")
+      .select("id_ordine,agente_id,agente_nome,cliente,totale,stato,creato_il,importato_il")
+      .eq("stato", "Importato")
+      .is("id_ordine_magazzino", null)
+      .is("id_ordine_magazzino_perso", null)
+      .lt("importato_il", dieciMinutiFa),
+  ]);
+  if (perso.error && bloccati.error) return { success: true, ordini: [] };
+  const righe = [
+    ...(perso.data || []).map((o) => ({ ...o, motivo: "ponte_perso" })),
+    ...(bloccati.data || []).map((o) => ({ ...o, motivo: "import_bloccato" })),
+  ];
+  righe.sort((a, b) => String(b.ponte_perso_il || b.importato_il || "").localeCompare(String(a.ponte_perso_il || a.importato_il || "")));
+  return { success: true, ordini: righe };
+}
+
 async function getOrdiniDaApp() {
   const q = await supabase
     .from("ordini_agenti")
@@ -3442,6 +3475,27 @@ async function spostaOrdineInOrdini(params) {
   // Numero ordine operativo: nuovo, distinto dall'id staging.
   const idOrdine = `ORD-${Date.now()}`;
 
+  // L'IVA NON SI INVENTA (stessa regola di createOrder): il ponte agenti
+  // manda iva: null su ogni riga, quindi si legge dal catalogo qui, PRIMA
+  // di passare le righe alla funzione atomica (che si limita a scrivere,
+  // senza indovinare prezzi o aliquote).
+  const ivaDaCatalogo = {};
+  {
+    const idsCatalogo = [
+      ...new Set(
+        (src.righe || [])
+          .map((r) => String(r.id_prodotto_magazzino || ""))
+          .filter((id) => id && /^\d+$/.test(id))
+      ),
+    ];
+    if (idsCatalogo.length) {
+      const cat = await supabase.from("prodotti").select("id_prodotto, iva_pct").in("id_prodotto", idsCatalogo);
+      for (const r of cat.data || []) {
+        if (r.iva_pct !== null && r.iva_pct !== undefined) ivaDaCatalogo[String(r.id_prodotto)] = Number(r.iva_pct);
+      }
+    }
+  }
+
   // Righe: già appiattite dall'app agenti (cartoni + promo + polybox).
   const lines = (src.righe || []).map((r, i) => {
     const magId = r.id_prodotto_magazzino;
@@ -3480,6 +3534,7 @@ async function spostaOrdineInOrdini(params) {
       // promozione e' proprio il caso piu' frequente (Luca 11/08/2026).
       sconto2Pct: val.sconto2 || 0,
       prezzoOrigine: "app",
+      ivaPct: ivaDaCatalogo[productId] ?? null,
     };
   });
 
@@ -3519,53 +3574,43 @@ async function spostaOrdineInOrdini(params) {
     );
   }
 
-  const created = await createOrder({
-    payload: JSON.stringify({
-      id: idOrdine,
-      // Il filo verso l'ordine di partenza, protetto da indice unico.
-      idOrdineApp: String(idApp),
-      customer: nomeCliente,
-      clienteId: src.cliente_id || "",
-      notes: noteParts.join(" · "),
-      date: src.creato_il || null,
-      status: "Da preparare",
-      workStatus: "Nuovo",
-      // Il CAP di dove si consegna. Se la sede scelta non ce l'ha, si ripiega
-      // sull'anagrafica ma la nota lo dice: un CAP di ripiego su un altro
-      // comune e' peggio di nessun CAP, perche' nessuno lo mette in dubbio.
+  // CREA ORDINE + RIGHE + COLLEGAMENTO A ordini_agenti IN UN'UNICA
+  // TRANSAZIONE (22/09/2026). Prima erano tre scritture separate dal
+  // browser: se la terza (il collegamento) falliva per rete o timeout,
+  // l'ordine magazzino nasceva comunque, vero ma orfano, e nessuno lo
+  // sapeva (29 casi trovati il 22/09, il piu' vecchio del 17/07). Ora e'
+  // Postgres a decidere: o nasce collegato, o non nasce, mai a meta'.
+  // Vedi [[feedback-due-chiamate-in-fila-si-spezzano]].
+  const { data: rpcData, error: rpcError } = await supabase.rpc("importa_ordine_agente_atomico", {
+    p: {
+      id_ordine: idOrdine,
+      id_ordine_app_link: String(idApp),
+      cliente: nomeCliente,
+      id_cliente: src.cliente_id || "",
+      note: noteParts.join(" · "),
+      data_ordine: src.creato_il || null,
+      stato: "Da preparare",
+      stato_lavorazione: "Nuovo",
       cap: capConsegna || capAnagrafica,
-      // Il "listino" di un ordine agente e' il canale con cui l'app ha fatto
-      // i prezzi (farmaceutico / horeca / gdo): serve a sapere su che base
-      // e' stato valorizzato, senza confonderlo coi listini 1/8 del gestionale.
       listino: src.canale ? `app:${src.canale}` : "app",
-      // L'AGENTE che ha fatto l'ordine. Finiva solo dentro le note ("Da APP ·
-      // agente Ivan Silvestri · farmaceutico") e il campo restava vuoto: 33
-      // ordini importati senza agente, che poi qualcuno doveva rimettere a mano
-      // uno per uno. Se l'ordine arriva da un agente, l'agente e' quello.
-      // (Luca 05/08/2026)
-      agenteId: src.agente_id || "",
-      agenteNome: src.agente_nome || "",
-      // Come viaggia il gelo: la scelta l'ha fatta l'agente, il magazzino la
-      // eredita e non deve indovinarla dai nomi dei prodotti.
-      pedanaFrozen: src.pedana_frozen === true,
-      // DOVE va la merce, scelto dall'agente ordine per ordine (dal 24/08):
-      // senza questa riga la destinazione si perdeva all'import e il
-      // magazzino ripiegava sulla sede predefinita del cliente.
+      agente_id: src.agente_id || "",
+      agente_nome: src.agente_nome || "",
+      pedana_frozen: src.pedana_frozen === true,
       id_destinazione: src.id_destinazione || "",
-      lines,
-    }),
+      totale_imponibile: lines.length ? imponibileDaRighe(lines) : null,
+      righe: lines,
+    },
   });
+  const created = rpcError ? { success: false, error: rpcError.message } : rpcData;
   if (!created?.success) {
-    const msg = String(created?.error || "");
+    const msg = String(created?.error || rpcError?.message || "");
     // L'indice unico ha detto no: l'ordine magazzino per questo ordine app
     // esiste gia'. Non e' un errore da riprovare e la prenotazione NON si
     // restituisce, se no si riapre la porta al doppione.
     if (/ordini_id_ordine_app_unico|duplicate key|23505/i.test(msg)) {
-      // E GIA' CHE CI SIAMO, SI RICUCE IL FILO.
-      // Questo caso vuol dire che l'ordine magazzino c'e' ma l'app agenti non
-      // sa quale sia: e' la forma dei nove orfani trovati il 14/09, nati
-      // quando la conferma finale non passava. L'ordine si ritrova per
-      // id_ordine_app e il riferimento si riscrive, invece di lasciare l'app
+      // E GIA' CHE CI SIAMO, SI RICUCE IL FILO: l'ordine magazzino c'e' gia'
+      // (un tentativo precedente e' andato a buon fine), lo si ritrova per
+      // id_ordine_app e si riscrive il riferimento invece di lasciare l'app
       // agenti a dire "Importato" senza saper dire dove.
       const esistente = await supabase
         .from("ordini")
@@ -3581,8 +3626,11 @@ async function spostaOrdineInOrdini(params) {
       }
       return { success: false, error: "ordine già spostato" };
     }
+    // Qualunque altro errore (rete, permessi, riga non trovata): la
+    // transazione non ha lasciato nulla a meta', quindi la prenotazione si
+    // restituisce e l'ordine resta importabile di nuovo.
     await restituisciPrenotazione();
-    return { success: false, error: created?.error || "errore creazione ordine" };
+    return { success: false, error: msg || "errore creazione ordine" };
   }
 
   // L'INDIRIZZO CONFERMATO DALL'AGENTE NON SI BUTTA (31/08/2026).
@@ -3594,41 +3642,10 @@ async function spostaOrdineInOrdini(params) {
   // salute, LE CHICCHE, Loor Alcivar, Tentazioni senza glutine).
   // Qui la sede si REGISTRA: cosi' l'indirizzo che l'agente ha confermato
   // diventa un dato dell'anagrafica, e vale anche per il prossimo ordine.
+  // Enrichment best-effort, non fa parte del collegamento critico: se
+  // fallisce l'ordine resta comunque collegato e trovabile.
   if (!src.id_destinazione && src.destinazione) {
     await agganciaDestinazioneDaJson(idOrdine, src.destinazione);
-  }
-
-  // Flag "preso in gestione dal magazzino" verso l'app agenti: stato=Importato
-  // (già letto dall'app agenti) + numero ordine magazzino + orario. Aggiungiamo
-  // stato_magazzino='Preso in gestione' se la colonna c'e' (best-effort).
-  // Lo stato l'ha gia' scritto la prenotazione: qui si aggiunge solo il
-  // riferimento all'ordine magazzino appena creato.
-  const base = { id_ordine_magazzino: idOrdine };
-  let upd = await supabase
-    .from("ordini_agenti")
-    .update({
-      ...base,
-      stato_magazzino: "Preso in gestione",
-      aggiornato_magazzino_il: new Date().toISOString(),
-    })
-    .eq("id_ordine", String(idApp));
-  if (upd.error) {
-    upd = await supabase.from("ordini_agenti").update(base).eq("id_ordine", String(idApp));
-  }
-  if (upd.error) {
-    // L'ordine magazzino ESISTE: non si torna indietro e non si rifa'. Il
-    // legame e' comunque salvo, perche' l'ordine magazzino si porta dentro
-    // id_ordine_app. Qui si lascia la traccia e si dice com'e' andata.
-    await supabase
-      .from("ordini_agenti")
-      .update({ id_ordine_magazzino_perso: idOrdine, ponte_perso_il: new Date().toISOString() })
-      .eq("id_ordine", String(idApp));
-    return {
-      success: true,
-      idOrdine,
-      idApp: String(idApp),
-      avviso: `Ordine ${idOrdine} creato, ma la conferma all'app agenti non e' passata (${upd.error.message}).`,
-    };
   }
 
   return { success: true, idOrdine, idApp: String(idApp) };
@@ -4221,6 +4238,8 @@ export async function callSheetsApi(params = {}) {
         return await getSituazioneGestionale(params);
       case "getOrdiniDaApp":
         return await getOrdiniDaApp();
+      case "getOrdiniBloccatiVersoMagazzino":
+        return await getOrdiniBloccatiVersoMagazzino();
       case "spostaOrdineInOrdini":
         return await spostaOrdineInOrdini(params);
       case "rifiutaOrdineApp":

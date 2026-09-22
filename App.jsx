@@ -4776,6 +4776,12 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   // Ordini da APP (staging degli ordini dell'app agenti, reparto separato).
   const [ordiniApp, setOrdiniApp] = useState([]);
+  // ALLARME ponte agenti->magazzino: ordini che il cliente aspetta e che non
+  // sono mai entrati in produzione. Si carica all'avvio e ogni 5 minuti, a
+  // prescindere dalla pagina aperta: e' fatto apposta per essere visto senza
+  // che nessuno debba andare a cercarlo (Luca 22/09/2026).
+  const [ordiniBloccati, setOrdiniBloccati] = useState([]);
+  const [allarmeBloccatiAperto, setAllarmeBloccatiAperto] = useState(false);
   // Situazione gestionale (scaduto + anagrafica TeamSystem) per il badge
   // pagamento AUTO. null = non ancora caricata → i badge restano manuali.
   const [gestionale, setGestionale] = useState(null);
@@ -6133,6 +6139,22 @@ export default function App() {
       clearInterval(t);
       document.removeEventListener("visibilitychange", alRitorno);
     };
+  }, []);
+
+  // ALLARME ponte agenti->magazzino (22/09/2026, vedi ordiniBloccati sopra).
+  const loadOrdiniBloccati = async () => {
+    try {
+      const res = await callSheetsApi({ action: "getOrdiniBloccatiVersoMagazzino" });
+      setOrdiniBloccati(res?.ordini || []);
+    } catch (_) {
+      // Silenzioso qui: un allarme che non carica non deve rompere il resto
+      // dell'app. Resta comunque quello del giro precedente.
+    }
+  };
+  useEffect(() => {
+    loadOrdiniBloccati();
+    const t = setInterval(() => { if (!document.hidden) loadOrdiniBloccati(); }, 5 * 60 * 1000);
+    return () => clearInterval(t);
   }, []);
 
   // Scaduto + anagrafica dal gestionale (sincronizzati dalle ts-sync-*):
@@ -12131,6 +12153,77 @@ ${isConferma
         {loadingData ? (
           <div style={{ ...cardStyle(), padding: 16, marginBottom: 16, color: "#6b7280" }}>
             Caricamento dati dal Google Sheet...
+          </div>
+        ) : null}
+
+        {ordiniBloccati.length > 0 ? (
+          <div
+            style={{
+              ...cardStyle(),
+              marginBottom: 16,
+              padding: 0,
+              border: "2px solid #dc2626",
+              overflow: "hidden",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setAllarmeBloccatiAperto((v) => !v)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: "14px 18px",
+                background: "#dc2626",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 15,
+                fontWeight: 900,
+                textAlign: "left",
+              }}
+            >
+              <span>
+                🚨 {ordiniBloccati.length}{" "}
+                {ordiniBloccati.length === 1 ? "ordine non è arrivato" : "ordini non sono arrivati"} in
+                magazzino
+              </span>
+              <span style={{ fontWeight: 700 }}>{allarmeBloccatiAperto ? "chiudi ▲" : "vedi ▼"}</span>
+            </button>
+            {allarmeBloccatiAperto ? (
+              <div style={{ padding: 16, display: "grid", gap: 10 }}>
+                <div style={{ fontSize: 13, color: "#7f1d1d" }}>
+                  Il cliente ha ordinato, l'agente ha inviato, ma l'ordine non è mai entrato in
+                  produzione: o il collegamento si è rotto dopo la creazione (il ponte), o l'import è
+                  rimasto a metà da più di 10 minuti. Vanno reimportati a mano dagli "Ordini da APP".
+                </div>
+                {ordiniBloccati.map((o) => (
+                  <div
+                    key={o.id_ordine}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      fontSize: 13,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: "#7f1d1d" }}>
+                      {o.cliente?.ragione_sociale || o.cliente_id || "Cliente sconosciuto"}
+                      {" · "}
+                      {o.totale != null ? `${Number(o.totale).toFixed(2)} €` : ""}
+                    </div>
+                    <div style={{ color: "#991b1b" }}>
+                      {o.agente_nome || o.agente_id} · ordinato il {fmtDate ? fmtDate(o.creato_il) : String(o.creato_il || "").slice(0, 10)}
+                      {" · "}
+                      {o.motivo === "ponte_perso" ? "ponte rotto" : "import bloccato"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
