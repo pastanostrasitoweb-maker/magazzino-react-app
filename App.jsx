@@ -2959,34 +2959,58 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
     setBozza(iniziale);
   }, [order.id, righe.length]);
 
+  // IL PREZZO DELL'ULTIMO DOCUMENTO, NON LA FOTOGRAFIA SIBILL (Luca 23/09/2026).
+  // `getStoricoCliente` leggeva `storico_cliente_articolo`: una fotografia
+  // ferma all'ultimo import (dal caso F&G Carni, vedi
+  // sql/il_prezzo_dell_ultimo_documento.sql), che un DDT di ieri non tocca. La
+  // stessa azione "prezziGiaFatti" che gia' alimenta "Aggiungi riga" (guarda
+  // prima i DDT reali, dal 24/07 in poi, e scende sulla fotografia solo se per
+  // quell'articolo non abbiamo mai fatto un documento). Aggancio per
+  // productId: esatto, non per nome indovinato.
   useEffect(() => {
     let vivo = true;
     if (!aperto) return () => { vivo = false; };
     (async () => {
       try {
         const r = await callSheetsApi({
-          action: "getStoricoCliente",
-          payload: JSON.stringify({ cliente: order.customer, codiceCliente: order.clientId || "" }),
+          action: "prezziGiaFatti",
+          payload: JSON.stringify({ codiceCliente: order.clientId || "" }),
         });
-        if (vivo) setStorico({ caricando: false, articoli: (r && r.articoli) || [] });
+        const articoli = ((r && r.prezzi) || []).map((x) => ({
+          productId: x.productId,
+          codice: x.productCode || "",
+          ultimoPrezzo: x.prezzo,
+          ultimoSconto: x.scontoPct || 0,
+          ultimoSconto2: x.sconto2Pct || 0,
+          ultimoSconto3: x.sconto3Pct || 0,
+          // "documento" e' gia' completo per la fonte fattura ("fatture fino
+          // al..."), mentre per la fonte DDT e' solo il numero e vuole la data.
+          ultimoOrdine: x.fonte === "documento" && x.documento && x.quando
+            ? `${x.documento} del ${fmtDate(x.quando)}`
+            : (x.documento || x.quando || ""),
+          fonte: x.fonte || "",
+        }));
+        if (vivo) setStorico({ caricando: false, articoli });
       } catch (_) {
         if (vivo) setStorico({ caricando: false, articoli: [] });
       }
     })();
     return () => { vivo = false; };
-  }, [aperto, order.id, order.customer, order.clientId]);
+  }, [aperto, order.id, order.clientId]);
 
   const norm = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-  // Cerca nello storico l'articolo della riga: prima per codice, poi per nome.
+  // Cerca nello storico l'articolo della riga: prima per productId (esatto),
+  // poi per codice dentro il nome, come ripiego per le righe fuori magazzino
+  // che un id vero non ce l'hanno.
   const suggerimentoPer = (l) => {
+    if (l.productId) {
+      const perId = storico.articoli.find((a) => a.productId && String(a.productId) === String(l.productId));
+      if (perId) return perId;
+    }
     const nome = String(l.productName || "");
-    const perCodice = storico.articoli.find(
-      (a) => a.codice && norm(nome).startsWith(norm(a.codice))
-    );
-    if (perCodice) return perCodice;
     return storico.articoli.find(
-      (a) => norm(a.descrizione) && norm(nome).includes(norm(a.descrizione).slice(0, 14))
+      (a) => a.codice && norm(nome).startsWith(norm(a.codice))
     );
   };
 
@@ -3006,6 +3030,8 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
           ...(next[l.lineId] || {}),
           prezzo: String(a.ultimoPrezzo),
           sconto: a.ultimoSconto ? String(a.ultimoSconto) : "",
+          sconto2: a.ultimoSconto2 ? String(a.ultimoSconto2) : "",
+          sconto3: a.ultimoSconto3 ? String(a.ultimoSconto3) : "",
         };
         riempite++;
       }
@@ -3261,7 +3287,7 @@ function ValorizzazioneOrdine({ order, onSalvato, listini }) {
                   ) : null}
                   {a && a.ultimoPrezzo != null ? (
                     <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 12 }}>
-                      {` · ultimo ${a.ultimoPrezzo.toFixed(2)} €${a.ultimoSconto ? ` -${a.ultimoSconto}%` : ""}`}
+                      {` · ultimo ${a.ultimoPrezzo.toFixed(2)} €${a.ultimoSconto ? ` -${a.ultimoSconto}%` : ""}${a.ultimoOrdine ? ` (${a.ultimoOrdine})` : ""}`}
                     </span>
                   ) : null}
                   {/* Il prezzo dell'app agenti resta quello che e': da qui si
