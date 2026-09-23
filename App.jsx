@@ -14,6 +14,16 @@ import { descrizioneAschermo, descrizioneStampata } from "./src/testo-riga.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
 import { CORRIERI } from "./src/logistica/data/corrieri.js";
 import {
+import { segnalaDaCodice } from './lib/segnala.js'
+
+// UN PONTE CHE SI ROMPE DEVE FARE RUMORE (23/09/2026). Queste chiamate erano
+// `.catch(() => {})`: se lo stato non arrivava all'app agenti, o
+// l'archiviazione automatica non partiva, non lo sapeva nessuno.
+function avvisaPonteRotto(cosa, riferimento, errore) {
+  const msg = `${cosa}${riferimento ? ' ' + riferimento : ''}: ${errore?.message || String(errore || 'errore sconosciuto')}`
+  console.warn('[ponte rotto]', msg)
+  segnalaDaCodice('magazzino', `ponte:${cosa}:${riferimento || ''}`, `Magazzino, ponte non riuscito. ${msg}`)
+}
   Package,
   ClipboardList,
   Search,
@@ -5925,7 +5935,7 @@ export default function App() {
       // cerca li' dentro: se sparisce mentre ci stai scrivendo, il pannello
       // resta senza il suo ordine e sembra che ti abbia buttato fuori.
       if (!staCompilandoRef.current) {
-        await callSheetsApi({ action: "archivePreparedOrders" }).catch(() => null);
+        await callSheetsApi({ action: "archivePreparedOrders" }).catch((e) => avvisaPonteRotto("archiviazione automatica dei preparati", "", e));
       }
       const raw = await callSheetsApi({ action: "getDatiVivi" });
 
@@ -5975,7 +5985,7 @@ export default function App() {
 
     try {
       if (!staCompilandoRef.current) {
-        await callSheetsApi({ action: "archivePreparedOrders" }).catch(() => null);
+        await callSheetsApi({ action: "archivePreparedOrders" }).catch((e) => avvisaPonteRotto("archiviazione automatica dei preparati", "", e));
       }
 
       const raw = await callSheetsApi();
@@ -8146,7 +8156,7 @@ export default function App() {
         setOrders(previousOrders);
         alert("Errore nel riportare in preparati: " + ((result && result.error) || "sconosciuto"));
       } else {
-        aggiornaStatoOrdineApp(order.id, "Importato").catch(() => {});
+        aggiornaStatoOrdineApp(order.id, "Importato").catch((e) => avvisaPonteRotto("stato Importato non riportato all'app agenti", order.id, e));
         setPage("preparati");
       }
     } catch (error) {
@@ -8732,7 +8742,7 @@ Scadenza a Cashflow: ${fmtDate(r.scadenza)}`);
           );
         }
         // Avvisa l'app agenti: l'ordine risulta "Spedito" in "I tuoi ordini".
-        aggiornaStatoOrdineApp(order.id, "Spedito").catch(() => {});
+        aggiornaStatoOrdineApp(order.id, "Spedito").catch((e) => avvisaPonteRotto("stato Spedito non riportato all'app agenti", order.id, e));
       }
     } catch (error) {
       setOrders(previousOrders);

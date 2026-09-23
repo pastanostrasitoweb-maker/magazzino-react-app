@@ -15,6 +15,15 @@
 //   rpc:     assegna_lotto, rimuovi_assegnazione, prepara_ordine
 
 import { createClient } from "@supabase/supabase-js";
+import { segnalaDaCodice } from "../lib/segnala.js";
+
+// IL GIORNO E' QUELLO DEL CALENDARIO LOCALE. `toISOString().slice(0,10)` e' la
+// data UTC: fra mezzanotte e le due (ora legale) un ordine o un carico di
+// produzione nascevano con la data di ieri. Vedi feedback-toisostring-sposta-il-giorno.
+function giornoLocale(d = new Date()) {
+  const due = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${due(d.getMonth() + 1)}-${due(d.getDate())}`;
+}
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -1099,7 +1108,10 @@ async function assignOutsideStock({ idRiga, idProdotto, quantita, operatore, lot
     .select("quantita_assegnata")
     .eq("id_riga", String(idRiga));
   const somma = (sommaRows || []).reduce((s, r) => s + Number(r.quantita_assegnata || 0), 0);
-  await supabase.from("righe_ordine").update({ quantita_assegnata: somma }).eq("id_riga", String(idRiga));
+  // L'esito si legge: prima l'assegnazione restava scritta e la riga mostrava
+  // il totale vecchio senza che nessuno se ne accorgesse.
+  const aggRiga = await supabase.from("righe_ordine").update({ quantita_assegnata: somma }).eq("id_riga", String(idRiga));
+  if (aggRiga.error) return failure("Assegnazione scritta ma quantita' della riga non aggiornata: " + aggRiga.error.message);
 
   const data = result.data;
   return { success: true, assignmentId: data?.id_assegnazione || null, row: data };
@@ -1669,7 +1681,7 @@ async function createOrder(params) {
   // calcola la scadenza sopra e la vuole per forza), e l'errore che si vede a
   // video parla di una tabella che con l'ordine non c'entra niente. Se chi
   // carica non la scrive, vale oggi.
-  const dataOrdine = p.date || p.data_ordine || new Date().toISOString().slice(0, 10);
+  const dataOrdine = p.date || p.data_ordine || giornoLocale();
   const stato = p.status || p.stato || "Da preparare";
   const statoLav = p.workStatus || p.stato_lavorazione || "Nuovo";
   const cap = (p.cap ?? p.Cap ?? "") ? String(p.cap ?? p.Cap).trim() : null;
@@ -1813,10 +1825,16 @@ async function createOrder(params) {
   // null: meglio "non valorizzato" che un falso zero).
   const conPrezzo = righe.filter((r) => r.prezzo_unitario != null);
   if (conPrezzo.length > 0) {
-    await supabase
+    // Un ordine senza imponibile e' un DDT senza valore e una fattura sbagliata:
+    // se la scrittura fallisce si dice, non si tira dritto.
+    const tot = await supabase
       .from("ordini")
       .update({ totale_imponibile: imponibileDaRighe(righe) })
       .eq("id_ordine", String(idOrdine));
+    if (tot.error) {
+      console.warn("[ordini] imponibile non scritto", idOrdine, tot.error);
+      segnalaDaCodice("magazzino", `imponibile:${idOrdine}`, `Ordine ${idOrdine} creato ma totale_imponibile NON scritto: ${tot.error.message}`);
+    }
   }
 
   return { success: true, idOrdine: String(idOrdine), righe: righeInserted };
@@ -1830,7 +1848,7 @@ async function createOrder(params) {
 async function logProduzione(params) {
   const p = parsePayload(params);
   const { error } = await supabase.from("carichi_produzione").insert({
-    data: p.data || new Date().toISOString().slice(0, 10),
+    data: p.data || giornoLocale(),
     id_prodotto: String(p.productId ?? ""),
     codice_prodotto: p.code || "",
     descrizione_prodotto: p.name || "",
@@ -2037,11 +2055,22 @@ async function saveClienteOverride(params) {
   // assegnato: e' il filo che lega l'ordine al cliente, e senza quello il
   // bollino "Codice cliente" resterebbe rosso anche dopo aver salvato.
   if (codiceAssegnato && String(p.orderId || "").trim()) {
-    await supabase
-      .from("ordini")
-      .update({ id_cliente: codiceAssegnato })
-      .eq("id_ordine", String(p.orderId).trim())
-      .is("id_cliente", null);
+    // IL CODICE DEL REGISTRO ARRIVA ALL'ORDINE ANCHE SE L'ORDINE NE AVEVA UNO
+    // PROVVISORIO (23/09/2026). Prima qui c'era `.is("id_cliente", null)`: un
+    // ordine nato dall'app agenti porta un CLI-NEW-..., non e' null, quindi il
+    // codice vero non ci arrivava mai, e con lui non arrivava all'app (alias)
+    // ne' al CRM, al cashflow, all'esposizione, che incrociano per codice.
+    // La porta `ordine_prende_codice_registro` sostituisce solo un codice
+    // provvisorio o inesistente nel registro, mai uno vero, e il trigger sul
+    // database scrive l'alias e il codice_master nell'app.
+    const porta = await supabase.rpc("ordine_prende_codice_registro", {
+      p_id_ordine: String(p.orderId).trim(),
+      p_codice: codiceAssegnato,
+    });
+    if (porta.error) {
+      console.warn("[anagrafica] codice registro non scritto sull'ordine", p.orderId, porta.error);
+      segnalaDaCodice("magazzino", `codice-registro:${p.orderId}`, `Cliente confermato con codice ${codiceAssegnato} ma l'ordine ${p.orderId} non l'ha preso: ${porta.error.message}`);
+    }
   }
 
   const daRivalorizzare = Array.isArray(p.rivalorizza) ? p.rivalorizza : [];
@@ -3502,10 +3531,16 @@ async function spostaOrdineInOrdini(params) {
   // l'ordine resta segnato "Importato" senza esistere in magazzino, e non lo
   // importa piu' nessuno.
   const restituisciPrenotazione = async () => {
-    await supabase
+    const r = await supabase
       .from("ordini_agenti")
       .update({ stato: src.stato || "Da controllare", importato_il: src.importato_il || null })
       .eq("id_ordine", String(idApp));
+    if (r.error) {
+      // Se nemmeno la restituzione riesce, l'ordine resta "Importato" senza
+      // esistere: e' esattamente il caso da far vedere a qualcuno.
+      console.warn("[ponte] prenotazione non restituita", idApp, r.error);
+      segnalaDaCodice("magazzino", `prenotazione:${idApp}`, `Ordine app ${idApp}: import fallito E prenotazione non restituita (${r.error.message}). Va rimesso in coda a mano.`);
+    }
   };
 
   const cli = src.cliente || {};
