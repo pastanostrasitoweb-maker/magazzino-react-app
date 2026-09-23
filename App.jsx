@@ -14,16 +14,6 @@ import { descrizioneAschermo, descrizioneStampata } from "./src/testo-riga.js";
 import { calcolaPreventivo, temperaturaLabel } from "./src/logistica/preventivo.js";
 import { CORRIERI } from "./src/logistica/data/corrieri.js";
 import {
-import { segnalaDaCodice } from './lib/segnala.js'
-
-// UN PONTE CHE SI ROMPE DEVE FARE RUMORE (23/09/2026). Queste chiamate erano
-// `.catch(() => {})`: se lo stato non arrivava all'app agenti, o
-// l'archiviazione automatica non partiva, non lo sapeva nessuno.
-function avvisaPonteRotto(cosa, riferimento, errore) {
-  const msg = `${cosa}${riferimento ? ' ' + riferimento : ''}: ${errore?.message || String(errore || 'errore sconosciuto')}`
-  console.warn('[ponte rotto]', msg)
-  segnalaDaCodice('magazzino', `ponte:${cosa}:${riferimento || ''}`, `Magazzino, ponte non riuscito. ${msg}`)
-}
   Package,
   ClipboardList,
   Search,
@@ -51,6 +41,16 @@ function avvisaPonteRotto(cosa, riferimento, errore) {
   MoreHorizontal,
   FileText,
 } from "lucide-react";
+import { segnalaDaCodice } from './lib/segnala.js'
+
+// UN PONTE CHE SI ROMPE DEVE FARE RUMORE (23/09/2026). Queste chiamate erano
+// `.catch(() => {})`: se lo stato non arrivava all'app agenti, o
+// l'archiviazione automatica non partiva, non lo sapeva nessuno.
+function avvisaPonteRotto(cosa, riferimento, errore) {
+  const msg = `${cosa}${riferimento ? ' ' + riferimento : ''}: ${errore?.message || String(errore || 'errore sconosciuto')}`
+  console.warn('[ponte rotto]', msg)
+  segnalaDaCodice('magazzino', `ponte:${cosa}:${riferimento || ''}`, `Magazzino, ponte non riuscito. ${msg}`)
+}
 
 // Storico: backend Apps Script (JSONP) usato fino al 2026-06-09, ora sostituito
 // da Supabase via ./src/supabase-adapter.js. URL mantenuto come riferimento
