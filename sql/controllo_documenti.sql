@@ -72,12 +72,17 @@ righe as (
     and not exists (select 1 from ddt_annullati where ddt_numero = n.k::text)
 
   union all
-  -- 4. L'ordine e' stato cambiato dopo la bolla, e non e' ancora fatturato.
+  -- 4. L'ordine e' stato cambiato DOPO L'ARCHIVIAZIONE, e non e' ancora fatturato.
+  --    Regola di Luca (24/09): l'importo giusto e' sempre ed esclusivamente
+  --    quello del DDT in archivio. Le correzioni della sede prima di archiviare
+  --    sono legittime e la bolla le prende (ricongela_ddt_in_archivio); quello
+  --    che cambia dopo e' una differenza da spiegare.
   select 'ordine_cambiato_dopo_ddt', 2, 'Elisa', b.ddt_numero, b.id_ordine, b.cliente, b.emesso_il::date, b.totale_imponibile,
-         'In bolla ' || coalesce(b.somma_bolla,0) || ', nell''ordine oggi ' || coalesce(b.somma_ordine,0)
+         'Nel DDT in archivio ' || coalesce(b.somma_bolla,0) || ', nell''ordine oggi ' || coalesce(b.somma_ordine,0)
            || ' (differenza ' || round(coalesce(b.somma_ordine,0) - coalesce(b.somma_bolla,0), 2) || ').',
-         'Guarda la copia del DDT. Scrivi ad amministrazione@ quale dei due e'' giusto e perche'' l''ordine e'' cambiato (reso, prezzo sbagliato, riga aggiunta): la fattura parte da li''.'
+         'L''ordine e'' stato toccato dopo l''archiviazione. Fa fede il DDT in archivio: se la modifica e'' voluta (reso, prezzo sbagliato) scrivilo ad amministrazione@, che decide se serve una nota di credito; altrimenti riporta l''ordine com''era.'
   from bolle b
+  join ordini oa on oa.id_ordine = b.id_ordine and coalesce(oa.archiviato, false)
   where b.fattura is null and not coalesce(b.campionatura,false)
     and abs(coalesce(b.somma_ordine,0) - coalesce(b.somma_bolla,0)) >= 0.05
 
@@ -86,7 +91,7 @@ righe as (
   select 'fattura_diversa_dal_ddt', 2, 'amministrazione', b.ddt_numero, b.id_ordine, b.cliente, b.emesso_il::date, b.totale_imponibile,
          'Fattura ' || b.fattura || ' con imponibile ' || b.imponibile_fattura || ', la bolla dice ' || b.somma_bolla
            || ' (differenza ' || round(b.imponibile_fattura - b.somma_bolla, 2) || ').',
-         'Decide Luca: se la differenza e'' voluta serve una nota di credito o di debito che la spieghi.'
+         'Decide Luca: fa fede il DDT in archivio, la differenza si chiude con una nota di credito o di debito.'
   from bolle b
   where b.fattura is not null and b.imponibile_fattura is not null
     and abs(b.imponibile_fattura - coalesce(b.somma_bolla,0)) >= 0.05
