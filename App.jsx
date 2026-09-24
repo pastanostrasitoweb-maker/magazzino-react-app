@@ -339,8 +339,31 @@ function checkAnagraficaApp(cli, sede) {
   return mancanti;
 }
 
-// Tipologie cliente allineabili a mano (richiesta Luca 2026-07-24).
-const TIPOLOGIE = ["HORECA", "FARMA", "GDO", "EXPORT", "BIOLOGICO"];
+// LA SEGMENTAZIONE DEL CLIENTE, E SI METTE SEMPRE (Luca 24/09/2026).
+// Cinque voci, scelte da una lista chiusa: Horeca, Pharma, GDO, Biologico,
+// Distributori. Senza, un cliente non si crea: e' il campo da cui dipendono
+// tutte le analisi per canale, e finche' restava facoltativo 648 schede su 754
+// lo avevano vuoto e i conti per canale si reggevano su altre tabelle.
+//
+// Il VALORE salvato resta quello storico (FARMA, non PHARMA): cambiarlo
+// vorrebbe dire riscrivere le 52 schede che ce l'hanno e tutto quello che le
+// legge. Cambia solo l'etichetta che si vede.
+//
+// EXPORT non e' fra le cinque: non si propone piu' sulle schede nuove, ma resta
+// visibile su chi ce l'ha gia' (due clienti), perche' toglierlo cancellerebbe
+// un'informazione vera senza che nessuno l'abbia chiesto.
+const TIPOLOGIE = [
+  { valore: "HORECA", etichetta: "Horeca" },
+  { valore: "FARMA", etichetta: "Pharma" },
+  { valore: "GDO", etichetta: "GDO" },
+  { valore: "BIOLOGICO", etichetta: "Biologico" },
+  { valore: "DISTRIBUTORI", etichetta: "Distributori" },
+];
+const TIPOLOGIE_STORICHE = [{ valore: "EXPORT", etichetta: "Export (storico)" }];
+const tipologieDaMostrare = (valoreAttuale) =>
+  TIPOLOGIE.some((x) => x.valore === valoreAttuale) || !valoreAttuale
+    ? TIPOLOGIE
+    : [...TIPOLOGIE, ...TIPOLOGIE_STORICHE.filter((x) => x.valore === valoreAttuale)];
 
 // IVA. Le prime tre sono aliquote vere, le altre sono REGIMI che valgono per
 // tutto il documento e azzerano l'imposta (regola di Luca 02/08/2026).
@@ -1415,11 +1438,11 @@ function SchedaCliente({
               </select>
             </div>
             <div style={{ flex: "1 1 140px" }}>
-              <label style={{ ...labelStyle(), fontSize: 11 }}>Tipologia</label>
+              <label style={{ ...labelStyle(), fontSize: 11 }}>Segmentazione *</label>
               <select style={{ ...inputStyle(), height: 38 }} value={f.tipologia} onChange={set("tipologia")}>
-                <option value="">—</option>
-                {["HORECA", "FARMA", "GDO", "EXPORT", "BIOLOGICO"].map((t) => (
-                  <option key={t} value={t}>{t}</option>
+                <option value="">— scegli —</option>
+                {tipologieDaMostrare(f.tipologia).map((t) => (
+                  <option key={t.valore} value={t.valore}>{t.etichetta}</option>
                 ))}
               </select>
             </div>
@@ -7994,6 +8017,18 @@ export default function App() {
   };
 
   const creaClienteScheda = (f) => azioneUnica("crea-cliente", async () => {
+    // LA SEGMENTAZIONE SI METTE SEMPRE (Luca 24/09/2026). Si controlla qui,
+    // prima di bruciare un codice cliente: una scheda nata senza canale e' un
+    // cliente che nelle analisi finisce in "non attribuito" e non ci torna piu'
+    // da solo. Chi la sta creando ha davanti il cliente e lo sa.
+    if (!String(f.tipologia || "").trim()) {
+      alert(
+        "Manca la SEGMENTAZIONE del cliente.\n\n" +
+          "Scegli fra Horeca, Pharma, GDO, Biologico e Distributori: e' il campo " +
+          "da cui dipendono tutte le analisi per canale, e dopo non lo mette piu' nessuno."
+      );
+      return;
+    }
     // Prima il codice: senza codice il cliente e' invisibile al CRM e allo
     // storico, e il DDT non si puo' emettere. Se questo passo non riesce non si
     // scrive niente da nessuna parte.
@@ -12581,10 +12616,10 @@ ${isConferma
                                 titolo={t ? `🏷️ ${t}` : "🏷️ Tipologia?"}
                                 variante={t ? "dark" : "warning"}
                                 larghezza={200}
-                                voci={TIPOLOGIE.map((x) => ({
-                                  label: x,
-                                  attivo: x === t,
-                                  onClick: () => { if (!busy) assignTipologia(selectedOrder, x); },
+                                voci={tipologieDaMostrare(t).map((x) => ({
+                                  label: x.etichetta,
+                                  attivo: x.valore === t,
+                                  onClick: () => { if (!busy) assignTipologia(selectedOrder, x.valore); },
                                 }))}
                               />
                             );
