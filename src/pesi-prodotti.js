@@ -1,3 +1,8 @@
+// BUSTINE GELO: 140 g a pezzo (Luca 24/09/2026). Le vendute a pezzo pesano
+// 0,14; le due vendute a cartone da 10 (HORECA103, HORECA125) pesano 1,4. Qui
+// HORECA103 valeva 0,125 pur essendo un CARTONE, e in logistica peso_kg valeva
+// il cartone sulle vendute a PEZZO: ogni bustina contava dieci volte tanto.
+// Stessi numeri in prodotti.peso_kg (sql/campionature_peso_a_mano_e_bustine.sql).
 export const PESI_PRODOTTI = {
   "ATM 001": 1.5,
   "ATM 002": 1.5,
@@ -17,14 +22,14 @@ export const PESI_PRODOTTI = {
   "BIS 14": 0.9,
   "HOR 005": 1.8,
   "HORECA 211": 1.28,
-  "HORECA103": 0.125,
-  "HORECA113": 0.125,
-  "HORECA122": 0.13,
-  "HORECA125": 1.3,
-  "HORECA128": 0.13,
-  "HORECA129": 0.13,
-  "HORECA130": 0.13,
-  "HORECA136": 0.125,
+  "HORECA103": 1.4,
+  "HORECA113": 0.14,
+  "HORECA122": 0.14,
+  "HORECA125": 1.4,
+  "HORECA128": 0.14,
+  "HORECA129": 0.14,
+  "HORECA130": 0.14,
+  "HORECA136": 0.14,
   "HORECA137": 0.08,
   "HORECA138": 0.25,
   "HORECA212": 1.82,

@@ -1218,7 +1218,42 @@ function opzioneDelCorriere(transport, nomeCorriere) {
   );
 }
 
-function BadgeCorriere({ order, onApri, compatto = false }) {
+// IL PESO SI VEDE ACCANTO AL CORRIERE, E SI CORREGGE DA LI' (Luca 24/09/2026:
+// "bisogna dare la possibilita' di modificare i kg sugli ordini e sui DDT, e
+// quando modificati agganciare il nuovo prezzo"). Il campo per correggerlo
+// c'era gia', ma solo dentro la finestra del corriere: chi non ci entrava non
+// sapeva che esistesse. Il clic apre la stessa finestra, dove il peso si salva
+// e il preventivo del trasporto si ricalcola sul peso nuovo. Da li' il peso
+// scritto a mano vale anche per la Logistica (v_spedizioni lo legge).
+function BadgeCorriere(props) {
+  const { order, onApri, compatto = false } = props;
+  const kg = Number(order?.pesoTotale);
+  const inSede = String(order?.courier || order?.courierSpedizione || "").trim().toLowerCase() === "ritiro in sede";
+  if (!Number.isFinite(kg) || order?.pesoTotale === undefined || inSede) {
+    return <BadgeCorriereSolo {...props} />;
+  }
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <BadgeCorriereSolo {...props} />
+      <button
+        data-telemetria="peso-apri"
+        style={{
+          ...badgeStyle(order?.pesoIsManual ? "dark" : "outline"),
+          border: "1px solid #cfd8e6", cursor: onApri ? "pointer" : "default",
+          fontSize: compatto ? 11.5 : 12.5, whiteSpace: "nowrap",
+        }}
+        onClick={onApri}
+        title={order?.pesoIsManual
+          ? `Peso scritto a mano. Dalle righe sarebbe ${fmtKg(order.pesoCalcolato)} kg. Clicca per cambiarlo: il prezzo del trasporto si ricalcola.`
+          : "Peso calcolato dalle righe. Clicca per correggerlo: il prezzo del trasporto si ricalcola."}
+      >
+        ⚖️ {fmtKg(kg)} kg{order?.pesoIsManual ? " ✎" : ""}
+      </button>
+    </span>
+  );
+}
+
+function BadgeCorriereSolo({ order, onApri, compatto = false }) {
   const scelto = NOME_CORRIERE(order?.courier || order?.courierSpedizione);
   const suggerito = order?.transport && !order.transport.errore
     ? order.transport.consigliato
