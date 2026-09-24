@@ -1311,6 +1311,7 @@ function SchedaCliente({
     if (!base.provincia) base.provincia = String(ov.sede_provincia ?? "");
     base.tipologia = String(ov.tipologia || (cliente ? normalizeTipologia(cliente.category) : "") || "");
     base.metodo_pagamento = String(ov.metodo_pagamento || "");
+    base.regime_iva = String(ov.regime_iva || "");
     base.agente_nome = String(ov.agente_nome || "");
     base.listino_standard = String(ov.listino_standard || "");
     base.fonte_prezzi = String(ov.fonte_prezzi || "listino");
@@ -1416,6 +1417,20 @@ function SchedaCliente({
                   </optgroup>
                 ))}
               </select>
+            </div>
+            <div style={{ flex: "1 1 220px" }}>
+              <label style={{ ...labelStyle(), fontSize: 11 }}>Regime IVA</label>
+              <select style={{ ...inputStyle(), height: 38 }} value={f.regime_iva} onChange={set("regime_iva")}>
+                <option value="">Normale (l'IVA la incassiamo noi)</option>
+                <option value="split">Split payment · art. 17-ter (l'IVA la versa il cliente)</option>
+                <option value="estero_ue">Estero UE · non imponibile art. 41</option>
+                <option value="estero_extra_ue">Estero Extra UE · non imponibile art. 8</option>
+              </select>
+              {f.regime_iva === "split" ? (
+                <div style={{ fontSize: 11, color: "#b45309", marginTop: 4, fontWeight: 700 }}>
+                  Ogni ordine di questo cliente nascera' in split: in fattura l'IVA c'e', ma si incassa il solo imponibile.
+                </div>
+              ) : null}
             </div>
             <div style={{ flex: "1 1 180px" }}>
               <label style={{ ...labelStyle(), fontSize: 11 }}>Agente *</label>
@@ -4549,7 +4564,7 @@ function PannelloFatture({ onChiudi, operatore = "" }) {
           }
         };
         const [ordini, ov, gest, righe, metodi, fatte, recapiti, abbuoni, chiusi] = await Promise.all([
-          tutte("ordini", "id_ordine,ddt_numero,cliente,id_cliente,totale_imponibile,campionatura,data_preparato,data_ordine",
+          tutte("ordini", "id_ordine,ddt_numero,cliente,id_cliente,totale_imponibile,campionatura,data_preparato,data_ordine,regime_iva",
             (q) => q.eq("archiviato", true)),
           tutte("clienti_override", "ragione_sociale,partita_iva,citta,provincia,cap,sede_legale,codice_univoco,pec,codice_cliente,persona_fisica,nome,cognome,nazione"),
           tutte("clienti_gestionale", "codice_cliente,ragione_sociale,piva,codice_fiscale,citta,provincia,cap,indirizzo"),
@@ -4618,9 +4633,18 @@ function PannelloFatture({ onChiudi, operatore = "" }) {
     let numero = partenza;
     for (const p of sel.pronte) {
       try {
-        const { xml, totale } = xmlFattura(numero, p.data, p.ordine, p.a, p.righe);
+        const { xml, totale, daIncassare, split } = xmlFattura(numero, p.data, p.ordine, p.a, p.righe);
         file.push({ nome: nomeFile(numero), contenuto: xml });
-        registro.push({ ddt_numero: p.ddt, numero, data_fattura: p.data, cliente: p.cliente, totale: Number(totale.toFixed(2)), fuori_app: false });
+        // SUL REGISTRO RESTA SCRITTO ANCHE QUANTO SI INCASSA. Con lo split
+        // payment totale e da_incassare non coincidono, e la differenza e'
+        // l'IVA che versa il cliente: senza questa colonna quella fattura
+        // sembrerebbe pagata a meta' per sempre.
+        registro.push({
+          ddt_numero: p.ddt, numero, data_fattura: p.data, cliente: p.cliente,
+          totale: Number(totale.toFixed(2)), fuori_app: false,
+          regime_iva: split ? "split" : "normale",
+          da_incassare: Number(Number(daIncassare).toFixed(2)),
+        });
         numero += 1;
       } catch (e) {
         // La fattura che non sta in piedi non si genera e non consuma un
@@ -4647,7 +4671,9 @@ function PannelloFatture({ onChiudi, operatore = "" }) {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
     setFatto({ quante: file.length, da: partenza, a: numero - 1, nonRiuscite,
-      totale: registro.reduce((s, r) => s + r.totale, 0) });
+      totale: registro.reduce((s, r) => s + r.totale, 0),
+      daIncassare: registro.reduce((s, r) => s + (Number(r.da_incassare) || r.totale), 0),
+      split: registro.filter((r) => r.regime_iva === "split").length });
   });
 
   if (stato === "carico") return <div style={{ padding: 24, color: "#66758b" }}>Leggo i documenti…</div>;
@@ -4696,6 +4722,12 @@ function PannelloFatture({ onChiudi, operatore = "" }) {
         <div style={{ fontSize: 17, fontWeight: 800, color: "#065f46", marginBottom: 8 }}>
           Generate {fatto.quante} fatture, dalla {fatto.da} alla {fatto.a}, per {fatto.totale.toFixed(2)} €.
         </div>
+        {fatto.split ? (
+          <div style={{ fontSize: 13.5, color: "#b45309", fontWeight: 700, marginBottom: 8 }}>
+            {fatto.split === 1 ? "Una e' in split payment" : `${fatto.split} sono in split payment`}: da incassare{" "}
+            {fatto.daIncassare.toFixed(2)} €, il resto e' IVA che versa il cliente allo Stato.
+          </div>
+        ) : null}
         <div style={{ color: "#66758b", fontSize: 13.5, lineHeight: 1.6 }}>
           Lo zip e' nella cartella dei download: aprilo e trascina gli XML dentro Sibill.
           I DDT sono segnati come fatturati e non usciranno piu' in questo elenco.
@@ -4779,7 +4811,17 @@ function PannelloFatture({ onChiudi, operatore = "" }) {
               <tr key={r.ddt} style={{ borderBottom: "1px solid #f1f5f9" }}>
                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "#64748b" }}>{r.data || "—"}</td>
                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>DDT <b>{r.ddt}</b></td>
-                <td style={{ padding: "7px 10px" }}>{r.cliente}</td>
+                <td style={{ padding: "7px 10px" }}>
+                  {r.cliente}
+                  {r.split ? (
+                    <span
+                      style={{ ...badgeStyle("warning"), marginLeft: 6, fontSize: 11 }}
+                      title="Scissione dei pagamenti art. 17-ter: la fattura espone l'IVA ma il cliente paga il solo imponibile"
+                    >
+                      split payment
+                    </span>
+                  ) : null}
+                </td>
                 <td style={{ padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap" }}>
                   {r.numero ? <span style={{ color: "#065f46" }}>fattura {r.numero}</span>
                     : r.fuori_app ? <span style={{ color: "#64748b" }}>fatturata a parte</span>
@@ -7998,6 +8040,7 @@ export default function App() {
     for (const g of CAMPI_SCHEDA) for (const c of g.campi) payload[c.key] = f[c.key] ?? "";
     payload.tipologia = f.tipologia ?? "";
     payload.metodo_pagamento = f.metodo_pagamento ?? "";
+    payload.regime_iva = f.regime_iva ?? "";
     payload.agente_nome = f.agente_nome ?? "";
     payload.listino_standard = f.listino_standard ?? "";
     payload.fonte_prezzi = f.fonte_prezzi || "listino";

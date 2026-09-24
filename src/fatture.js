@@ -46,6 +46,18 @@ const RIF_NORMA = {
   "N3.2": "Cessione intracomunitaria art. 41 DL 331/93",
 };
 
+// LO SPLIT PAYMENT NON E' UNA NATURA E NON AZZERA NIENTE (art. 17-ter DPR
+// 633/72). L'IVA in fattura c'e' tutta, con la sua aliquota: cambia solo chi la
+// versa. Noi incassiamo il solo imponibile, l'imposta la gira allo Stato il
+// cliente. Nel tracciato sono tre cose e basta: EsigibilitaIVA "S" su ogni
+// riepilogo, ImportoPagamento al netto dell'imposta, e la dicitura che dice
+// perche'. Il totale del documento invece resta comprensivo di IVA: la fattura
+// l'imposta la espone, semplicemente non la incassa chi la emette.
+const CAUSALE_SPLIT =
+  "Scissione dei pagamenti - IVA versata dal committente ai sensi dell'art. 17-ter DPR 633/72";
+export const eSplitPayment = (o) =>
+  String(o?.regime_iva || "").trim().toLowerCase() === "split";
+
 const soloCifre = (s) => String(s ?? "").replace(/\D/g, "");
 // Si scappano & < > e basta, come fa lo standard nei nodi di testo: le
 // virgolette e l'apostrofo dentro un testo sono legittimi, e "SOCIETA'
@@ -176,6 +188,7 @@ function datiAnagraficiCliente(a) {
 }
 
 export function xmlFattura(numero, dataDoc, ordine, a, righe) {
+  const split = eSplitPayment(ordine);
   const prog = String(numero % 100000).padStart(5, "0");
   const buono = (c) => /^[A-Za-z0-9]{7}$/.test(c || "") && c !== "0000000";
   let dest = buono(a.sdi) ? a.sdi : buono(a.sdiSibill) ? a.sdiSibill
@@ -236,6 +249,20 @@ export function xmlFattura(numero, dataDoc, ordine, a, righe) {
         (nat ? `<Natura>${nat}</Natura>` : "") + `</DettaglioLinee>`;
     }).join("");
 
+  // LO SPLIT VALE SOLO DOVE ESISTE. E' una regola italiana: verso l'estero non
+  // c'e' nessuno che versi l'IVA allo Stato al posto nostro, e su un'operazione
+  // non imponibile non c'e' imposta da scindere. Se le due cose si incrociano
+  // non si indovina quale vince, ci si ferma.
+  if (split && a.estero) {
+    throw new Error("split payment su un cliente estero: la scissione dei pagamenti vale solo in Italia");
+  }
+  if (split && [...imponibili.keys()].some((k) => k.split("|")[1])) {
+    throw new Error("split payment su righe non imponibili: non c'e' imposta da scindere");
+  }
+  if (split && [...imponibili.keys()].every((k) => Number(k.split("|")[0]) === 0)) {
+    throw new Error("split payment su una fattura tutta a IVA zero: non c'e' niente da scindere");
+  }
+
   // UN'ALIQUOTA NON PUO' ANDARE SOTTO ZERO. L'abbuono e' una riga negativa: se
   // su un'aliquota toglie piu' di quanto c'e', il riepilogo non sta in piedi.
   for (const [k, v] of imponibili) {
@@ -243,19 +270,36 @@ export function xmlFattura(numero, dataDoc, ordine, a, righe) {
   }
 
   const chiavi = [...imponibili.keys()].sort((x, y) => Number(x.split("|")[0]) - Number(y.split("|")[0]));
-  const riep = chiavi.map((k) => {
+  // I TOTALI SI FANNO SUI CENTESIMI CHE LA FATTURA SCRIVE, non su quelli che
+  // ha in testa. Sommando i valori pieni e arrotondando alla fine, il totale
+  // puo' uscire un centesimo diverso dalla somma dei riepiloghi stampati: sul
+  // DDT 2132 l'imponibile pieno faceva 200,885, cioe' 200,88 in fondo al
+  // documento e 147,26 + 53,63 = 200,89 nei riepiloghi. Un centesimo che non
+  // torna e' una fattura da rifare.
+  const cent = (v) => Math.round((Number(v) || 0) * 100 + 1e-6) / 100;
+  const voci = chiavi.map((k) => {
     const [alS, nat] = k.split("|");
     const al = Number(alS);
-    const v = imponibili.get(k);
-    return `<DatiRiepilogo><AliquotaIVA>${q(al)}</AliquotaIVA>` +
-      (nat ? `<Natura>${nat}</Natura>` : "") +
-      `<ImponibileImporto>${q(v)}</ImponibileImporto><Imposta>${q((v * al) / 100)}</Imposta>` +
-      (RIF_NORMA[nat] ? `<RiferimentoNormativo>${esc(RIF_NORMA[nat])}</RiferimentoNormativo>` : "") +
-      `<EsigibilitaIVA>I</EsigibilitaIVA></DatiRiepilogo>`;
-  }).join("");
+    const imp = cent(imponibili.get(k));
+    return { al, nat, imp, imposta: cent((imp * al) / 100) };
+  });
+  const riep = voci.map(({ al, nat, imp, imposta }) =>
+    `<DatiRiepilogo><AliquotaIVA>${q(al)}</AliquotaIVA>` +
+    (nat ? `<Natura>${nat}</Natura>` : "") +
+    `<ImponibileImporto>${q(imp)}</ImponibileImporto><Imposta>${q(imposta)}</Imposta>` +
+    (RIF_NORMA[nat] ? `<RiferimentoNormativo>${esc(RIF_NORMA[nat])}</RiferimentoNormativo>` : "") +
+    // "I" immediata, "S" scissione dei pagamenti: e' l'unico posto del
+    // tracciato dove si dichiara che l'imposta la versa il cliente.
+    `<EsigibilitaIVA>${split ? "S" : "I"}</EsigibilitaIVA></DatiRiepilogo>`
+  ).join("");
 
-  let tot = 0;
-  for (const k of chiavi) tot += imponibili.get(k) * (1 + Number(k.split("|")[0]) / 100);
+  const imponibileTotale = voci.reduce((t, v) => t + v.imp, 0);
+  const tot = cent(imponibileTotale + voci.reduce((t, v) => t + v.imposta, 0));
+  // QUELLO CHE IL CLIENTE CI PAGA. Di solito e' il totale del documento; con lo
+  // split payment e' il solo imponibile, e la differenza non e' un ammanco: e'
+  // l'imposta che versa lui. Se qui ci finisse il lordo, la Ri.Ba. partirebbe
+  // per un importo che il cliente non deve.
+  const daIncassare = split ? imponibileTotale : tot;
   const metodo = ordine.metodo_pagamento || "";
 
   const xml = '<?xml version="1.0" encoding="UTF-8"?>' +
@@ -283,6 +327,10 @@ export function xmlFattura(numero, dataDoc, ordine, a, righe) {
     "<FatturaElettronicaBody><DatiGenerali><DatiGeneraliDocumento>" +
     `<TipoDocumento>TD24</TipoDocumento><Divisa>EUR</Divisa><Data>${dataDoc}</Data>` +
     `<Numero>${numero}</Numero><ImportoTotaleDocumento>${q(tot)}</ImportoTotaleDocumento>` +
+    // La dicitura non la chiede il tracciato, la chiede chi legge la fattura:
+    // senza, il cliente si trova un totale che non coincide con quello che
+    // gli viene chiesto e nessuna riga che lo spieghi.
+    (split ? `<Causale>${esc(CAUSALE_SPLIT)}</Causale>` : "") +
     "</DatiGeneraliDocumento>" +
     `<DatiDDT><NumeroDDT>${esc(String(ordine.ddt_numero))}</NumeroDDT><DataDDT>${dataDoc}</DataDDT></DatiDDT>` +
     "</DatiGenerali><DatiBeniServizi>" + linee + riep + "</DatiBeniServizi>" +
@@ -290,12 +338,12 @@ export function xmlFattura(numero, dataDoc, ordine, a, righe) {
     `<ModalitaPagamento>${modalita(metodo)}</ModalitaPagamento>` +
     `<DataRiferimentoTerminiPagamento>${dataDoc}</DataRiferimentoTerminiPagamento>` +
     `<DataScadenzaPagamento>${scadenza(metodo, dataDoc)}</DataScadenzaPagamento>` +
-    `<ImportoPagamento>${q(tot)}</ImportoPagamento>` +
+    `<ImportoPagamento>${q(daIncassare)}</ImportoPagamento>` +
     `<IstitutoFinanziario>${CEDENTE.banca}</IstitutoFinanziario><IBAN>${CEDENTE.iban}</IBAN>` +
     `<ABI>${CEDENTE.abi}</ABI><CAB>${CEDENTE.cab}</CAB>` +
     "</DettaglioPagamento></DatiPagamento></FatturaElettronicaBody></p:FatturaElettronica>";
 
-  return { xml, totale: tot };
+  return { xml, totale: tot, daIncassare, split };
 }
 
 // Chi si fattura e chi no, con il motivo. Non decide niente da sola: separa e
@@ -333,7 +381,9 @@ export function selezionaFatture(d) {
     const n = String(o.ddt_numero || "").trim();
     if (!n || !data || data < FATTURABILI_DAL) continue;
     const a = anagrafica(o, idx);
-    const riga = { ddt: n, data, cliente: a.denom, imponibile: Number(o.totale_imponibile) || 0 };
+    // Lo split si porta dietro fin qui: chi guarda l'elenco prima di premere
+    // "Genera" deve vedere quali fatture non incasseranno l'IVA.
+    const riga = { ddt: n, data, cliente: a.denom, imponibile: Number(o.totale_imponibile) || 0, split: eSplitPayment(o) };
 
     if (fatti.has(n)) { gia.push({ ...riga, ...fatti.get(n) }); continue; }
     if (chiusi.has(n)) {

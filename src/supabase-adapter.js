@@ -1866,6 +1866,11 @@ async function logProduzione(params) {
 // completati a mano. Upsert per chiave (P.IVA o nome normalizzato). Scrive solo
 // i campi passati, cosi' un salvataggio parziale non cancella il resto.
 const OVERRIDE_CLIENTE_FIELDS = [
+  // IL REGIME IVA E' UNA QUALITA' DEL CLIENTE (Luca 24/09/2026). Lo split
+  // payment di una partecipata pubblica non e' una scelta del singolo ordine:
+  // vale sempre, e messo qui ogni ordine nuovo nasce gia' giusto
+  // (trigger regime_iva_dal_cliente, sql/split_payment.sql).
+  "regime_iva",
   "ragione_sociale", "partita_iva", "sede_legale", "cap",
   // CITTA' E PROVINCIA: obbligatorie per lo SDI (Luca 21/08/2026). La fattura
   // elettronica vuole l'indirizzo completo, comune e sigla provincia compresi.
